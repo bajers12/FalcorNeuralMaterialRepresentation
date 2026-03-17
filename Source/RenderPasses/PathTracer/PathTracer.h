@@ -40,6 +40,8 @@
 
 #include "Params.slang"
 
+#include <filesystem>
+
 using namespace Falcor;
 
 /** Fast path tracer.
@@ -109,6 +111,29 @@ private:
     void generatePaths(RenderContext* pRenderContext, const RenderData& renderData);
     void tracePass(RenderContext* pRenderContext, const RenderData& renderData, TracePass& tracePass);
     void resolvePass(RenderContext* pRenderContext, const RenderData& renderData);
+
+
+    /**Neural Material implementation */
+    void loadNeuralMaterialAssets();
+
+    bool mUseNeuralMaterial = false;
+    uint32_t mNeuralMaterialID = 0;
+    std::filesystem::path mNeuralBasePath;
+
+    bool mNeuralApplyExp = true;
+    float mNeuralExpOffset = 3.f;
+
+    ref<Texture> mpNeuralLatent0;
+    ref<Texture> mpNeuralLatent1;
+    ref<Sampler> mpNeuralSampler;
+
+    ref<Buffer> mpNeuralFrameLinear;
+    ref<Buffer> mpNeuralW0;
+    ref<Buffer> mpNeuralB0;
+    ref<Buffer> mpNeuralW1;
+    ref<Buffer> mpNeuralB1;
+    ref<Buffer> mpNeuralW2;
+    ref<Buffer> mpNeuralB2;
 
     /** Static configuration. Changing any of these options require shader recompilation.
     */
