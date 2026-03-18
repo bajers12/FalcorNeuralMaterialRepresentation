@@ -444,6 +444,9 @@ target_sources(Falcor PRIVATE
     Scene/Material/MERLMixMaterial.cpp
     Scene/Material/MERLMixMaterial.h
     Scene/Material/MERLMixMaterialData.slang
+    Scene/Material/NeuralMaterial.cpp
+    Scene/Material/NeuralMaterial.h
+    Scene/Material/NeuralMaterial.slang
     Scene/Material/RGLCommon.cpp
     Scene/Material/RGLCommon.h
     Scene/Material/RGLFile.cpp

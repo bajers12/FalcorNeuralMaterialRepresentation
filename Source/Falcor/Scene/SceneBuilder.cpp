@@ -43,6 +43,9 @@
 #include <cmath>
 #include <execution>
 
+// Neural Implementation
+#include "Material/NeuralMaterial.h"
+
 namespace Falcor
 {
     namespace
@@ -935,6 +938,24 @@ namespace Falcor
         FALCOR_CHECK(pMaterial != nullptr, "'pMaterial' is missing");
         FALCOR_CHECK(pReplacement != nullptr, "'pReplacement' is missing");
         mSceneData.pMaterials->replaceMaterial(pMaterial, pReplacement);
+    }
+
+    //Neural material Implementation
+    void SceneBuilder::replaceMaterialWithNeural(const std::string& materialName, const std::filesystem::path& basePath)
+    {
+        auto pOld = getMaterial(materialName);
+        FALCOR_CHECK(pOld != nullptr, "Material '{}' not found.", materialName);
+
+        auto resolvedPath = mAssetResolver.resolvePath(basePath);
+        FALCOR_CHECK(!resolvedPath.empty(), "Neural material path '{}' could not be resolved.", basePath.string());
+
+        auto pNew = NeuralMaterial::create(mpDevice, pOld->getName(), resolvedPath);
+        pNew->setDoubleSided(pOld->isDoubleSided());
+        pNew->setThinSurface(pOld->isThinSurface());
+        pNew->setNestedPriority(pOld->getNestedPriority());
+        pNew->setIndexOfRefraction(pOld->getIndexOfRefraction());
+
+        replaceMaterial(pOld, pNew);
     }
 
     void SceneBuilder::loadMaterialTexture(const ref<Material>& pMaterial, Material::TextureSlot slot, const std::filesystem::path& path)
@@ -2969,6 +2990,7 @@ namespace Falcor
         pybind11::class_<SceneBuilder> sceneBuilder(m, "SceneBuilder");
         sceneBuilder.def_property_readonly("flags", &SceneBuilder::getFlags);
         sceneBuilder.def_property_readonly("materials", &SceneBuilder::getMaterials);
+        sceneBuilder.def("replaceMaterialWithNeural", &SceneBuilder::replaceMaterialWithNeural, "materialName"_a, "basePath"_a);
         sceneBuilder.def_property_readonly("gridVolumes", &SceneBuilder::getGridVolumes);
         sceneBuilder.def_property_readonly("volumes", &SceneBuilder::getGridVolumes); // PYTHONDEPRECATED
         sceneBuilder.def_property_readonly("lights", &SceneBuilder::getLights);
@@ -3011,4 +3033,7 @@ namespace Falcor
         sceneBuilder.def("getSettings", static_cast<Settings&(SceneBuilder::*)()>(&SceneBuilder::getSettings), pybind11::return_value_policy::reference);
         sceneBuilder.def_property_readonly("assetResolver", pybind11::overload_cast<>(&SceneBuilder::getAssetResolver), pybind11::return_value_policy::reference);
     }
+
+
+
 }

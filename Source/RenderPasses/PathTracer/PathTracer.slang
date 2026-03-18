@@ -59,201 +59,6 @@ interface IVisibilityQuery
     [mutating] bool traceVisibilityRay(const Ray ray);
 };
 
-
-/** Neural material implementation */
-struct NeuralMaterialResources
-{
-    Texture2D<float4> latent0;
-    Texture2D<float4> latent1;
-    SamplerState samplerState;
-
-    StructuredBuffer<float> frameLinear; // 12*8
-    StructuredBuffer<float> W0;          // 32*20
-    StructuredBuffer<float> B0;          // 32
-    StructuredBuffer<float> W1;          // 32*32
-    StructuredBuffer<float> B1;          // 32
-    StructuredBuffer<float> W2;          // 3*32
-    StructuredBuffer<float> B2;          // 3
-
-    uint applyExp;
-    float expOffset;
-};
-
-float neuralLinearRead(StructuredBuffer<float> buf, uint row, uint col, uint cols)
-{
-    return buf[row * cols + col];
-}
-
-void fetchNeuralLatents(const NeuralMaterialResources nm, const float2 uv, out float z[8])
-{
-    // Minimal version: sample mip 0.
-    float4 z0 = nm.latent0.SampleLevel(nm.samplerState, uv, 0.f);
-    float4 z1 = nm.latent1.SampleLevel(nm.samplerState, uv, 0.f);
-
-    z[0] = z0.x; z[1] = z0.y; z[2] = z0.z; z[3] = z0.w;
-    z[4] = z1.x; z[5] = z1.y; z[6] = z1.z; z[7] = z1.w;
-}
-
-float3 evalNeuralBRDFFromLatents(const NeuralMaterialResources nm, const float z[8], float3 wiTowardLocal, float3 woLocal)
-{
-    // Your training convention:
-    // wi = toward surface
-    // wo = away from surface
-    // local +Z = outward normal
-    if (wiTowardLocal.z >= 0.f || woLocal.z <= 0.f)
-        return float3(0.f);
-
-    float sf[12];
-    [unroll]
-    for (uint r = 0; r < 12; ++r)
-    {
-        float s = 0.f;
-        [unroll]
-        for (uint c = 0; c < 8; ++c)
-            s += neuralLinearRead(nm.frameLinear, r, c, 8) * z[c];
-        sf[r] = s;
-    }
-
-    float x[20];
-
-    [unroll]
-    for (uint f = 0; f < 2; ++f)
-    {
-        uint sfBase = 6 * f;
-        uint xBase = 6 * f;
-
-        float3 N = normalize(float3(
-            sf[sfBase + 0],
-            sf[sfBase + 1],
-            sf[sfBase + 2] + 1.f
-        ));
-
-        float3 T = normalize(float3(
-            sf[sfBase + 3] + 1.f,
-            sf[sfBase + 4],
-            sf[sfBase + 5]
-        ));
-
-        float3 B = cross(N, T);
-
-        float3 wiPred = float3(dot(wiTowardLocal, T), dot(wiTowardLocal, B), dot(wiTowardLocal, N));
-        float3 woPred = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
-
-        x[xBase + 0] = wiPred.x;
-        x[xBase + 1] = wiPred.y;
-        x[xBase + 2] = wiPred.z;
-        x[xBase + 3] = woPred.x;
-        x[xBase + 4] = woPred.y;
-        x[xBase + 5] = woPred.z;
-    }
-
-    [unroll]
-    for (uint i = 0; i < 8; ++i)
-        x[12 + i] = z[i];
-
-    float h0[32];
-    [unroll]
-    for (uint r = 0; r < 32; ++r)
-    {
-        float s = nm.B0[r];
-        [unroll]
-        for (uint c = 0; c < 20; ++c)
-            s += neuralLinearRead(nm.W0, r, c, 20) * x[c];
-        h0[r] = max(s, 0.f);
-    }
-
-    float h1[32];
-    [unroll]
-    for (uint r = 0; r < 32; ++r)
-    {
-        float s = nm.B1[r];
-        [unroll]
-        for (uint c = 0; c < 32; ++c)
-            s += neuralLinearRead(nm.W1, r, c, 32) * h0[c];
-        h1[r] = max(s, 0.f);
-    }
-
-    float3 y = float3(0.f);
-    [unroll]
-    for (uint r = 0; r < 3; ++r)
-    {
-        float s = nm.B2[r];
-        [unroll]
-        for (uint c = 0; c < 32; ++c)
-            s += neuralLinearRead(nm.W2, r, c, 32) * h1[c];
-
-        if (r == 0) y.x = s;
-        else if (r == 1) y.y = s;
-        else y.z = s;
-    }
-
-    float3 outValue = (nm.applyExp != 0) ? exp(y - nm.expOffset) : y;
-
-    if (any(isnan(outValue)) || any(isinf(outValue)))
-        return float3(0.f);
-
-    return max(outValue, 0.f);
-}
-
-bool isNeuralMaterialHit(const ShadingData sd, const uint neuralEnabled, const uint neuralMaterialID)
-{
-    return neuralEnabled != 0u && sd.materialID == neuralMaterialID;
-}
-
-float3 evalNeuralBRDF(const NeuralMaterialResources nm, const ShadingData sd, const float3 woWorld)
-{
-
-    float z[8];
-    fetchNeuralLatents(nm, sd.uv, z);
-
-    // Falcor convention:
-    // sd.V points AWAY from the surface.
-    // Training convention:
-    // wi points TOWARD the surface.
-    float3 wiTowardLocal = -sd.frame.toLocal(sd.V);
-    float3 woLocal = sd.frame.toLocal(woWorld);
-
-    return evalNeuralBRDFFromLatents(nm, z, wiTowardLocal, woLocal);
-}
-
-float evalNeuralBSDFPdf(const ShadingData sd, const float3 woWorld)
-{
-    float3 woLocal = sd.frame.toLocal(woWorld);
-    return woLocal.z > 0.f ? (woLocal.z * 0.3183098861837907f) : 0.f; // cos/pi
-}
-
-float3 sampleCosineHemisphere(float2 u)
-{
-    float r = sqrt(u.x);
-    float phi = 6.283185307179586f * u.y;
-    float x = r * cos(phi);
-    float y = r * sin(phi);
-    float z = sqrt(max(0.f, 1.f - u.x));
-    return float3(x, y, z);
-}
-
-bool sampleNeuralBSDF(const NeuralMaterialResources nm, const ShadingData sd, inout SampleGenerator sg, out BSDFSample result)
-{
-    result = {};
-
-    float3 woLocal = sampleCosineHemisphere(sampleNext2D(sg));
-    float pdf = woLocal.z * 0.31830988618f;
-    if (pdf <= 0.f) return false;
-
-    float z[8];
-    fetchNeuralLatents(nm, sd.uv, z);
-
-    float3 wiTowardLocal = -sd.frame.toLocal(sd.V);
-    float3 fcos = evalNeuralBRDFFromLatents(nm, z, wiTowardLocal, woLocal);
-
-    result.wo = sd.frame.fromLocal(woLocal);
-    result.pdf = pdf;
-    result.weight = fcos / pdf;
-    result.lobeType = (uint)LobeType::DiffuseReflection;
-    return true;
-}
-
-
 /** Path tracer.
 
     This implements the high-level path tracing logic and is shared among
@@ -279,11 +84,6 @@ struct PathTracer
     NRDBuffers outputNRD;                           ///< Output NRD data.
 
     RWTexture2D<float4> outputColor;                ///< Output color buffer if kSamplesPerPixel == 1.
-
-    // Neural materials
-    uint neuralEnabled;
-    uint neuralMaterialID;
-    NeuralMaterialResources neural;
 
     /*******************************************************************
                                 Static members
@@ -584,18 +384,14 @@ struct PathTracer
     */
     bool generateScatterRay(const ShadingData sd, const IMaterialInstance mi, inout PathState path)
     {
-        const bool useNeural = isNeuralMaterialHit(sd, neuralEnabled, neuralMaterialID);
-
         BSDFSample result;
-        bool valid = useNeural
-        ? sampleNeuralBSDF(neural, sd, path.sg, result)
-        : mi.sample(sd, path.sg, result, kUseBSDFSampling);
-
+        bool valid = mi.sample(sd, path.sg, result, kUseBSDFSampling);
         if (valid) valid = generateScatterRay(result, sd, mi, path);
 
+        // Ignore valid on purpose for now.
         if (kOutputNRDData)
         {
-            const uint lobeTypes = useNeural ? uint(LobeType::DiffuseReflection) : mi.getLobeTypes(sd);
+            const uint lobeTypes = mi.getLobeTypes(sd);
             const bool hasDeltaTransmissionLobe = (lobeTypes & (uint)LobeType::DeltaTransmission) != 0;
             const bool hasNonDeltaLobes = (lobeTypes & (uint)LobeType::NonDelta) != 0;
 
@@ -606,7 +402,9 @@ struct PathTracer
 
                 if (kOutputNRDAdditionalData)
                 {
+                    // Mark path as delta-only if it followed delta lobe on the primary hit, even though there might have been non-delta lobes.
                     path.setDeltaOnlyPath(result.isLobe(LobeType::DeltaReflection) || result.isLobe(LobeType::DeltaTransmission));
+
                     path.setDeltaReflectionPrimaryHit(result.isLobe(LobeType::DeltaReflection));
                     path.setDeltaTransmissionPath(result.isLobe(LobeType::DeltaTransmission));
                 }
@@ -1063,18 +861,8 @@ struct PathTracer
         const IMaterialInstance mi = gScene.materials.getMaterialInstance(sd, lod, hints);
         BSDFProperties bsdfProperties = mi.getProperties(sd);
 
-        const bool useNeural = isNeuralMaterialHit(sd, neuralEnabled, neuralMaterialID);
-
-        // Force neural path to be treated as non specular
-        if (useNeural)
-        {
-            bsdfProperties.guideNormal = sd.frame.N;
-            bsdfProperties.roughness = 1.f;
-            bsdfProperties.specularReflectionAlbedo = float3(0.f);
-            bsdfProperties.specularTransmissionAlbedo = float3(0.f);
-        }
-
-        bool isSpecular = useNeural ? false : (bsdfProperties.roughness <= params.specularRoughnessThreshold);
+        // Disable specular lobes if caustics are disabled and path already contains a diffuse vertex.
+        bool isSpecular = bsdfProperties.roughness <= params.specularRoughnessThreshold;
         if (kDisableCaustics && path.getBounces(BounceType::Diffuse) > 0 && isSpecular)
         {
             sd.mtl.setActiveLobes((uint)LobeType::Diffuse);
@@ -1199,11 +987,11 @@ struct PathTracer
                 // Apply MIS weight.
                 if (kUseMIS && !applyRTXDI && ls.lightType != (uint)LightType::Analytic)
                 {
-                    float scatterPdf = useNeural ? evalNeuralBSDFPdf(sd, ls.dir) : mi.evalPdf(sd, ls.dir, kUseBSDFSampling);
+                    float scatterPdf = mi.evalPdf(sd, ls.dir, kUseBSDFSampling);
                     ls.Li *= evalMIS(1, ls.pdf, 1, scatterPdf);
                 }
 
-                float3 weight = useNeural ? evalNeuralBRDF(neural, sd, ls.dir) : mi.eval(sd, ls.dir, path.sg);
+                float3 weight = mi.eval(sd, ls.dir, path.sg);
                 float3 Lr = weight * ls.Li;
                 if (any(Lr > 0.f))
                 {

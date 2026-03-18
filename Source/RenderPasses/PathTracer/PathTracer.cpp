@@ -155,10 +155,6 @@ namespace
     const std::string kColorFormat = "colorFormat";
 
 
-    /**Neural material implementation */
-    const std::string kUseNeuralMaterial = "useNeuralMaterial";
-    const std::string kNeuralMaterialID = "neuralMaterialID";
-    const std::string kNeuralBasePath = "neuralBasePath";
 }
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -208,22 +204,11 @@ PathTracer::PathTracer(ref<Device> pDevice, const Properties& props)
     mpPixelStats = std::make_unique<PixelStats>(mpDevice);
     mpPixelDebug = std::make_unique<PixelDebug>(mpDevice);
 
-    /** Neural material implementation */
-    if (mUseNeuralMaterial && !mNeuralBasePath.empty())
-    {
-        loadNeuralMaterialAssets();
-    }
 }
 
 void PathTracer::setProperties(const Properties& props)
 {
     parseProperties(props);
-    if ((props.has(kUseNeuralMaterial) || props.has(kNeuralMaterialID) || props.has(kNeuralBasePath)) &&
-    mUseNeuralMaterial && !mNeuralBasePath.empty())
-    {
-        loadNeuralMaterialAssets();
-        mVarsChanged = true;
-    }
     validateOptions();
     if (auto lightBVHSampler = dynamic_cast<LightBVHSampler*>(mpEmissiveSampler.get()))
         lightBVHSampler->setOptions(mLightBVHOptions);
@@ -278,11 +263,6 @@ void PathTracer::parseProperties(const Properties& props)
         else if (key == kOutputSize) mOutputSizeSelection = value;
         else if (key == kFixedOutputSize) mFixedOutputSize = value;
         else if (key == kColorFormat) mStaticParams.colorFormat = value;
-
-        /** Neural Material Implementation */
-        else if (key == kUseNeuralMaterial) mUseNeuralMaterial = value;
-        else if (key == kNeuralMaterialID) mNeuralMaterialID = value;
-        else if (key == kNeuralBasePath) props.getTo(kNeuralBasePath, mNeuralBasePath);
 
         else logWarning("Unknown property '{}' in PathTracer properties.", key);
     }
@@ -1157,49 +1137,6 @@ void PathTracer::bindShaderData(const ShaderVar& var, const RenderData& renderDa
         // TODO: Do we have to bind this every frame?
         mpEmissiveSampler->bindShaderData(var["emissiveSampler"]);
     }
-
-    /** Neural material implementation */
-    const bool neuralReady =
-        mUseNeuralMaterial &&
-        mpNeuralLatent0 && mpNeuralLatent1 &&
-        mpNeuralFrameLinear && mpNeuralW0 && mpNeuralB0 &&
-        mpNeuralW1 && mpNeuralB1 && mpNeuralW2 && mpNeuralB2;
-
-    auto bindNeuralBlock = [&](const ShaderVar& pt)
-    {
-        pt["neuralEnabled"] = neuralReady ? 1u : 0u;
-        pt["neuralMaterialID"] = mNeuralMaterialID;
-
-        if (neuralReady)
-        {
-            auto n = pt["neural"];
-            n["latent0"] = mpNeuralLatent0;
-            n["latent1"] = mpNeuralLatent1;
-            n["samplerState"] = mpNeuralSampler;
-
-            n["frameLinear"] = mpNeuralFrameLinear;
-            n["W0"] = mpNeuralW0;
-            n["B0"] = mpNeuralB0;
-            n["W1"] = mpNeuralW1;
-            n["B1"] = mpNeuralB1;
-            n["W2"] = mpNeuralW2;
-            n["B2"] = mpNeuralB2;
-
-            n["applyExp"] = mNeuralApplyExp ? 1u : 0u;
-            n["expOffset"] = mNeuralExpOffset;
-        }
-    };
-
-    // Case 1: var is already the PathTracer parameter block.
-    if (var.findMember("neuralEnabled").isValid())
-    {
-        bindNeuralBlock(var);
-    }
-    // Case 2: var is the program root and PathTracer is nested under gPathTracer.
-    else if (auto pt = var.findMember("gPathTracer"); pt.isValid() && pt.findMember("neuralEnabled").isValid())
-    {
-        bindNeuralBlock(pt);
-    }
 }
 
 bool PathTracer::beginFrame(RenderContext* pRenderContext, const RenderData& renderData)
@@ -1532,85 +1469,4 @@ DefineList PathTracer::StaticParams::getDefines(const PathTracer& owner) const
 }
 
 
-static std::vector<float> readFloatArray(std::ifstream& f, size_t count)
-{
-    std::vector<float> v(count);
-    f.read(reinterpret_cast<char*>(v.data()), count * sizeof(float));
-    if (!f) throw std::runtime_error("Failed reading float array from decoder_weights.bin");
-    return v;
-}
 
-void PathTracer::loadNeuralMaterialAssets()
-{
-    const std::filesystem::path basePath = mNeuralBasePath;
-
-    const auto latent0Path = basePath / "latent0.exr";
-    const auto latent1Path = basePath / "latent1.exr";
-    const auto weightsPath = basePath / "decoder_weights.bin";
-
-    mpNeuralLatent0 = Texture::createFromFile(mpDevice, latent0Path.string(), false, false);
-    mpNeuralLatent1 = Texture::createFromFile(mpDevice, latent1Path.string(), false, false);
-
-    if (!mpNeuralLatent0)
-        throw std::runtime_error("Failed to load latent texture: " + latent0Path.string());
-    if (!mpNeuralLatent1)
-        throw std::runtime_error("Failed to load latent texture: " + latent1Path.string());
-
-    std::ifstream f(weightsPath, std::ios::binary);
-    if (!f) throw std::runtime_error("Failed to open weight file: " + weightsPath.string());
-
-    char magic[8];
-    f.read(magic, 8);
-    if (!f || std::memcmp(magic, "NMDLWT01", 8) != 0)
-        throw std::runtime_error("Invalid weight file magic in: " + weightsPath.string());
-
-    int32_t latentCh = 0;
-    int32_t numFrames = 0;
-    int32_t applyExp = 0;
-    float expOffset = 0.f;
-
-    f.read(reinterpret_cast<char*>(&latentCh), sizeof(int32_t));
-    f.read(reinterpret_cast<char*>(&numFrames), sizeof(int32_t));
-    f.read(reinterpret_cast<char*>(&applyExp), sizeof(int32_t));
-    f.read(reinterpret_cast<char*>(&expOffset), sizeof(float));
-
-    if (!f) throw std::runtime_error("Failed reading weight file header: " + weightsPath.string());
-
-    mNeuralApplyExp = (applyExp != 0);
-    mNeuralExpOffset = expOffset;
-
-    auto frameLinear = readFloatArray(f, 12 * 8);
-    auto w0 = readFloatArray(f, 32 * 20);
-    auto b0 = readFloatArray(f, 32);
-    auto w1 = readFloatArray(f, 32 * 32);
-    auto b1 = readFloatArray(f, 32);
-    auto w2 = readFloatArray(f, 3 * 32);
-    auto b2 = readFloatArray(f, 3);
-
-    auto makeStructured = [&](const std::vector<float>& data) -> ref<Buffer>
-    {
-        return make_ref<Buffer>(
-            mpDevice,
-            sizeof(float),
-            static_cast<uint32_t>(data.size()),
-            ResourceBindFlags::ShaderResource,
-            MemoryType::DeviceLocal,
-            data.data(),
-            false
-        );
-    };
-
-    mpNeuralFrameLinear = makeStructured(frameLinear);
-    mpNeuralW0 = makeStructured(w0);
-    mpNeuralB0 = makeStructured(b0);
-    mpNeuralW1 = makeStructured(w1);
-    mpNeuralB1 = makeStructured(b1);
-    mpNeuralW2 = makeStructured(w2);
-    mpNeuralB2 = makeStructured(b2);
-
-    Sampler::Desc desc;
-    desc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
-    mpNeuralSampler = mpDevice->createSampler(desc);
-
-    mVarsChanged = true;
-}

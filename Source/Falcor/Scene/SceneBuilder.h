@@ -525,6 +525,8 @@ namespace Falcor
             \param[in] slot Slot to load texture into.
             \param[in] path Texture file path.
         */
+        void replaceMaterialWithNeural(const std::string& materialName, const std::filesystem::path& basePath);
+
         void loadMaterialTexture(const ref<Material>& pMaterial, Material::TextureSlot slot, const std::filesystem::path& path);
 
         /** Wait until all material textures are loaded.
@@ -671,6 +673,8 @@ namespace Falcor
         /** Returns texture manager used by the material system.
          */
         MaterialTextureLoader& getMaterialTextureLoader();
+
+        // Neural implementation
     private:
         struct InternalNode : Node
         {
@@ -840,6 +844,7 @@ namespace Falcor
         void createSceneGraph();
         void createMeshBoundingBoxes();
         void calculateCurveBoundingBoxes();
+
 
         friend class SceneCache;
         friend class SceneBuilderDump;
