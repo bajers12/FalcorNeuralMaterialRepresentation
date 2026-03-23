@@ -56,6 +56,8 @@ public:
 private:
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;
-    ref<Buffer> mpSampleBuffer;
+    ref<Buffer> mpGpuSampleBuffer;
+    ref<Buffer> mpReadbackBuffer;
+    ref<Fence> mpReadbackFence;
     bool mbShouldGenerate = false;
 };

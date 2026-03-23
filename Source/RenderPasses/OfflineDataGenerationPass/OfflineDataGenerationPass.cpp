@@ -27,8 +27,8 @@
  **************************************************************************/
 #include "OfflineDataGenerationPass.h"
 
-const char kShaderFile[] = "Renderpasses/OfflineDataGenerationPass/OfflineDataGenerationPass.cs.slang";
-const int kSampleCount = 5000;
+const char kShaderFile[] = "RenderPasses/OfflineDataGenerationPass/OfflineDataGenerationPass.cs.slang";
+const int kSampleCount = 100;
 const uint32_t kThreadGroupSize = 64;
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -39,36 +39,46 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
 struct BsdfSampleData
 {
     float2 uv;
-    float3 wo;
-    float3 wi;
-    float3 f;
-    float3 specular;
-    float3 albedo;
-    float3 roughness;
-    float3 normal;
+    float4 wo;
+    float4 wi;
+    float4 f;
+    float4 specular;
+    float4 albedo;
+    float4 roughness;
+    float4 normal;
 };
 
 struct BsdfTestSampleData
 {
     float2 uv;
-    float3 wo;
-    float3 wi;
-    float3 f;
+    float4 wo;
+    float4 wi;
+    float4 f;
 };
 
 OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
-    //Set up program
-    ProgramDesc desc;
-    desc.addShaderLibrary(kShaderFile);
-    desc.csEntry("main");
+    mpDevice = pDevice;
+    mbShouldGenerate = false;
 
-    mpPass = ComputePass::create(pDevice, kShaderFile);
+    //For readback syncronization
+    mpReadbackFence = mpDevice->createFence();
+
+    mpGpuSampleBuffer = mpDevice->createStructuredBuffer(
+        sizeof(BsdfTestSampleData),
+        kSampleCount,
+        ResourceBindFlags::UnorderedAccess,
+        MemoryType::DeviceLocal
+    );
+
+    mpReadbackBuffer = mpDevice->createStructuredBuffer(
+        sizeof(BsdfTestSampleData),
+        kSampleCount,
+        ResourceBindFlags::None,
+        MemoryType::ReadBack
+    );
 
     //Initialize structured buffer for writing sample data from GPU to CPU
-    mpSampleBuffer = mpDevice->createStructuredBuffer(sizeof(BsdfTestSampleData), kSampleCount, ResourceBindFlags::UnorderedAccess, MemoryType::ReadBack);
-    auto var = mpPass->getRootVar();
-    var["gSampleOutputBuffer"] = mpSampleBuffer;
-    var["gSampleCount"] = kSampleCount;
+
 }
 
 Properties OfflineDataGenerationPass::getProperties() const
@@ -78,11 +88,9 @@ Properties OfflineDataGenerationPass::getProperties() const
 
 RenderPassReflection OfflineDataGenerationPass::reflect(const CompileData& compileData)
 {
-        RenderPassReflection r;
-
-        r.addOutput("samples", "Buffer containing samples");
-
-        return r;
+    RenderPassReflection r;
+    r.addOutput("output", "Dummy output");
+    return r;
 }
 
 void OfflineDataGenerationPass::renderUI(Gui::Widgets& widget)
@@ -97,14 +105,30 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
 {
     if(!mbShouldGenerate) return;
     mbShouldGenerate = false;
+    if(!mpScene) return;
 
+    //Setup program with defines in execute, as the slang files cannot compile if no scene is available at compile time for gScene acess
+    ProgramDesc desc;
+    DefineList defines;
+    desc.addShaderLibrary(kShaderFile).csEntry("main");
+    defines = mpScene->getSceneDefines();
+    mpPass = ComputePass::create(mpDevice, desc, defines);
 
+    //Setup bindings
+    auto var = mpPass->getRootVar();
+
+    mpScene->bindShaderData(var["gScene"]);
+    var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
+    var["gSampleCount"] = kSampleCount;
+
+    //Threadsgroups and execute, threadgroups should probably be improved
     uint32_t groups = (kSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
     mpPass->execute(pRenderContext, groups, 1, 1);
 
-    //map buffer address to cpu so we can read it
+    //map buffer address to cpu so we can read it using a readback buffer
+    pRenderContext->copyResource(mpReadbackBuffer.get(), mpGpuSampleBuffer.get());
+    const BsdfTestSampleData* pData = (const BsdfTestSampleData*)mpReadbackBuffer->map();
 
-    const BsdfTestSampleData* pData = (const BsdfTestSampleData*)mpSampleBuffer->map();
 
     std::ofstream f("bsdf_samples.bin", std::ios::binary);
 
@@ -113,7 +137,7 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
 
     f.close();
 
-    mpSampleBuffer->unmap();
+    mpReadbackBuffer->unmap();
 
 
 }
@@ -122,10 +146,4 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
 void OfflineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     mpScene = pScene;
-
-    auto var = mpPass->getRootVar();
-
-    if(mpScene) {
-        mpScene->bindShaderData(var["gScene"]);
-    }
 }

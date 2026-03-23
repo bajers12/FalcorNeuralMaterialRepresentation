@@ -1,34 +1,28 @@
 #include "Utils/Math/MathConstants.slangh"
 
-import Scene.Scene;
 import Scene.Shading;
+import Scene.Scene;
 import Utils.Math.MathHelpers;
-import Utils.Color.ColorHelpers;
-import Scene.Material.ShadingUtils;
-import Rendering.Materials.RGLCommon;
 import Utils.Sampling.UniformSampleGenerator;
-import Rendering.Materials.StandardMaterial;
-import BSDFOptimizerParams;
-import BSDFOptimizerHelpers;
 
 struct BsdfSampleData
 {
     float2 uv;
-    float3 wo;
-    float3 wi;
-    float3 f;
-    float3 specular;
-    float3 albedo;
-    float3 roughness;
-    float3 normal;
+    float4 wo;
+    float4 wi;
+    float4 f;
+    float4 specular;
+    float4 albedo;
+    float4 roughness;
+    float4 normal;
 };
 
 struct BsdfTestSampleData
 {
     float2 uv;
-    float3 wo;
-    float3 wi;
-    float3 f;
+    float4 wo;
+    float4 wi;
+    float4 f;
 };
 
 RWStructuredBuffer<BsdfTestSampleData> gSampleOutputBuffer;
@@ -52,17 +46,16 @@ float rand(inout uint seed)
     return float(seed) / 4294967296.0;
 }
 
-float3 uniformSampleSphere(float2 u)
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void main(uint3 tid: SV_DispatchThreadID)
 {
-    float z = 1.0 - 2.0 * u.x;
-    float r = sqrt(max(0.0, 1.0 - z*z));
-    float phi = 2.0 * M_PI * u.y;
-    return float3(r * cos(phi), r * sin(phi), z);
+    return;
 }
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void main(uint3 tid : SV_DispatchThreadID)
+void wdwmain(uint3 tid : SV_DispatchThreadID)
 {
     uint idx = tid.x;
     if (idx >= gSampleCount) return;
@@ -82,12 +75,16 @@ void main(uint3 tid : SV_DispatchThreadID)
     //Shading data should be prepared based on uniformly sampled UV value, used to reconstruct w_o
     ShadingData sd = {};
     sd.posW = float3(uv, 0.0);
-    sd.faceN = float3(0, 0, 1);
     sd.V = wi;
     sd.frame = ShadingFrame::createIdentity();
+    sd.faceN = sd.frame.N;
+    sd.uv = uv;
 
-    //Get material Instance
-    let mi = gScene.materials.getMaterialInstance(sd, lod);
+    // Get material Instance
+    // As we do not actually pass trace and evaluate abstractly, independent of geometry, we cannot use the straight getMaterialInstance method
+    //Hopefully we can still get valid instance despite invalid world position
+    IMaterial mat = gScene.materials.getMaterial(1);
+    let mi = mat.setupMaterialInstance(gScene.materials, sd, lod);
     BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
@@ -96,9 +93,9 @@ void main(uint3 tid : SV_DispatchThreadID)
     //Save results
     BsdfTestSampleData data;
     data.uv = uv;
-    data.wi = sd.V;
-    data.wo = wo;
-    data.f = f;
+    data.wi = float4(sd.V.x, sd.V.y, sd.V.z, 0);
+    data.wo = float4(wo.x, wo.y, wo.z, 0);
+    data.f = float4(f.x, f.y, f.z, 0);
     //data.albedo = props.diffuseReflectionAlbedo;
     //data.specular = props.specularReflectionAlbedo;
     //data.roughness = props.roughness;
