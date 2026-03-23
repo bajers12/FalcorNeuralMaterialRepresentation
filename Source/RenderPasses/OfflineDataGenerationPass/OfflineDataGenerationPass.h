@@ -29,6 +29,7 @@
 #include "Falcor.h"
 #include "RenderGraph/RenderPass.h"
 #include <fstream>
+#include <filesystem>
 
 using namespace Falcor;
 

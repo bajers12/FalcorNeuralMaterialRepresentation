@@ -28,6 +28,7 @@
 #include "OfflineDataGenerationPass.h"
 
 const char kShaderFile[] = "RenderPasses/OfflineDataGenerationPass/OfflineDataGenerationPass.cs.slang";
+const char kOutputFileName[] = "bsdf_samples.bin";
 const int kSampleCount = 100;
 const uint32_t kThreadGroupSize = 64;
 
@@ -119,7 +120,8 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     ProgramDesc desc;
     desc.addShaderModules(mpScene->getShaderModules());
     desc.addShaderLibrary(kShaderFile).csEntry("main");
-    desc.addTypeConformances(mpScene->getTypeConformances());
+    auto corformances = mpScene->getTypeConformances();
+    desc.addTypeConformances(corformances);
 
     DefineList defines;
     defines = mpScene->getSceneDefines();
@@ -146,8 +148,9 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     mpReadbackFence->wait();
     const BsdfTestSampleData* pData = (const BsdfTestSampleData*)mpReadbackBuffer->map();
 
-
-    std::ofstream f("bsdf_samples.bin", std::ios::binary);
+    std::string outputPath = std::filesystem::current_path().string() + std::string(kOutputFileName);
+    std::ofstream f(outputPath, std::ios::binary);
+    logInfo("Writing to:" + outputPath);
 
     // write raw buffer
     f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfTestSampleData) * kSampleCount);
