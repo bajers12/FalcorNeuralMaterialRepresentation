@@ -1,7 +1,8 @@
 #include "Utils/Math/MathConstants.slangh"
 
-import Scene.Shading;
 import Scene.Scene;
+import Scene.Shading;
+import Scene.Material.MaterialFactory;
 import Utils.Math.MathHelpers;
 import Utils.Sampling.UniformSampleGenerator;
 
@@ -20,6 +21,7 @@ struct BsdfSampleData
 struct BsdfTestSampleData
 {
     float2 uv;
+    float2 _padding;
     float4 wo;
     float4 wi;
     float4 f;
@@ -48,14 +50,7 @@ float rand(inout uint seed)
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
-void main(uint3 tid: SV_DispatchThreadID)
-{
-    return;
-}
-
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void wdwmain(uint3 tid : SV_DispatchThreadID)
+void main(uint3 tid : SV_DispatchThreadID)
 {
     uint idx = tid.x;
     if (idx >= gSampleCount) return;
@@ -74,7 +69,7 @@ void wdwmain(uint3 tid : SV_DispatchThreadID)
 
     //Shading data should be prepared based on uniformly sampled UV value, used to reconstruct w_o
     ShadingData sd = {};
-    sd.posW = float3(uv, 0.0);
+    sd.posW = float3(0.0, 0.0, 0.0);
     sd.V = wi;
     sd.frame = ShadingFrame::createIdentity();
     sd.faceN = sd.frame.N;
@@ -83,8 +78,8 @@ void wdwmain(uint3 tid : SV_DispatchThreadID)
     // Get material Instance
     // As we do not actually pass trace and evaluate abstractly, independent of geometry, we cannot use the straight getMaterialInstance method
     //Hopefully we can still get valid instance despite invalid world position
-    IMaterial mat = gScene.materials.getMaterial(1);
-    let mi = mat.setupMaterialInstance(gScene.materials, sd, lod);
+    sd.materialID = 1;
+    let mi = gScene.materials.getMaterialInstance(sd, lod);
     BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector

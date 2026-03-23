@@ -6,4 +6,5 @@ target_sources(OfflineDataGenerationPass PRIVATE
     OfflineDataGenerationPass.cs.slang
 )
 
+target_copy_shaders(OfflineDataGenerationPass RenderPasses/OfflineDataGenerationPass)
 target_source_group(OfflineDataGenerationPass "RenderPasses")

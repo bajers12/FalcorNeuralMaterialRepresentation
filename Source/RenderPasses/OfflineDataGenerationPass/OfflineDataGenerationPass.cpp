@@ -51,6 +51,7 @@ struct BsdfSampleData
 struct BsdfTestSampleData
 {
     float2 uv;
+    float2 _padding;
     float4 wo;
     float4 wi;
     float4 f;
@@ -107,11 +108,23 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     mbShouldGenerate = false;
     if(!mpScene) return;
 
+    if (mpScene->getMaterialCount() == 0)
+    {
+        logWarning("OfflineDataGenerationPass: Scene has no materials, cannot generate samples.");
+        return;
+    }
+
+
     //Setup program with defines in execute, as the slang files cannot compile if no scene is available at compile time for gScene acess
     ProgramDesc desc;
-    DefineList defines;
+    desc.addShaderModules(mpScene->getShaderModules());
     desc.addShaderLibrary(kShaderFile).csEntry("main");
+    desc.addTypeConformances(mpScene->getTypeConformances());
+
+    DefineList defines;
     defines = mpScene->getSceneDefines();
+
+
     mpPass = ComputePass::create(mpDevice, desc, defines);
 
     //Setup bindings
@@ -125,8 +138,12 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     uint32_t groups = (kSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
     mpPass->execute(pRenderContext, groups, 1, 1);
 
+
     //map buffer address to cpu so we can read it using a readback buffer
     pRenderContext->copyResource(mpReadbackBuffer.get(), mpGpuSampleBuffer.get());
+    pRenderContext->submit(false);
+    pRenderContext->signal(mpReadbackFence.get());
+    mpReadbackFence->wait();
     const BsdfTestSampleData* pData = (const BsdfTestSampleData*)mpReadbackBuffer->map();
 
 
