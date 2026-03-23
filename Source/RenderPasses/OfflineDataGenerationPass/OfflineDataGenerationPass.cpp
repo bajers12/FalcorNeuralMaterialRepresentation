@@ -148,9 +148,11 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     mpReadbackFence->wait();
     const BsdfTestSampleData* pData = (const BsdfTestSampleData*)mpReadbackBuffer->map();
 
-    std::string outputPath = std::filesystem::current_path().string() + std::string(kOutputFileName);
+    std::string dataDir = "samples";
+    std::filesystem::create_directories(dataDir);
+    std::string outputPath = dataDir + "/" + std::string(kOutputFileName);
     std::ofstream f(outputPath, std::ios::binary);
-    logInfo("Writing to:" + outputPath);
+    logInfo("Writing samples to: " + outputPath);
 
     // write raw buffer
     f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfTestSampleData) * kSampleCount);
