@@ -31,7 +31,6 @@ const char kShaderFile[] = "RenderPasses/OfflineDataGenerationPass/OfflineDataGe
 const std::string kOutputFileName = "bsdf_samples.bin";
 const std::string kDataDir = "samples";
 
-const int kSampleCount = 100000000;
 const uint32_t kThreadGroupSize = 64;
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -63,20 +62,21 @@ struct BsdfTestSampleData
 OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
     mpDevice = pDevice;
     mbShouldGenerate = false;
+    mSampleCount = 5000000;
 
     //For readback syncronization
     mpReadbackFence = mpDevice->createFence();
 
     mpGpuSampleBuffer = mpDevice->createStructuredBuffer(
         sizeof(BsdfTestSampleData),
-        kSampleCount,
+        mSampleCount,
         ResourceBindFlags::UnorderedAccess,
         MemoryType::DeviceLocal
     );
 
     mpReadbackBuffer = mpDevice->createStructuredBuffer(
         sizeof(BsdfTestSampleData),
-        kSampleCount,
+        mSampleCount,
         ResourceBindFlags::None,
         MemoryType::ReadBack
     );
@@ -136,11 +136,13 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
 
     mpScene->bindShaderData(var["gScene"]);
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
-    var["gSampleCount"] = kSampleCount;
+    var["gSampleCount"] = mSampleCount;
+    var["gFrameSeed"] = std::_Random_device;
 
     //Threadsgroups and execute, threadgroups should probably be improved
-    uint32_t groups = (kSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
-    mpPass->execute(pRenderContext, groups, 1, 1);
+    uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
+    mpPass->execute(pRenderContext, mSampleCount, 1, 1);
+    pRenderContext->uavBarrier(mpGpuSampleBuffer.get());
 
 
     //map buffer address to cpu so we can read it using a readback buffer
@@ -156,7 +158,7 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     logInfo("Writing samples to: " + outputPath);
 
     // write raw buffer
-    f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfTestSampleData) * kSampleCount);
+    f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfTestSampleData) * mSampleCount);
 
     f.close();
 

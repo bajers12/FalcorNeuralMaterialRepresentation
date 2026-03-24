@@ -30,6 +30,7 @@
 #include "RenderGraph/RenderPass.h"
 #include <fstream>
 #include <filesystem>
+#include <random>
 
 using namespace Falcor;
 
@@ -61,4 +62,6 @@ private:
     ref<Buffer> mpReadbackBuffer;
     ref<Fence> mpReadbackFence;
     bool mbShouldGenerate;
+    uint32_t mMaterialID;
+    uint32_t mSampleCount;
 };

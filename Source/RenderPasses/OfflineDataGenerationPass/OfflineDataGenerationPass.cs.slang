@@ -29,6 +29,8 @@ struct BsdfTestSampleData
 
 RWStructuredBuffer<BsdfTestSampleData> gSampleOutputBuffer;
 uint gSampleCount;
+uint gMaterialId = 3;
+uint gFrameSeed;
 
 uint hash(uint x)
 {
@@ -48,37 +50,36 @@ float rand(inout uint seed)
     return float(seed) / 4294967296.0;
 }
 
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void main(uint3 tid : SV_DispatchThreadID)
+[numthreads(1, 1, 1)]
+void main(uint3 threadId : SV_DispatchThreadID)
 {
-    uint idx = tid.x;
-    if (idx >= gSampleCount) return;
+    uint idx = threadId.x;
 
     //Sample UV and view direction uniformly
-    uint seed = idx * 9781 + 6271;
+    uint seed = idx * 9781 + 6271 + gFrameSeed;
 
     float2 uv = float2(rand(seed), rand(seed));
 
     float3 wo = sample_hemisphere(float2(rand(seed), rand(seed)));
     float3 wi = sample_hemisphere(float2(rand(seed), rand(seed)));
 
-    //Construct Shadign data and samplers
-    UniformSampleGenerator sg = UniformSampleGenerator(1, 0);
+    // Construct Shadign data and samplers
+    UniformSampleGenerator sg = UniformSampleGenerator(idx, 0);
     let lod = ExplicitLodTextureSampler(0.f);
 
     //Shading data should be prepared based on uniformly sampled UV value, used to reconstruct w_o
     ShadingData sd = {};
     sd.posW = float3(0.0, 0.0, 0.0);
-    sd.V = wi;
+    sd.V = wi;  // V is the view direction (outgoing)
+    sd.uv = uv;
     sd.frame = ShadingFrame::createIdentity();
     sd.faceN = sd.frame.N;
-    sd.uv = uv;
+    sd.frontFacing = true;
 
-    // Get material Instance
-    // As we do not actually pass trace and evaluate abstractly, independent of geometry, we cannot use the straight getMaterialInstance method
-    //Hopefully we can still get valid instance despite invalid world position
-    sd.materialID = 1;
+    sd.mtl = gScene.materials.getMaterialHeader(gMaterialId);
+    sd.materialID = gMaterialId;
+    sd.IoR = 1.f;
+
     let mi = gScene.materials.getMaterialInstance(sd, lod);
     BSDFProperties props = mi.getProperties(sd);
 
@@ -88,8 +89,8 @@ void main(uint3 tid : SV_DispatchThreadID)
     //Save results
     BsdfTestSampleData data;
     data.uv = uv;
-    data.wi = float4(sd.V.x, sd.V.y, sd.V.z, 0);
-    data.wo = float4(wo.x, wo.y, wo.z, 0);
+    data.wi = float4(wi.x, wi.y, wi.z, 0);  // incident direction
+    data.wo = float4(wo.x, wo.y, wo.z, 0);  // outgoing direction
     data.f = float4(f.x, f.y, f.z, 0);
     //data.albedo = props.diffuseReflectionAlbedo;
     //data.specular = props.specularReflectionAlbedo;
