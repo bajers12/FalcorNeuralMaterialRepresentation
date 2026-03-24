@@ -28,22 +28,22 @@
 #pragma once
 #include "Falcor.h"
 #include "RenderGraph/RenderPass.h"
-#include <fstream>
-#include <filesystem>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 
 using namespace Falcor;
 
-class OfflineDataGenerationPass : public RenderPass
+class OnlineDataGenerationPass : public RenderPass
 {
 public:
-    FALCOR_PLUGIN_CLASS(OfflineDataGenerationPass, "OfflineDataGenerationPass", "Insert pass description here.");
+    FALCOR_PLUGIN_CLASS(OnlineDataGenerationPass, "OnlineDataGenerationPass", "Insert pass description here.");
 
-    static ref<OfflineDataGenerationPass> create(ref<Device> pDevice, const Properties& props)
+    static ref<OnlineDataGenerationPass> create(ref<Device> pDevice, const Properties& props)
     {
-        return make_ref<OfflineDataGenerationPass>(pDevice, props);
+        return make_ref<OnlineDataGenerationPass>(pDevice, props);
     }
 
-    OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props);
+    OnlineDataGenerationPass(ref<Device> pDevice, const Properties& props);
 
     virtual Properties getProperties() const override;
     virtual RenderPassReflection reflect(const CompileData& compileData) override;
@@ -60,5 +60,6 @@ private:
     ref<Buffer> mpGpuSampleBuffer;
     ref<Buffer> mpReadbackBuffer;
     ref<Fence> mpReadbackFence;
+    uint32_t mTargetMaterialId;
     bool mbShouldGenerate;
 };

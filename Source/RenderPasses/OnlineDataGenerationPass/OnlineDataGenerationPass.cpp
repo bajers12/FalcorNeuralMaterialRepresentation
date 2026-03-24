@@ -25,19 +25,13 @@
  # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
-#include "OfflineDataGenerationPass.h"
+#include "OnlineDataGenerationPass.h"
 
 const char kShaderFile[] = "RenderPasses/OfflineDataGenerationPass/OfflineDataGenerationPass.cs.slang";
 const std::string kOutputFileName = "bsdf_samples.bin";
 const std::string kDataDir = "samples";
-
-const int kSampleCount = 100000000;
+const int kSampleCount = 100;
 const uint32_t kThreadGroupSize = 64;
-
-extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
-{
-    registry.registerClass<RenderPass, OfflineDataGenerationPass>();
-}
 
 struct BsdfSampleData
 {
@@ -60,7 +54,13 @@ struct BsdfTestSampleData
     float4 f;
 };
 
-OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
+extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
+{
+    registry.registerClass<RenderPass, OnlineDataGenerationPass>();
+}
+
+OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
+    mTargetMaterialId = 0;
     mpDevice = pDevice;
     mbShouldGenerate = false;
 
@@ -80,32 +80,22 @@ OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const 
         ResourceBindFlags::None,
         MemoryType::ReadBack
     );
-
-    //Initialize structured buffer for writing sample data from GPU to CPU
-
 }
 
-Properties OfflineDataGenerationPass::getProperties() const
+Properties OnlineDataGenerationPass::getProperties() const
 {
     return {};
 }
 
-RenderPassReflection OfflineDataGenerationPass::reflect(const CompileData& compileData)
+RenderPassReflection OnlineDataGenerationPass::reflect(const CompileData& compileData)
 {
-    RenderPassReflection r;
-    r.addOutput("output", "Dummy output");
-    return r;
+    // Define the required resources here
+    RenderPassReflection reflector;
+    reflector.addOutput("output", "Dummy output");
+    return reflector;
 }
 
-void OfflineDataGenerationPass::renderUI(Gui::Widgets& widget)
-{
-    if (widget.button("Generate BSDF Samples"))
-    {
-        mbShouldGenerate = true;
-    }
-}
-
-void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const RenderData& renderData)
+void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
     if(!mbShouldGenerate) return;
     mbShouldGenerate = false;
@@ -137,8 +127,9 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     mpScene->bindShaderData(var["gScene"]);
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
     var["gSampleCount"] = kSampleCount;
+    var["gMaterialId"] = mTargetMaterialId;
 
-    //Threadsgroups and execute, threadgroups should probably be improved
+        //Threadsgroups and execute, threadgroups should probably be improved
     uint32_t groups = (kSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
     mpPass->execute(pRenderContext, groups, 1, 1);
 
@@ -150,23 +141,13 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     mpReadbackFence->wait();
     const BsdfTestSampleData* pData = (const BsdfTestSampleData*)mpReadbackBuffer->map();
 
-    std::filesystem::create_directories(kDataDir);
-    std::string outputPath = kDataDir + "/" + kOutputFileName;
-    std::ofstream f(outputPath, std::ios::binary);
-    logInfo("Writing samples to: " + outputPath);
-
-    // write raw buffer
-    f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfTestSampleData) * kSampleCount);
-
-    f.close();
-
     mpReadbackBuffer->unmap();
-
 
 }
 
+void OnlineDataGenerationPass::renderUI(Gui::Widgets& widget) {}
 
-void OfflineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
+void OnlineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     mpScene = pScene;
 }
