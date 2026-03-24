@@ -1,0 +1,35 @@
+# Minimal sphere scene for MaterialX material preview.
+
+sceneBuilder.importScene('SmoothUVSphere.glb')
+
+# Create the generated MaterialX material.
+mtlxMat = sceneBuilder.createMaterialXGraphMaterial(
+    'BlueMosaicMtlx',
+    r"C:\Users\s204795\FalcorNeuralMaterialRepresentation\media\MaterialX\Preview\NG_Blue_Mosaic_Tiles_with_Gold.falcor_material.slang",
+    'NG_Blue_Mosaic_Tiles_with_Gold_GeneratedMtlxMaterial',
+    r'C:\Users\s204795\FalcorNeuralMaterialRepresentation\media\MaterialX\Preview\NG_Blue_Mosaic_Tiles_with_Gold.materialx_manifest.json'
+)
+
+# Replace the imported material.
+# Change 'NeuralPreviewMat' to the actual imported material name if needed.
+oldMat = sceneBuilder.getMaterial('NeuralMat')
+sceneBuilder.replaceMaterial(oldMat, mtlxMat)
+
+# Add environment map.
+envMap = EnvMap('20050806-03_hd.hdr')
+envMap.intensity = 1.0
+sceneBuilder.envMap = envMap
+
+# Add camera.
+camera = Camera()
+camera.position = float3(0.0, 0.0, 3.0)
+camera.target = float3(0.0, 0.0, 0.0)
+camera.up = float3(0.0, 1.0, 0.0)
+camera.focalLength = 50.0
+sceneBuilder.addCamera(camera)
+
+# Add one directional light.
+dirLight = DirectionalLight('KeyLight')
+dirLight.intensity = float3(2.0, 2.0, 2.0)
+dirLight.direction = float3(0.3, -1.0, -0.2)
+sceneBuilder.addLight(dirLight)

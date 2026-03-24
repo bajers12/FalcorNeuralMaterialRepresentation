@@ -1,0 +1,3256 @@
+{
+  "materialName": "NG_Blue_Mosaic_Tiles_with_Gold",
+  "sourceMaterialXPath": "C:/Users/s204795/MaterialX/MaterialsToConvert/Blue_Mosaic_Tiles_with_Gold.mtlx",
+  "groupPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+  "modulePath": "NG_Blue_Mosaic_Tiles_with_Gold.falcor_material.slang",
+  "typeName": "NG_Blue_Mosaic_Tiles_with_Gold_GeneratedMtlxMaterial",
+  "entryFunction": "evalMaterialXSurface",
+  "outputs": {
+    "baseColor": {
+      "outputName": "base_color_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "stage": "pixel",
+      "callable": "eval_output_base_color_output",
+      "namespace": "MtlxOut_base_color_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ]
+    },
+    "coatNormal": {
+      "outputName": "coat_normal_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/coat_normal_output",
+      "stage": "pixel",
+      "callable": "eval_output_coat_normal_output",
+      "namespace": "MtlxOut_coat_normal_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float3",
+          "name": "normalWorld",
+          "semantic": "normalWorld"
+        }
+      ]
+    },
+    "metallic": {
+      "outputName": "metalness_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "stage": "pixel",
+      "callable": "eval_output_metalness_output",
+      "namespace": "MtlxOut_metalness_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ]
+    },
+    "normal": {
+      "outputName": "normal_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "stage": "pixel",
+      "callable": "eval_output_normal_output",
+      "namespace": "MtlxOut_normal_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        },
+        {
+          "type": "float3",
+          "name": "normalWorld",
+          "semantic": "normalWorld"
+        },
+        {
+          "type": "float3",
+          "name": "tangentWorld",
+          "semantic": "tangentWorld"
+        },
+        {
+          "type": "float3",
+          "name": "bitangentWorld",
+          "semantic": "bitangentWorld"
+        }
+      ]
+    },
+    "roughness": {
+      "outputName": "specular_roughness_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "stage": "pixel",
+      "callable": "eval_output_specular_roughness_output",
+      "namespace": "MtlxOut_specular_roughness_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ]
+    },
+    "tangent": {
+      "outputName": "tangent_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/tangent_output",
+      "stage": "pixel",
+      "callable": "eval_output_tangent_output",
+      "namespace": "MtlxOut_tangent_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float3",
+          "name": "tangentWorld",
+          "semantic": "tangentWorld"
+        }
+      ]
+    }
+  },
+  "textures": [
+    {
+      "semantic": "baseColor",
+      "file": "textures/Blue_Mosaic_Tiles_with_Gold_baseColor.png",
+      "shaderTextureName": "g_mtlx_baseColor_tex_0",
+      "shaderSamplerName": "g_mtlx_baseColor_sampler_0",
+      "colorSpace": "srgb_texture",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      },
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "file": "Tile_pattern_16.resources/Tile_pattern_16_roughness_height_metallic.png",
+      "shaderTextureName": "g_mtlx_metallic_tex_0",
+      "shaderSamplerName": "g_mtlx_metallic_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      },
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "file": "textures/Blue_Mosaic_Tiles_with_Gold_normal.png",
+      "shaderTextureName": "g_mtlx_normal_tex_0",
+      "shaderSamplerName": "g_mtlx_normal_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      },
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "file": "textures/Blue_Mosaic_Tiles_with_Gold_mask.png",
+      "shaderTextureName": "g_mtlx_roughness_tex_0",
+      "shaderSamplerName": "g_mtlx_roughness_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      },
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    }
+  ],
+  "constants": [
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_texcoord_vector2_9_index",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_texcoord_vector2_9_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_texcoord_vector2_9/index",
+      "displayName": "node_texcoord_vector2_9_index",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_multiply_10_in2",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_multiply_10_in2",
+      "type": "float",
+      "valueString": "2",
+      "value": 2.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_1/value",
+      "displayName": "node_multiply_10_in2",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_layer",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_layer",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/layer",
+      "displayName": "node_image_color3_2_layer",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_default",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_default",
+      "type": "float3",
+      "valueString": "0, 0, 0",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/default",
+      "displayName": "node_image_color3_2_default",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_uaddressmode",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/uaddressmode",
+      "displayName": "node_image_color3_2_uaddressmode",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_vaddressmode",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_vaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/vaddressmode",
+      "displayName": "node_image_color3_2_vaddressmode",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_filtertype",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_filtertype",
+      "type": "int",
+      "valueString": "1",
+      "value": 1,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/filtertype",
+      "displayName": "node_image_color3_2_filtertype",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_framerange",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_framerange",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/framerange",
+      "displayName": "node_image_color3_2_framerange",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_frameoffset",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_frameoffset",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/frameoffset",
+      "displayName": "node_image_color3_2_frameoffset",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_frameendaction",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_frameendaction",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/frameendaction",
+      "displayName": "node_image_color3_2_frameendaction",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_uv_scale",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uv_scale",
+      "type": "float2",
+      "valueString": "1, 1",
+      "value": [
+        1.0,
+        1.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_color3_2_uv_scale",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_uv_offset",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uv_offset",
+      "type": "float2",
+      "valueString": "0, 0",
+      "value": [
+        0.0,
+        0.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_color3_2_uv_offset",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_texcoord_vector2_9_index",
+      "shaderVariableName": "g_mtlx_metallic_param_node_texcoord_vector2_9_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_texcoord_vector2_9/index",
+      "displayName": "node_texcoord_vector2_9_index",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_multiply_10_in2",
+      "shaderVariableName": "g_mtlx_metallic_param_node_multiply_10_in2",
+      "type": "float",
+      "valueString": "2",
+      "value": 2.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_1/value",
+      "displayName": "node_multiply_10_in2",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_layer",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_layer",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/layer",
+      "displayName": "node_image_vector3_14_layer",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_default",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_default",
+      "type": "float3",
+      "valueString": "0, 0, 0",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/default",
+      "displayName": "node_image_vector3_14_default",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_uaddressmode",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/uaddressmode",
+      "displayName": "node_image_vector3_14_uaddressmode",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_vaddressmode",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_vaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/vaddressmode",
+      "displayName": "node_image_vector3_14_vaddressmode",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_filtertype",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_filtertype",
+      "type": "int",
+      "valueString": "1",
+      "value": 1,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/filtertype",
+      "displayName": "node_image_vector3_14_filtertype",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_framerange",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_framerange",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/framerange",
+      "displayName": "node_image_vector3_14_framerange",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_frameoffset",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_frameoffset",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/frameoffset",
+      "displayName": "node_image_vector3_14_frameoffset",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_frameendaction",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_frameendaction",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/frameendaction",
+      "displayName": "node_image_vector3_14_frameendaction",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_uv_scale",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uv_scale",
+      "type": "float2",
+      "valueString": "1, 1",
+      "value": [
+        1.0,
+        1.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_14_uv_scale",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_uv_offset",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uv_offset",
+      "type": "float2",
+      "valueString": "0, 0",
+      "value": [
+        0.0,
+        0.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_14_uv_offset",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_extract_3_index",
+      "shaderVariableName": "g_mtlx_metallic_param_node_extract_3_index",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_extract_3/index",
+      "displayName": "node_extract_3_index",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_texcoord_vector2_9_index",
+      "shaderVariableName": "g_mtlx_normal_param_node_texcoord_vector2_9_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_texcoord_vector2_9/index",
+      "displayName": "node_texcoord_vector2_9_index",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_multiply_10_in2",
+      "shaderVariableName": "g_mtlx_normal_param_node_multiply_10_in2",
+      "type": "float",
+      "valueString": "2",
+      "value": 2.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_1/value",
+      "displayName": "node_multiply_10_in2",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_layer",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_layer",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/layer",
+      "displayName": "node_image_vector3_11_layer",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_default",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_default",
+      "type": "float3",
+      "valueString": "0, 0, 0",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/default",
+      "displayName": "node_image_vector3_11_default",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_uaddressmode",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/uaddressmode",
+      "displayName": "node_image_vector3_11_uaddressmode",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_vaddressmode",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_vaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/vaddressmode",
+      "displayName": "node_image_vector3_11_vaddressmode",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_filtertype",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_filtertype",
+      "type": "int",
+      "valueString": "1",
+      "value": 1,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/filtertype",
+      "displayName": "node_image_vector3_11_filtertype",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_framerange",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_framerange",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/framerange",
+      "displayName": "node_image_vector3_11_framerange",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_frameoffset",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_frameoffset",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/frameoffset",
+      "displayName": "node_image_vector3_11_frameoffset",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_frameendaction",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_frameendaction",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/frameendaction",
+      "displayName": "node_image_vector3_11_frameendaction",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_uv_scale",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uv_scale",
+      "type": "float2",
+      "valueString": "1, 1",
+      "value": [
+        1.0,
+        1.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_11_uv_scale",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_uv_offset",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uv_offset",
+      "type": "float2",
+      "valueString": "0, 0",
+      "value": [
+        0.0,
+        0.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_11_uv_offset",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_normalmap_scale",
+      "shaderVariableName": "g_mtlx_normal_param_node_normalmap_scale",
+      "type": "float",
+      "valueString": "1",
+      "value": 1.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_normalmap/scale",
+      "displayName": "node_normalmap_scale",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_texcoord_vector2_9_index",
+      "shaderVariableName": "g_mtlx_roughness_param_node_texcoord_vector2_9_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_texcoord_vector2_9/index",
+      "displayName": "node_texcoord_vector2_9_index",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_multiply_10_in2",
+      "shaderVariableName": "g_mtlx_roughness_param_node_multiply_10_in2",
+      "type": "float",
+      "valueString": "2",
+      "value": 2.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_1/value",
+      "displayName": "node_multiply_10_in2",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_layer",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_layer",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/layer",
+      "displayName": "node_image_vector3_13_layer",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_default",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_default",
+      "type": "float3",
+      "valueString": "0, 0, 0",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/default",
+      "displayName": "node_image_vector3_13_default",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_uaddressmode",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/uaddressmode",
+      "displayName": "node_image_vector3_13_uaddressmode",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_vaddressmode",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_vaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/vaddressmode",
+      "displayName": "node_image_vector3_13_vaddressmode",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_filtertype",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_filtertype",
+      "type": "int",
+      "valueString": "1",
+      "value": 1,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/filtertype",
+      "displayName": "node_image_vector3_13_filtertype",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_framerange",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_framerange",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/framerange",
+      "displayName": "node_image_vector3_13_framerange",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_frameoffset",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_frameoffset",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/frameoffset",
+      "displayName": "node_image_vector3_13_frameoffset",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_frameendaction",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_frameendaction",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/frameendaction",
+      "displayName": "node_image_vector3_13_frameendaction",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_uv_scale",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uv_scale",
+      "type": "float2",
+      "valueString": "1, 1",
+      "value": [
+        1.0,
+        1.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_13_uv_scale",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_uv_offset",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uv_offset",
+      "type": "float2",
+      "valueString": "0, 0",
+      "value": [
+        0.0,
+        0.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_13_uv_offset",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_extract_12_index",
+      "shaderVariableName": "g_mtlx_roughness_param_node_extract_12_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_extract_12/index",
+      "displayName": "node_extract_12_index",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_mix_4_fg",
+      "shaderVariableName": "g_mtlx_roughness_param_node_mix_4_fg",
+      "type": "float",
+      "valueString": "0.915",
+      "value": 0.915,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_8/value",
+      "displayName": "node_mix_4_fg",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_mix_4_bg",
+      "shaderVariableName": "g_mtlx_roughness_param_node_mix_4_bg",
+      "type": "float",
+      "valueString": "0",
+      "value": 0.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_0/value",
+      "displayName": "node_mix_4_bg",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    }
+  ],
+  "availableOutputs": [
+    {
+      "outputName": "base_color_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "baseColor",
+      "semanticScore": 0,
+      "mappedSemantic": "baseColor",
+      "stage": "pixel",
+      "callable": "eval_output_base_color_output",
+      "internalCallable": "call_base_color_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_base_color_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ],
+      "textureDependencies": [
+        {
+          "shaderTextureName": "g_mtlx_baseColor_tex_0",
+          "shaderSamplerName": "g_mtlx_baseColor_sampler_0",
+          "file": "textures/Blue_Mosaic_Tiles_with_Gold_baseColor.png",
+          "semantic": "baseColor"
+        }
+      ],
+      "constantDependencies": [
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_texcoord_vector2_9_index",
+          "originalUniformName": "node_texcoord_vector2_9_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_multiply_10_in2",
+          "originalUniformName": "node_multiply_10_in2",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_layer",
+          "originalUniformName": "node_image_color3_2_layer",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_default",
+          "originalUniformName": "node_image_color3_2_default",
+          "type": "float3",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uaddressmode",
+          "originalUniformName": "node_image_color3_2_uaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_vaddressmode",
+          "originalUniformName": "node_image_color3_2_vaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_filtertype",
+          "originalUniformName": "node_image_color3_2_filtertype",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_framerange",
+          "originalUniformName": "node_image_color3_2_framerange",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_frameoffset",
+          "originalUniformName": "node_image_color3_2_frameoffset",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_frameendaction",
+          "originalUniformName": "node_image_color3_2_frameendaction",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uv_scale",
+          "originalUniformName": "node_image_color3_2_uv_scale",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uv_offset",
+          "originalUniformName": "node_image_color3_2_uv_offset",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "baseColor"
+        }
+      ]
+    },
+    {
+      "outputName": "coat_normal_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/coat_normal_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "coatNormal",
+      "semanticScore": 0,
+      "mappedSemantic": "coatNormal",
+      "stage": "pixel",
+      "callable": "eval_output_coat_normal_output",
+      "internalCallable": "call_coat_normal_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_coat_normal_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float3",
+          "name": "normalWorld",
+          "semantic": "normalWorld"
+        }
+      ],
+      "textureDependencies": [],
+      "constantDependencies": []
+    },
+    {
+      "outputName": "metalness_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "metallic",
+      "semanticScore": 0,
+      "mappedSemantic": "metallic",
+      "stage": "pixel",
+      "callable": "eval_output_metalness_output",
+      "internalCallable": "call_metalness_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_metalness_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ],
+      "textureDependencies": [
+        {
+          "shaderTextureName": "g_mtlx_metallic_tex_0",
+          "shaderSamplerName": "g_mtlx_metallic_sampler_0",
+          "file": "Tile_pattern_16.resources/Tile_pattern_16_roughness_height_metallic.png",
+          "semantic": "metallic"
+        }
+      ],
+      "constantDependencies": [
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_texcoord_vector2_9_index",
+          "originalUniformName": "node_texcoord_vector2_9_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_multiply_10_in2",
+          "originalUniformName": "node_multiply_10_in2",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_layer",
+          "originalUniformName": "node_image_vector3_14_layer",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_default",
+          "originalUniformName": "node_image_vector3_14_default",
+          "type": "float3",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uaddressmode",
+          "originalUniformName": "node_image_vector3_14_uaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_vaddressmode",
+          "originalUniformName": "node_image_vector3_14_vaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_filtertype",
+          "originalUniformName": "node_image_vector3_14_filtertype",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_framerange",
+          "originalUniformName": "node_image_vector3_14_framerange",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_frameoffset",
+          "originalUniformName": "node_image_vector3_14_frameoffset",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_frameendaction",
+          "originalUniformName": "node_image_vector3_14_frameendaction",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uv_scale",
+          "originalUniformName": "node_image_vector3_14_uv_scale",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uv_offset",
+          "originalUniformName": "node_image_vector3_14_uv_offset",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_extract_3_index",
+          "originalUniformName": "node_extract_3_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        }
+      ]
+    },
+    {
+      "outputName": "normal_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "normal",
+      "semanticScore": 0,
+      "mappedSemantic": "normal",
+      "stage": "pixel",
+      "callable": "eval_output_normal_output",
+      "internalCallable": "call_normal_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_normal_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        },
+        {
+          "type": "float3",
+          "name": "normalWorld",
+          "semantic": "normalWorld"
+        },
+        {
+          "type": "float3",
+          "name": "tangentWorld",
+          "semantic": "tangentWorld"
+        },
+        {
+          "type": "float3",
+          "name": "bitangentWorld",
+          "semantic": "bitangentWorld"
+        }
+      ],
+      "textureDependencies": [
+        {
+          "shaderTextureName": "g_mtlx_normal_tex_0",
+          "shaderSamplerName": "g_mtlx_normal_sampler_0",
+          "file": "textures/Blue_Mosaic_Tiles_with_Gold_normal.png",
+          "semantic": "normal"
+        }
+      ],
+      "constantDependencies": [
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_texcoord_vector2_9_index",
+          "originalUniformName": "node_texcoord_vector2_9_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_multiply_10_in2",
+          "originalUniformName": "node_multiply_10_in2",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_layer",
+          "originalUniformName": "node_image_vector3_11_layer",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_default",
+          "originalUniformName": "node_image_vector3_11_default",
+          "type": "float3",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uaddressmode",
+          "originalUniformName": "node_image_vector3_11_uaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_vaddressmode",
+          "originalUniformName": "node_image_vector3_11_vaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_filtertype",
+          "originalUniformName": "node_image_vector3_11_filtertype",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_framerange",
+          "originalUniformName": "node_image_vector3_11_framerange",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_frameoffset",
+          "originalUniformName": "node_image_vector3_11_frameoffset",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_frameendaction",
+          "originalUniformName": "node_image_vector3_11_frameendaction",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uv_scale",
+          "originalUniformName": "node_image_vector3_11_uv_scale",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uv_offset",
+          "originalUniformName": "node_image_vector3_11_uv_offset",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_normalmap_scale",
+          "originalUniformName": "node_normalmap_scale",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "normal"
+        }
+      ]
+    },
+    {
+      "outputName": "specular_roughness_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "roughness",
+      "semanticScore": 0,
+      "mappedSemantic": "roughness",
+      "stage": "pixel",
+      "callable": "eval_output_specular_roughness_output",
+      "internalCallable": "call_specular_roughness_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_specular_roughness_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ],
+      "textureDependencies": [
+        {
+          "shaderTextureName": "g_mtlx_roughness_tex_0",
+          "shaderSamplerName": "g_mtlx_roughness_sampler_0",
+          "file": "textures/Blue_Mosaic_Tiles_with_Gold_mask.png",
+          "semantic": "roughness"
+        }
+      ],
+      "constantDependencies": [
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_texcoord_vector2_9_index",
+          "originalUniformName": "node_texcoord_vector2_9_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_multiply_10_in2",
+          "originalUniformName": "node_multiply_10_in2",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_layer",
+          "originalUniformName": "node_image_vector3_13_layer",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_default",
+          "originalUniformName": "node_image_vector3_13_default",
+          "type": "float3",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uaddressmode",
+          "originalUniformName": "node_image_vector3_13_uaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_vaddressmode",
+          "originalUniformName": "node_image_vector3_13_vaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_filtertype",
+          "originalUniformName": "node_image_vector3_13_filtertype",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_framerange",
+          "originalUniformName": "node_image_vector3_13_framerange",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_frameoffset",
+          "originalUniformName": "node_image_vector3_13_frameoffset",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_frameendaction",
+          "originalUniformName": "node_image_vector3_13_frameendaction",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uv_scale",
+          "originalUniformName": "node_image_vector3_13_uv_scale",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uv_offset",
+          "originalUniformName": "node_image_vector3_13_uv_offset",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_extract_12_index",
+          "originalUniformName": "node_extract_12_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_mix_4_fg",
+          "originalUniformName": "node_mix_4_fg",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_mix_4_bg",
+          "originalUniformName": "node_mix_4_bg",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "roughness"
+        }
+      ]
+    },
+    {
+      "outputName": "tangent_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/tangent_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "tangent",
+      "semanticScore": 0,
+      "mappedSemantic": "tangent",
+      "stage": "pixel",
+      "callable": "eval_output_tangent_output",
+      "internalCallable": "call_tangent_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_tangent_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float3",
+          "name": "tangentWorld",
+          "semantic": "tangentWorld"
+        }
+      ],
+      "textureDependencies": [],
+      "constantDependencies": []
+    }
+  ],
+  "mappedOutputs": [
+    {
+      "outputName": "base_color_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "baseColor",
+      "semanticScore": 0,
+      "mappedSemantic": "baseColor",
+      "stage": "pixel",
+      "callable": "eval_output_base_color_output",
+      "internalCallable": "call_base_color_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_base_color_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ],
+      "textureDependencies": [
+        {
+          "shaderTextureName": "g_mtlx_baseColor_tex_0",
+          "shaderSamplerName": "g_mtlx_baseColor_sampler_0",
+          "file": "textures/Blue_Mosaic_Tiles_with_Gold_baseColor.png",
+          "semantic": "baseColor"
+        }
+      ],
+      "constantDependencies": [
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_texcoord_vector2_9_index",
+          "originalUniformName": "node_texcoord_vector2_9_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_multiply_10_in2",
+          "originalUniformName": "node_multiply_10_in2",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_layer",
+          "originalUniformName": "node_image_color3_2_layer",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_default",
+          "originalUniformName": "node_image_color3_2_default",
+          "type": "float3",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uaddressmode",
+          "originalUniformName": "node_image_color3_2_uaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_vaddressmode",
+          "originalUniformName": "node_image_color3_2_vaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_filtertype",
+          "originalUniformName": "node_image_color3_2_filtertype",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_framerange",
+          "originalUniformName": "node_image_color3_2_framerange",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_frameoffset",
+          "originalUniformName": "node_image_color3_2_frameoffset",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_frameendaction",
+          "originalUniformName": "node_image_color3_2_frameendaction",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uv_scale",
+          "originalUniformName": "node_image_color3_2_uv_scale",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "baseColor"
+        },
+        {
+          "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uv_offset",
+          "originalUniformName": "node_image_color3_2_uv_offset",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "baseColor"
+        }
+      ]
+    },
+    {
+      "outputName": "coat_normal_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/coat_normal_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "coatNormal",
+      "semanticScore": 0,
+      "mappedSemantic": "coatNormal",
+      "stage": "pixel",
+      "callable": "eval_output_coat_normal_output",
+      "internalCallable": "call_coat_normal_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_coat_normal_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float3",
+          "name": "normalWorld",
+          "semantic": "normalWorld"
+        }
+      ],
+      "textureDependencies": [],
+      "constantDependencies": []
+    },
+    {
+      "outputName": "metalness_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "metallic",
+      "semanticScore": 0,
+      "mappedSemantic": "metallic",
+      "stage": "pixel",
+      "callable": "eval_output_metalness_output",
+      "internalCallable": "call_metalness_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_metalness_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ],
+      "textureDependencies": [
+        {
+          "shaderTextureName": "g_mtlx_metallic_tex_0",
+          "shaderSamplerName": "g_mtlx_metallic_sampler_0",
+          "file": "Tile_pattern_16.resources/Tile_pattern_16_roughness_height_metallic.png",
+          "semantic": "metallic"
+        }
+      ],
+      "constantDependencies": [
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_texcoord_vector2_9_index",
+          "originalUniformName": "node_texcoord_vector2_9_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_multiply_10_in2",
+          "originalUniformName": "node_multiply_10_in2",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_layer",
+          "originalUniformName": "node_image_vector3_14_layer",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_default",
+          "originalUniformName": "node_image_vector3_14_default",
+          "type": "float3",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uaddressmode",
+          "originalUniformName": "node_image_vector3_14_uaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_vaddressmode",
+          "originalUniformName": "node_image_vector3_14_vaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_filtertype",
+          "originalUniformName": "node_image_vector3_14_filtertype",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_framerange",
+          "originalUniformName": "node_image_vector3_14_framerange",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_frameoffset",
+          "originalUniformName": "node_image_vector3_14_frameoffset",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_frameendaction",
+          "originalUniformName": "node_image_vector3_14_frameendaction",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uv_scale",
+          "originalUniformName": "node_image_vector3_14_uv_scale",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uv_offset",
+          "originalUniformName": "node_image_vector3_14_uv_offset",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "metallic"
+        },
+        {
+          "shaderVariableName": "g_mtlx_metallic_param_node_extract_3_index",
+          "originalUniformName": "node_extract_3_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "metallic"
+        }
+      ]
+    },
+    {
+      "outputName": "normal_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "normal",
+      "semanticScore": 0,
+      "mappedSemantic": "normal",
+      "stage": "pixel",
+      "callable": "eval_output_normal_output",
+      "internalCallable": "call_normal_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_normal_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        },
+        {
+          "type": "float3",
+          "name": "normalWorld",
+          "semantic": "normalWorld"
+        },
+        {
+          "type": "float3",
+          "name": "tangentWorld",
+          "semantic": "tangentWorld"
+        },
+        {
+          "type": "float3",
+          "name": "bitangentWorld",
+          "semantic": "bitangentWorld"
+        }
+      ],
+      "textureDependencies": [
+        {
+          "shaderTextureName": "g_mtlx_normal_tex_0",
+          "shaderSamplerName": "g_mtlx_normal_sampler_0",
+          "file": "textures/Blue_Mosaic_Tiles_with_Gold_normal.png",
+          "semantic": "normal"
+        }
+      ],
+      "constantDependencies": [
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_texcoord_vector2_9_index",
+          "originalUniformName": "node_texcoord_vector2_9_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_multiply_10_in2",
+          "originalUniformName": "node_multiply_10_in2",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_layer",
+          "originalUniformName": "node_image_vector3_11_layer",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_default",
+          "originalUniformName": "node_image_vector3_11_default",
+          "type": "float3",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uaddressmode",
+          "originalUniformName": "node_image_vector3_11_uaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_vaddressmode",
+          "originalUniformName": "node_image_vector3_11_vaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_filtertype",
+          "originalUniformName": "node_image_vector3_11_filtertype",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_framerange",
+          "originalUniformName": "node_image_vector3_11_framerange",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_frameoffset",
+          "originalUniformName": "node_image_vector3_11_frameoffset",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_frameendaction",
+          "originalUniformName": "node_image_vector3_11_frameendaction",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uv_scale",
+          "originalUniformName": "node_image_vector3_11_uv_scale",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uv_offset",
+          "originalUniformName": "node_image_vector3_11_uv_offset",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "normal"
+        },
+        {
+          "shaderVariableName": "g_mtlx_normal_param_node_normalmap_scale",
+          "originalUniformName": "node_normalmap_scale",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "normal"
+        }
+      ]
+    },
+    {
+      "outputName": "specular_roughness_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "roughness",
+      "semanticScore": 0,
+      "mappedSemantic": "roughness",
+      "stage": "pixel",
+      "callable": "eval_output_specular_roughness_output",
+      "internalCallable": "call_specular_roughness_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_specular_roughness_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ],
+      "textureDependencies": [
+        {
+          "shaderTextureName": "g_mtlx_roughness_tex_0",
+          "shaderSamplerName": "g_mtlx_roughness_sampler_0",
+          "file": "textures/Blue_Mosaic_Tiles_with_Gold_mask.png",
+          "semantic": "roughness"
+        }
+      ],
+      "constantDependencies": [
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_texcoord_vector2_9_index",
+          "originalUniformName": "node_texcoord_vector2_9_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_multiply_10_in2",
+          "originalUniformName": "node_multiply_10_in2",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_layer",
+          "originalUniformName": "node_image_vector3_13_layer",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_default",
+          "originalUniformName": "node_image_vector3_13_default",
+          "type": "float3",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uaddressmode",
+          "originalUniformName": "node_image_vector3_13_uaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_vaddressmode",
+          "originalUniformName": "node_image_vector3_13_vaddressmode",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_filtertype",
+          "originalUniformName": "node_image_vector3_13_filtertype",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_framerange",
+          "originalUniformName": "node_image_vector3_13_framerange",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_frameoffset",
+          "originalUniformName": "node_image_vector3_13_frameoffset",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_frameendaction",
+          "originalUniformName": "node_image_vector3_13_frameendaction",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uv_scale",
+          "originalUniformName": "node_image_vector3_13_uv_scale",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uv_offset",
+          "originalUniformName": "node_image_vector3_13_uv_offset",
+          "type": "float2",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_extract_12_index",
+          "originalUniformName": "node_extract_12_index",
+          "type": "int",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_mix_4_fg",
+          "originalUniformName": "node_mix_4_fg",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "roughness"
+        },
+        {
+          "shaderVariableName": "g_mtlx_roughness_param_node_mix_4_bg",
+          "originalUniformName": "node_mix_4_bg",
+          "type": "float",
+          "binding": "baked",
+          "semantic": "roughness"
+        }
+      ]
+    },
+    {
+      "outputName": "tangent_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/tangent_output",
+      "parentPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+      "semantic": "tangent",
+      "semanticScore": 0,
+      "mappedSemantic": "tangent",
+      "stage": "pixel",
+      "callable": "eval_output_tangent_output",
+      "internalCallable": "call_tangent_output",
+      "emittedToModule": true,
+      "namespace": "MtlxOut_tangent_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float3",
+          "name": "tangentWorld",
+          "semantic": "tangentWorld"
+        }
+      ],
+      "textureDependencies": [],
+      "constantDependencies": []
+    }
+  ],
+  "unmappedOutputs": [],
+  "graphTextures": [
+    {
+      "semantic": "baseColor",
+      "file": "textures/Blue_Mosaic_Tiles_with_Gold_baseColor.png",
+      "shaderTextureName": "g_mtlx_baseColor_tex_0",
+      "shaderSamplerName": "g_mtlx_baseColor_sampler_0",
+      "colorSpace": "srgb_texture",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      },
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "file": "Tile_pattern_16.resources/Tile_pattern_16_roughness_height_metallic.png",
+      "shaderTextureName": "g_mtlx_metallic_tex_0",
+      "shaderSamplerName": "g_mtlx_metallic_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      },
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "file": "textures/Blue_Mosaic_Tiles_with_Gold_normal.png",
+      "shaderTextureName": "g_mtlx_normal_tex_0",
+      "shaderSamplerName": "g_mtlx_normal_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      },
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "file": "textures/Blue_Mosaic_Tiles_with_Gold_mask.png",
+      "shaderTextureName": "g_mtlx_roughness_tex_0",
+      "shaderSamplerName": "g_mtlx_roughness_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      },
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    }
+  ],
+  "graphConstants": [
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_texcoord_vector2_9_index",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_texcoord_vector2_9_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_texcoord_vector2_9/index",
+      "displayName": "node_texcoord_vector2_9_index",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_multiply_10_in2",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_multiply_10_in2",
+      "type": "float",
+      "valueString": "2",
+      "value": 2.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_1/value",
+      "displayName": "node_multiply_10_in2",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_layer",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_layer",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/layer",
+      "displayName": "node_image_color3_2_layer",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_default",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_default",
+      "type": "float3",
+      "valueString": "0, 0, 0",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/default",
+      "displayName": "node_image_color3_2_default",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_uaddressmode",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/uaddressmode",
+      "displayName": "node_image_color3_2_uaddressmode",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_vaddressmode",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_vaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/vaddressmode",
+      "displayName": "node_image_color3_2_vaddressmode",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_filtertype",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_filtertype",
+      "type": "int",
+      "valueString": "1",
+      "value": 1,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/filtertype",
+      "displayName": "node_image_color3_2_filtertype",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_framerange",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_framerange",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/framerange",
+      "displayName": "node_image_color3_2_framerange",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_frameoffset",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_frameoffset",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/frameoffset",
+      "displayName": "node_image_color3_2_frameoffset",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_frameendaction",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_frameendaction",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_color3_2/frameendaction",
+      "displayName": "node_image_color3_2_frameendaction",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_uv_scale",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uv_scale",
+      "type": "float2",
+      "valueString": "1, 1",
+      "value": [
+        1.0,
+        1.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_color3_2_uv_scale",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "baseColor",
+      "stage": "pixel",
+      "originalUniformName": "node_image_color3_2_uv_offset",
+      "shaderVariableName": "g_mtlx_baseColor_param_node_image_color3_2_uv_offset",
+      "type": "float2",
+      "valueString": "0, 0",
+      "value": [
+        0.0,
+        0.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_color3_2_uv_offset",
+      "binding": "baked",
+      "outputName": "base_color_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "mappedSemantic": "baseColor",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_texcoord_vector2_9_index",
+      "shaderVariableName": "g_mtlx_metallic_param_node_texcoord_vector2_9_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_texcoord_vector2_9/index",
+      "displayName": "node_texcoord_vector2_9_index",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_multiply_10_in2",
+      "shaderVariableName": "g_mtlx_metallic_param_node_multiply_10_in2",
+      "type": "float",
+      "valueString": "2",
+      "value": 2.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_1/value",
+      "displayName": "node_multiply_10_in2",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_layer",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_layer",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/layer",
+      "displayName": "node_image_vector3_14_layer",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_default",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_default",
+      "type": "float3",
+      "valueString": "0, 0, 0",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/default",
+      "displayName": "node_image_vector3_14_default",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_uaddressmode",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/uaddressmode",
+      "displayName": "node_image_vector3_14_uaddressmode",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_vaddressmode",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_vaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/vaddressmode",
+      "displayName": "node_image_vector3_14_vaddressmode",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_filtertype",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_filtertype",
+      "type": "int",
+      "valueString": "1",
+      "value": 1,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/filtertype",
+      "displayName": "node_image_vector3_14_filtertype",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_framerange",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_framerange",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/framerange",
+      "displayName": "node_image_vector3_14_framerange",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_frameoffset",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_frameoffset",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/frameoffset",
+      "displayName": "node_image_vector3_14_frameoffset",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_frameendaction",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_frameendaction",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_14/frameendaction",
+      "displayName": "node_image_vector3_14_frameendaction",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_uv_scale",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uv_scale",
+      "type": "float2",
+      "valueString": "1, 1",
+      "value": [
+        1.0,
+        1.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_14_uv_scale",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_14_uv_offset",
+      "shaderVariableName": "g_mtlx_metallic_param_node_image_vector3_14_uv_offset",
+      "type": "float2",
+      "valueString": "0, 0",
+      "value": [
+        0.0,
+        0.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_14_uv_offset",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "metallic",
+      "stage": "pixel",
+      "originalUniformName": "node_extract_3_index",
+      "shaderVariableName": "g_mtlx_metallic_param_node_extract_3_index",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_extract_3/index",
+      "displayName": "node_extract_3_index",
+      "binding": "baked",
+      "outputName": "metalness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "mappedSemantic": "metallic",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_texcoord_vector2_9_index",
+      "shaderVariableName": "g_mtlx_normal_param_node_texcoord_vector2_9_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_texcoord_vector2_9/index",
+      "displayName": "node_texcoord_vector2_9_index",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_multiply_10_in2",
+      "shaderVariableName": "g_mtlx_normal_param_node_multiply_10_in2",
+      "type": "float",
+      "valueString": "2",
+      "value": 2.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_1/value",
+      "displayName": "node_multiply_10_in2",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_layer",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_layer",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/layer",
+      "displayName": "node_image_vector3_11_layer",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_default",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_default",
+      "type": "float3",
+      "valueString": "0, 0, 0",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/default",
+      "displayName": "node_image_vector3_11_default",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_uaddressmode",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/uaddressmode",
+      "displayName": "node_image_vector3_11_uaddressmode",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_vaddressmode",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_vaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/vaddressmode",
+      "displayName": "node_image_vector3_11_vaddressmode",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_filtertype",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_filtertype",
+      "type": "int",
+      "valueString": "1",
+      "value": 1,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/filtertype",
+      "displayName": "node_image_vector3_11_filtertype",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_framerange",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_framerange",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/framerange",
+      "displayName": "node_image_vector3_11_framerange",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_frameoffset",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_frameoffset",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/frameoffset",
+      "displayName": "node_image_vector3_11_frameoffset",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_frameendaction",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_frameendaction",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_11/frameendaction",
+      "displayName": "node_image_vector3_11_frameendaction",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_uv_scale",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uv_scale",
+      "type": "float2",
+      "valueString": "1, 1",
+      "value": [
+        1.0,
+        1.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_11_uv_scale",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_11_uv_offset",
+      "shaderVariableName": "g_mtlx_normal_param_node_image_vector3_11_uv_offset",
+      "type": "float2",
+      "valueString": "0, 0",
+      "value": [
+        0.0,
+        0.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_11_uv_offset",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "normal",
+      "stage": "pixel",
+      "originalUniformName": "node_normalmap_scale",
+      "shaderVariableName": "g_mtlx_normal_param_node_normalmap_scale",
+      "type": "float",
+      "valueString": "1",
+      "value": 1.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_normalmap/scale",
+      "displayName": "node_normalmap_scale",
+      "binding": "baked",
+      "outputName": "normal_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "mappedSemantic": "normal",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_texcoord_vector2_9_index",
+      "shaderVariableName": "g_mtlx_roughness_param_node_texcoord_vector2_9_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_texcoord_vector2_9/index",
+      "displayName": "node_texcoord_vector2_9_index",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_multiply_10_in2",
+      "shaderVariableName": "g_mtlx_roughness_param_node_multiply_10_in2",
+      "type": "float",
+      "valueString": "2",
+      "value": 2.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_1/value",
+      "displayName": "node_multiply_10_in2",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_layer",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_layer",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/layer",
+      "displayName": "node_image_vector3_13_layer",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_default",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_default",
+      "type": "float3",
+      "valueString": "0, 0, 0",
+      "value": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/default",
+      "displayName": "node_image_vector3_13_default",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_uaddressmode",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/uaddressmode",
+      "displayName": "node_image_vector3_13_uaddressmode",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_vaddressmode",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_vaddressmode",
+      "type": "int",
+      "valueString": "2",
+      "value": 2,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/vaddressmode",
+      "displayName": "node_image_vector3_13_vaddressmode",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_filtertype",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_filtertype",
+      "type": "int",
+      "valueString": "1",
+      "value": 1,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/filtertype",
+      "displayName": "node_image_vector3_13_filtertype",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_framerange",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_framerange",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/framerange",
+      "displayName": "node_image_vector3_13_framerange",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_frameoffset",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_frameoffset",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/frameoffset",
+      "displayName": "node_image_vector3_13_frameoffset",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_frameendaction",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_frameendaction",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_image_vector3_13/frameendaction",
+      "displayName": "node_image_vector3_13_frameendaction",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_uv_scale",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uv_scale",
+      "type": "float2",
+      "valueString": "1, 1",
+      "value": [
+        1.0,
+        1.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_13_uv_scale",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_image_vector3_13_uv_offset",
+      "shaderVariableName": "g_mtlx_roughness_param_node_image_vector3_13_uv_offset",
+      "type": "float2",
+      "valueString": "0, 0",
+      "value": [
+        0.0,
+        0.0
+      ],
+      "sourcePath": "",
+      "displayName": "node_image_vector3_13_uv_offset",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_extract_12_index",
+      "shaderVariableName": "g_mtlx_roughness_param_node_extract_12_index",
+      "type": "int",
+      "valueString": "0",
+      "value": 0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_extract_12/index",
+      "displayName": "node_extract_12_index",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_mix_4_fg",
+      "shaderVariableName": "g_mtlx_roughness_param_node_mix_4_fg",
+      "type": "float",
+      "valueString": "0.915",
+      "value": 0.915,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_8/value",
+      "displayName": "node_mix_4_fg",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    },
+    {
+      "semantic": "roughness",
+      "stage": "pixel",
+      "originalUniformName": "node_mix_4_bg",
+      "shaderVariableName": "g_mtlx_roughness_param_node_mix_4_bg",
+      "type": "float",
+      "valueString": "0",
+      "value": 0.0,
+      "sourcePath": "NG_Blue_Mosaic_Tiles_with_Gold/node_float_0/value",
+      "displayName": "node_mix_4_bg",
+      "binding": "baked",
+      "outputName": "specular_roughness_output",
+      "outputPath": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "mappedSemantic": "roughness",
+      "emittedToModule": true
+    }
+  ],
+  "analysisFailures": [],
+  "ignoredOutputs": [],
+  "notes": [
+    "Ambient occlusion outputs are intentionally omitted.",
+    "The generated Falcor module uses StandardMaterialInstance as its BSDF implementation.",
+    "Exact MaterialX coat/sheen layering is not represented in Falcor's StandardBSDFData and is therefore approximate.",
+    "Per-hit alpha cutout integration is not generated here; opacity is exposed and the manifest alphaMode is set for host-side handling.",
+    "The converter now preserves all analyzed graph outputs/resources/parameters in availableOutputs, graphTextures, and graphConstants, even when only a subset is mapped into the generated Falcor material."
+  ],
+  "alphaMode": "opaque",
+  "alphaThreshold": 0.5,
+  "doubleSided": false,
+  "thinSurface": false,
+  "ior": 1.5
+}

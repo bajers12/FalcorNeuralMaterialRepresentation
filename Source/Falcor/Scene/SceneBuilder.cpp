@@ -42,6 +42,7 @@
 #include <filesystem>
 #include <cmath>
 #include <execution>
+#include "Scene/Material/MaterialXGraphMaterial.h"
 
 namespace Falcor
 {
@@ -201,6 +202,8 @@ namespace Falcor
             return sha1.finalize();
 
         }
+
+        
     }
 
     SceneBuilder::SceneBuilder(ref<Device> pDevice, const Settings& settings, Flags flags)
@@ -935,6 +938,19 @@ namespace Falcor
         FALCOR_CHECK(pMaterial != nullptr, "'pMaterial' is missing");
         FALCOR_CHECK(pReplacement != nullptr, "'pReplacement' is missing");
         mSceneData.pMaterials->replaceMaterial(pMaterial, pReplacement);
+    }
+
+    // This function creates a MaterialXGraphMaterial and adds it to the scene. The material is created based on the provided module path, type name and manifest path.
+    ref<Material> SceneBuilder::createMaterialXGraphMaterial(
+        const std::string& name,
+        const std::filesystem::path& modulePath,
+        const std::string& typeName,
+        const std::filesystem::path& manifestPath
+    )
+    {
+        auto pMaterial = MaterialXGraphMaterial::create(mpDevice, name, modulePath, typeName, manifestPath);
+        addMaterial(pMaterial);
+        return pMaterial;
     }
 
     void SceneBuilder::loadMaterialTexture(const ref<Material>& pMaterial, Material::TextureSlot slot, const std::filesystem::path& path)
@@ -2983,6 +2999,15 @@ namespace Falcor
         sceneBuilder.def("addSDFGrid", &SceneBuilder::addSDFGrid, "sdfGrid"_a, "material"_a);
         sceneBuilder.def("addMaterial", &SceneBuilder::addMaterial, "material"_a);
         sceneBuilder.def("replaceMaterial", &SceneBuilder::replaceMaterial, "material"_a, "replacement"_a);
+        //MaterialX support python binding
+        sceneBuilder.def(
+            "createMaterialXGraphMaterial",
+            &SceneBuilder::createMaterialXGraphMaterial,
+            "name"_a,
+            "modulePath"_a,
+            "typeName"_a,
+            "manifestPath"_a
+        );
         sceneBuilder.def("getMaterial", &SceneBuilder::getMaterial, "name"_a);
         sceneBuilder.def("loadMaterialTexture", &SceneBuilder::loadMaterialTexture, "material"_a, "slot"_a, "path"_a);
         sceneBuilder.def("waitForMaterialTextureLoading", &SceneBuilder::waitForMaterialTextureLoading);

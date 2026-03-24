@@ -29,6 +29,7 @@
 #include "RenderGraph/RenderPassHelpers.h"
 #include "RenderGraph/RenderPassStandardFlags.h"
 #include "Rendering/Lights/EmissiveUniformSampler.h"
+#include "Scene/Material/MaterialXGraphMaterial.h"
 
 
 namespace
@@ -1338,9 +1339,27 @@ void PathTracer::tracePass(RenderContext* pRenderContext, const RenderData& rend
     // Bind the path tracer.
     var["gPathTracer"] = mpPathTracerBlock;
 
+    // Bind MaterialX-generated top-level resources.
+    if (mpScene)
+    {
+        auto& materialSystem = mpScene->getMaterialSystem();
+        const uint32_t materialCount = materialSystem.getMaterialCount();
+
+        for (uint32_t i = 0; i < materialCount; ++i)
+        {
+            const auto& pMaterial = materialSystem.getMaterial(MaterialID{(size_t)i});
+            if (!pMaterial) continue;
+
+            if (auto pMtlx = dynamic_ref_cast<MaterialXGraphMaterial>(pMaterial))
+            {
+                pMtlx->bindGeneratedResources(var);
+            }
+        }
+    }
+
     // Full screen dispatch.
     mpScene->raytrace(pRenderContext, tracePass.pProgram.get(), tracePass.pVars, uint3(mParams.frameDim, 1));
-}
+    }
 
 void PathTracer::resolvePass(RenderContext* pRenderContext, const RenderData& renderData)
 {

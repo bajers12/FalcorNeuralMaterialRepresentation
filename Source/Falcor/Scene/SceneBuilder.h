@@ -52,6 +52,13 @@
 
 namespace Falcor
 {
+
+    // MaterialX graph material. This material type is used to represent materials that are generated from MaterialX graphs.
+    // It contains the information needed to generate the shader code and load the textures for the material, but it doesn't contain the actual shader code or textures.
+    // The shader code and textures are generated/loaded on demand when the material is used for rendering.
+    class MaterialXGraphMaterial;
+
+
     class FALCOR_API SceneBuilder
     {
     public:
@@ -530,6 +537,14 @@ namespace Falcor
         /** Wait until all material textures are loaded.
         */
         void waitForMaterialTextureLoading();
+
+        // SceneBuilder.h
+        ref<Material> createMaterialXGraphMaterial(
+            const std::string& name,
+            const std::filesystem::path& modulePath,
+            const std::string& typeName,
+            const std::filesystem::path& manifestPath
+        );
 
         // Volumes
 
