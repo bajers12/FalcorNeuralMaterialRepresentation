@@ -62,7 +62,7 @@ struct BsdfTestSampleData
 OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
     mpDevice = pDevice;
     mbShouldGenerate = false;
-    mSampleCount = 5000000;
+    mSampleCount = 50000000;
 
     //For readback syncronization
     mpReadbackFence = mpDevice->createFence();
@@ -130,14 +130,32 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
 
 
     mpPass = ComputePass::create(mpDevice, desc, defines);
-
+    mMaterialID = 0;
     //Setup bindings
     auto var = mpPass->getRootVar();
+    if (mMaterialID >= mpScene->getMaterialCount())
+    {
+        logWarning("OfflineDataGenerationPass: Invalid material index {}.", mMaterialID);
+        return;
+    }
+
+    const auto& pMat = mpScene->getMaterials()[mMaterialID];
+    if (auto pMtlx = dynamic_ref_cast<MaterialXGraphMaterial>(pMat))
+    {
+        pMtlx->bindGeneratedResources(var);
+    }
+    else
+    {
+        logWarning("OfflineDataGenerationPass: Selected material is not a MaterialXGraphMaterial.");
+    }
 
     mpScene->bindShaderData(var["gScene"]);
+
+    std::random_device rd;
+    const uint32_t frameSeed = rd();    
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
     var["gSampleCount"] = mSampleCount;
-    var["gFrameSeed"] = std::_Random_device;
+    var["gFrameSeed"] = frameSeed;
 
     //Threadsgroups and execute, threadgroups should probably be improved
     uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;

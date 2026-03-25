@@ -5,9 +5,9 @@ sceneBuilder.importScene('SmoothUVSphereSmooth.glb')
 # Create the generated MaterialX material.
 mtlxMat = sceneBuilder.createMaterialXGraphMaterial(
     'BardiglioGrayMarbleTiles',
-    r"C:\Users\s204795\FalcorNeuralMaterialRepresentation\media\MaterialX\Preview\NG_Bardiglio_Gray_Marble_Tiles.falcor_material.slang",
+    r"C:\Users\s204795\FalcorNeuralMaterialRepresentation\MatXScenes\Preview\NG_Bardiglio_Gray_Marble_Tiles.falcor_material.slang",
     'NG_Bardiglio_Gray_Marble_Tiles_GeneratedMtlxMaterial',
-    r'C:\Users\s204795\FalcorNeuralMaterialRepresentation\media\MaterialX\Preview\NG_Bardiglio_Gray_Marble_Tiles.materialx_manifest.json'
+    r'C:\Users\s204795\FalcorNeuralMaterialRepresentation\MatXScenes\Preview\NG_Bardiglio_Gray_Marble_Tiles.materialx_manifest.json'
 )
 
 # Replace the imported material.

@@ -5,9 +5,9 @@ sceneBuilder.importScene('SmoothUVSphereSmooth.glb')
 # Create the generated MaterialX material.
 mtlxMat = sceneBuilder.createMaterialXGraphMaterial(
     'BlueMosaicMtlx',
-    r"C:\Users\s204795\FalcorNeuralMaterialRepresentation\media\MaterialX\Preview\NG_Blue_Mosaic_Tiles_with_Gold.falcor_material.slang",
+    r'C:\Users\s204795\FalcorNeuralMaterialRepresentation\MatXScenes\Preview\NG_Blue_Mosaic_Tiles_with_Gold.falcor_material.slang',
     'NG_Blue_Mosaic_Tiles_with_Gold_GeneratedMtlxMaterial',
-    r'C:\Users\s204795\FalcorNeuralMaterialRepresentation\media\MaterialX\Preview\NG_Blue_Mosaic_Tiles_with_Gold.materialx_manifest.json'
+    r'C:\Users\s204795\FalcorNeuralMaterialRepresentation\MatXScenes\Preview\NG_Blue_Mosaic_Tiles_with_Gold.materialx_manifest.json'
 )
 
 # Replace the imported material.

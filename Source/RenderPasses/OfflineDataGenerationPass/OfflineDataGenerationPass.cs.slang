@@ -29,7 +29,7 @@ struct BsdfTestSampleData
 
 RWStructuredBuffer<BsdfTestSampleData> gSampleOutputBuffer;
 uint gSampleCount;
-uint gMaterialId = 3;
+uint gMaterialId = 0;
 uint gFrameSeed;
 
 uint hash(uint x)

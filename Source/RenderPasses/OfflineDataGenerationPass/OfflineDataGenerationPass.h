@@ -31,6 +31,7 @@
 #include <fstream>
 #include <filesystem>
 #include <random>
+#include "Scene/Material/MaterialXGraphMaterial.h"
 
 using namespace Falcor;
 
