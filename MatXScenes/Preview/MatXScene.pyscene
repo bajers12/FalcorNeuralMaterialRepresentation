@@ -1,6 +1,6 @@
 # Minimal sphere scene for MaterialX material preview.
 
-sceneBuilder.importScene('SmoothUVSphere.glb')
+sceneBuilder.importScene('SmoothUVSphereSmooth.glb')
 
 # Create the generated MaterialX material.
 mtlxMat = sceneBuilder.createMaterialXGraphMaterial(
