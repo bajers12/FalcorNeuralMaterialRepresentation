@@ -137,7 +137,6 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     mpScene->bindShaderData(var["gScene"]);
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
     var["gSampleCount"] = mSampleCount;
-    var["gFrameSeed"] = std::_Random_device;
 
     //Threadsgroups and execute, threadgroups should probably be improved
     uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;

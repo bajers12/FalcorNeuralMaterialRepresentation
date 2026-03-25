@@ -30,7 +30,6 @@ struct BsdfTestSampleData
 RWStructuredBuffer<BsdfTestSampleData> gSampleOutputBuffer;
 uint gSampleCount;
 uint gMaterialId = 3;
-uint gFrameSeed;
 
 uint hash(uint x)
 {
@@ -56,7 +55,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     uint idx = threadId.x;
 
     //Sample UV and view direction uniformly
-    uint seed = idx * 9781 + 6271 + gFrameSeed;
+    uint seed = idx * 9781 + 6271;
 
     float2 uv = float2(rand(seed), rand(seed));
 
