@@ -44,6 +44,9 @@
 #include <execution>
 #include "Scene/Material/MaterialXGraphMaterial.h"
 
+// Neural Implementation
+#include "Material/NeuralMaterial.h"
+
 namespace Falcor
 {
     namespace
@@ -938,19 +941,6 @@ namespace Falcor
         FALCOR_CHECK(pMaterial != nullptr, "'pMaterial' is missing");
         FALCOR_CHECK(pReplacement != nullptr, "'pReplacement' is missing");
         mSceneData.pMaterials->replaceMaterial(pMaterial, pReplacement);
-    }
-
-    // This function creates a MaterialXGraphMaterial and adds it to the scene. The material is created based on the provided module path, type name and manifest path.
-    ref<Material> SceneBuilder::createMaterialXGraphMaterial(
-        const std::string& name,
-        const std::filesystem::path& modulePath,
-        const std::string& typeName,
-        const std::filesystem::path& manifestPath
-    )
-    {
-        auto pMaterial = MaterialXGraphMaterial::create(mpDevice, name, modulePath, typeName, manifestPath);
-        addMaterial(pMaterial);
-        return pMaterial;
     }
 
     void SceneBuilder::loadMaterialTexture(const ref<Material>& pMaterial, Material::TextureSlot slot, const std::filesystem::path& path)
@@ -2985,6 +2975,7 @@ namespace Falcor
         pybind11::class_<SceneBuilder> sceneBuilder(m, "SceneBuilder");
         sceneBuilder.def_property_readonly("flags", &SceneBuilder::getFlags);
         sceneBuilder.def_property_readonly("materials", &SceneBuilder::getMaterials);
+        sceneBuilder.def("replaceMaterialWithNeural", &SceneBuilder::replaceMaterialWithNeural, "materialName"_a, "basePath"_a);
         sceneBuilder.def_property_readonly("gridVolumes", &SceneBuilder::getGridVolumes);
         sceneBuilder.def_property_readonly("volumes", &SceneBuilder::getGridVolumes); // PYTHONDEPRECATED
         sceneBuilder.def_property_readonly("lights", &SceneBuilder::getLights);
@@ -3036,4 +3027,7 @@ namespace Falcor
         sceneBuilder.def("getSettings", static_cast<Settings&(SceneBuilder::*)()>(&SceneBuilder::getSettings), pybind11::return_value_policy::reference);
         sceneBuilder.def_property_readonly("assetResolver", pybind11::overload_cast<>(&SceneBuilder::getAssetResolver), pybind11::return_value_policy::reference);
     }
+
+
+
 }

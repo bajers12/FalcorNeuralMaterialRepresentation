@@ -40,6 +40,8 @@
 
 #include "Params.slang"
 
+#include <filesystem>
+
 using namespace Falcor;
 
 /** Fast path tracer.
@@ -109,6 +111,8 @@ private:
     void generatePaths(RenderContext* pRenderContext, const RenderData& renderData);
     void tracePass(RenderContext* pRenderContext, const RenderData& renderData, TracePass& tracePass);
     void resolvePass(RenderContext* pRenderContext, const RenderData& renderData);
+
+
 
     /** Static configuration. Changing any of these options require shader recompilation.
     */

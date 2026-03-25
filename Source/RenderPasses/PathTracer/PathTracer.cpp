@@ -31,6 +31,12 @@
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Scene/Material/MaterialXGraphMaterial.h"
 
+#include <fstream>
+#include <vector>
+#include <stdexcept>
+#include <cstring>
+#include <filesystem>
+
 
 namespace
 {
@@ -79,6 +85,7 @@ namespace
     const std::string kOutputNRDDeltaTransmissionPathLength = "nrdDeltaTransmissionPathLength";
     const std::string kOutputNRDDeltaTransmissionPosW = "nrdDeltaTransmissionPosW";
     const std::string kOutputNRDResidualRadianceHitDist = "nrdResidualRadianceHitDist";
+
 
     const Falcor::ChannelList kOutputChannels =
     {
@@ -147,6 +154,8 @@ namespace
     const std::string kOutputSize = "outputSize";
     const std::string kFixedOutputSize = "fixedOutputSize";
     const std::string kColorFormat = "colorFormat";
+
+
 }
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -195,6 +204,7 @@ PathTracer::PathTracer(ref<Device> pDevice, const Properties& props)
 
     mpPixelStats = std::make_unique<PixelStats>(mpDevice);
     mpPixelDebug = std::make_unique<PixelDebug>(mpDevice);
+
 }
 
 void PathTracer::setProperties(const Properties& props)
@@ -1476,3 +1486,6 @@ DefineList PathTracer::StaticParams::getDefines(const PathTracer& owner) const
 
     return defines;
 }
+
+
+
