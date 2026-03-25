@@ -9,22 +9,21 @@ import Utils.Sampling.UniformSampleGenerator;
 struct BsdfSampleData
 {
     float2 uv;
-    float4 wo;
-    float4 wi;
-    float4 f;
-    float4 specular;
-    float4 albedo;
-    float4 roughness;
-    float4 normal;
+    float3 wo;
+    float3 wi;
+    float3 f;
+    float3 specular;
+    float3 albedo;
+    float3 roughness;
+    float3 normal;
 };
 
 struct BsdfTestSampleData
 {
     float2 uv;
-    float2 _padding;
-    float4 wo;
-    float4 wi;
-    float4 f;
+    float3 wo;
+    float3 wi;
+    float3 f;
 };
 
 RWStructuredBuffer<BsdfTestSampleData> gSampleOutputBuffer;
@@ -88,9 +87,9 @@ void main(uint3 threadId : SV_DispatchThreadID)
     //Save results
     BsdfTestSampleData data;
     data.uv = uv;
-    data.wi = float4(wi.x, wi.y, wi.z, 0);  // incident direction
-    data.wo = float4(wo.x, wo.y, wo.z, 0);  // outgoing direction
-    data.f = float4(f.x, f.y, f.z, 0);
+    data.wi = wi;  // incident direction
+    data.wo = wo;  // outgoing direction
+    data.f = f;
     //data.albedo = props.diffuseReflectionAlbedo;
     //data.specular = props.specularReflectionAlbedo;
     //data.roughness = props.roughness;

@@ -4,10 +4,9 @@ import pandas as pd
 # Define the dtype for BsdfTestSampleData
 dt = np.dtype([
     ('uv', 'f4', (2,)),        # float2 uv
-    ('_padding', 'f4', (2,)),  # float2 _padding
-    ('wo', 'f4', (4,)),        # float4 wo
-    ('wi', 'f4', (4,)),        # float4 wi
-    ('f', 'f4', (4,))          # float4 f
+    ('wo', 'f4', (3,)),        # float4 wo
+    ('wi', 'f4', (3,)),        # float4 wi
+    ('f', 'f4', (3,))          # float4 f
 ])
 
 # Read the binary file

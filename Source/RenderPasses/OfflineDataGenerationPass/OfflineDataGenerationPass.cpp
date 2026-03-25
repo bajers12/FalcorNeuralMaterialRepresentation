@@ -41,22 +41,21 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
 struct BsdfSampleData
 {
     float2 uv;
-    float4 wo;
-    float4 wi;
-    float4 f;
-    float4 specular;
-    float4 albedo;
-    float4 roughness;
-    float4 normal;
+    float3 wo;
+    float3 wi;
+    float3 f;
+    float3 specular;
+    float3 albedo;
+    float3 roughness;
+    float3 normal;
 };
 
 struct BsdfTestSampleData
 {
     float2 uv;
-    float2 _padding;
-    float4 wo;
-    float4 wi;
-    float4 f;
+    float3 wo;
+    float3 wi;
+    float3 f;
 };
 
 OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
@@ -101,7 +100,7 @@ void OfflineDataGenerationPass::renderUI(Gui::Widgets& widget)
 {
     if (widget.button("Generate BSDF Samples"))
     {
-        mbShouldGenerate = true;
+        generate();
     }
 }
 
@@ -164,6 +163,10 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     mpReadbackBuffer->unmap();
 
 
+}
+
+void OfflineDataGenerationPass::generate() {
+    mbShouldGenerate = true;
 }
 
 
