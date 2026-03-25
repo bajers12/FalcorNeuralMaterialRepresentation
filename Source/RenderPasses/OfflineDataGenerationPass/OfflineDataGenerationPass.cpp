@@ -36,6 +36,13 @@ const uint32_t kThreadGroupSize = 64;
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
     registry.registerClass<RenderPass, OfflineDataGenerationPass>();
+    ScriptBindings::registerBinding(OfflineDataGenerationPass::registerBindings);
+}
+
+void OfflineDataGenerationPass::registerBindings(pybind11::module& m)
+{
+    pybind11::class_<OfflineDataGenerationPass, RenderPass, ref<OfflineDataGenerationPass>> pass(m, "OfflineDataGenerationPass");
+    pass.def("generate", &OfflineDataGenerationPass::generate);
 }
 
 struct BsdfSampleData
@@ -61,7 +68,16 @@ struct BsdfTestSampleData
 OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
     mpDevice = pDevice;
     mbShouldGenerate = false;
-    mSampleCount = 5000000;
+    mSampleCount = 100;
+    mMaterialID = 3;
+
+    for (const auto& [key, value] : props)
+    {
+        if (key == "materialId")
+            mMaterialID = value;
+        else if (key == "sampleCount")
+            mSampleCount = value;
+    }
 
     //For readback syncronization
     mpReadbackFence = mpDevice->createFence();
@@ -86,7 +102,10 @@ OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const 
 
 Properties OfflineDataGenerationPass::getProperties() const
 {
-    return {};
+    Properties props;
+    props["materialId"] = mMaterialID;
+    props["sampleCount"] = mSampleCount;
+    return props;
 }
 
 RenderPassReflection OfflineDataGenerationPass::reflect(const CompileData& compileData)

@@ -54,6 +54,7 @@ public:
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
     void generate();
+    static void registerBindings(pybind11::module& m);
 
 private:
     ref<Scene> mpScene;
