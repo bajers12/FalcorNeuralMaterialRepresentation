@@ -943,6 +943,37 @@ namespace Falcor
         mSceneData.pMaterials->replaceMaterial(pMaterial, pReplacement);
     }
 
+    // This function creates a MaterialXGraphMaterial and adds it to the scene. The material is created based on the provided module path, type name and manifest path.
+    ref<Material> SceneBuilder::createMaterialXGraphMaterial(
+        const std::string& name,
+        const std::filesystem::path& modulePath,
+        const std::string& typeName,
+        const std::filesystem::path& manifestPath
+    )
+    {
+        auto pMaterial = MaterialXGraphMaterial::create(mpDevice, name, modulePath, typeName, manifestPath);
+        addMaterial(pMaterial);
+        return pMaterial;
+    }
+
+    //Neural material Implementation
+    void SceneBuilder::replaceMaterialWithNeural(const std::string& materialName, const std::filesystem::path& basePath)
+    {
+        auto pOld = getMaterial(materialName);
+        FALCOR_CHECK(pOld != nullptr, "Material '{}' not found.", materialName);
+
+        auto resolvedPath = mAssetResolver.resolvePath(basePath);
+        FALCOR_CHECK(!resolvedPath.empty(), "Neural material path '{}' could not be resolved.", basePath.string());
+
+        auto pNew = NeuralMaterial::create(mpDevice, pOld->getName(), resolvedPath);
+        pNew->setDoubleSided(pOld->isDoubleSided());
+        pNew->setThinSurface(pOld->isThinSurface());
+        pNew->setNestedPriority(pOld->getNestedPriority());
+        pNew->setIndexOfRefraction(pOld->getIndexOfRefraction());
+
+        replaceMaterial(pOld, pNew);
+    }
+
     void SceneBuilder::loadMaterialTexture(const ref<Material>& pMaterial, Material::TextureSlot slot, const std::filesystem::path& path)
     {
         FALCOR_CHECK(pMaterial != nullptr, "'pMaterial' is missing");
