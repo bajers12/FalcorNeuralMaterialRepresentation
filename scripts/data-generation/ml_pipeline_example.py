@@ -9,7 +9,7 @@ device = testbed.device
 
 # Create render graph
 graph = testbed.create_render_graph("OfflineDataGeneration")
-generation_pass = graph.create_pass("OfflineDataGenerationPass", "OfflineDataGenerationPass", {"materialId": 3, "sampleCount": 200})
+generation_pass = graph.create_pass("OfflineDataGenerationPass", "OfflineDataGenerationPass", {"materialId": 3, "sampleCount": 5000000})
 graph.mark_output("OfflineDataGenerationPass.output")
 testbed.render_graph = graph;
 

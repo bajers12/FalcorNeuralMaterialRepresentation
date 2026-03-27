@@ -14,8 +14,8 @@ struct BsdfSampleData
     float3 f;
     float3 specular;
     float3 albedo;
-    float3 roughness;
     float3 normal;
+    float roughness;
 };
 
 struct BsdfTestSampleData
@@ -26,7 +26,7 @@ struct BsdfTestSampleData
     float3 f;
 };
 
-RWStructuredBuffer<BsdfTestSampleData> gSampleOutputBuffer;
+RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
 uint gSampleCount;
 uint gMaterialId = 3;
 
@@ -84,16 +84,18 @@ void main(uint3 threadId : SV_DispatchThreadID)
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
     float3 f = mi.eval(sd, wo, sg);
 
-    //Save results
-    BsdfTestSampleData data;
+    // Save results
+    BsdfSampleData data;
     data.uv = uv;
     data.wi = wi;  // incident direction
     data.wo = wo;  // outgoing direction
     data.f = f;
-    //data.albedo = props.diffuseReflectionAlbedo;
-    //data.specular = props.specularReflectionAlbedo;
-    //data.roughness = props.roughness;
-    //data.normal = sd.faceN;
+    data.albedo = props.diffuseReflectionAlbedo;
+    data.specular = props.specularReflectionAlbedo;
+    data.normal = sd.faceN;
+    //Can also use normal after applied normal maps.
+    //data.normal = props.guideNormal;
+    data.roughness = props.roughness;
 
     gSampleOutputBuffer[idx] = data;
 }

@@ -83,14 +83,14 @@ OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const 
     mpReadbackFence = mpDevice->createFence();
 
     mpGpuSampleBuffer = mpDevice->createStructuredBuffer(
-        sizeof(BsdfTestSampleData),
+        sizeof(BsdfSampleData),
         mSampleCount,
         ResourceBindFlags::UnorderedAccess,
         MemoryType::DeviceLocal
     );
 
     mpReadbackBuffer = mpDevice->createStructuredBuffer(
-        sizeof(BsdfTestSampleData),
+        sizeof(BsdfSampleData),
         mSampleCount,
         ResourceBindFlags::None,
         MemoryType::ReadBack
@@ -167,7 +167,7 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     pRenderContext->submit(false);
     pRenderContext->signal(mpReadbackFence.get());
     mpReadbackFence->wait();
-    const BsdfTestSampleData* pData = (const BsdfTestSampleData*)mpReadbackBuffer->map();
+    const BsdfSampleData* pData = (const BsdfSampleData*)mpReadbackBuffer->map();
 
     std::filesystem::create_directories(kDataDir);
     std::string outputPath = kDataDir + "/" + kOutputFileName;
@@ -175,7 +175,7 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     logInfo("Writing samples to: " + outputPath);
 
     // write raw buffer
-    f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfTestSampleData) * mSampleCount);
+    f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfSampleData) * mSampleCount);
 
     f.close();
 
