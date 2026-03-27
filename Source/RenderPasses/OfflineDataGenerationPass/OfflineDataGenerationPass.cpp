@@ -28,8 +28,6 @@
 #include "OfflineDataGenerationPass.h"
 
 const char kShaderFile[] = "RenderPasses/OfflineDataGenerationPass/OfflineDataGenerationPass.cs.slang";
-const std::string kOutputFileName = "bsdf_samples.bin";
-const std::string kDataDir = "samples";
 
 const uint32_t kThreadGroupSize = 64;
 
@@ -43,6 +41,7 @@ void OfflineDataGenerationPass::registerBindings(pybind11::module& m)
 {
     pybind11::class_<OfflineDataGenerationPass, RenderPass, ref<OfflineDataGenerationPass>> pass(m, "OfflineDataGenerationPass");
     pass.def("generate", &OfflineDataGenerationPass::generate);
+    pass.def("setRandomSeedOffset", &OfflineDataGenerationPass::setRandomSeedOffset);
 }
 
 struct BsdfSampleData
@@ -53,31 +52,16 @@ struct BsdfSampleData
     float3 f;
     float3 specular;
     float3 albedo;
-    float3 roughness;
     float3 normal;
+    float1 roughness;
+    float1 pdf;
 };
 
-struct BsdfTestSampleData
-{
-    float2 uv;
-    float3 wo;
-    float3 wi;
-    float3 f;
-};
 
 OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
     mpDevice = pDevice;
-    mbShouldGenerate = false;
-    mSampleCount = 100;
-    mMaterialID = 3;
 
-    for (const auto& [key, value] : props)
-    {
-        if (key == "materialId")
-            mMaterialID = value;
-        else if (key == "sampleCount")
-            mSampleCount = value;
-    }
+    parseProperties(props);
 
     //For readback syncronization
     mpReadbackFence = mpDevice->createFence();
@@ -100,11 +84,25 @@ OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const 
 
 }
 
+void OfflineDataGenerationPass::parseProperties(const Properties& props)
+{
+    for (const auto& [key, value] : props)
+    {
+        if (key == "materialId") mMaterialId = value;
+        else if (key == "sampleCount") mSampleCount = value;
+        else if (key == "outputDirectory") mOutputDirectory = value.operator std::string();
+        else if (key == "outputFilename") mOutputFileName = value.operator std::string();
+    }
+}
+
 Properties OfflineDataGenerationPass::getProperties() const
 {
     Properties props;
-    props["materialId"] = mMaterialID;
+    props["materialId"] = mMaterialId;
     props["sampleCount"] = mSampleCount;
+    props["outputDirectory"] = mOutputDirectory;
+    props["outputFilename"] = mOutputFileName;
+
     return props;
 }
 
@@ -135,26 +133,13 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
         return;
     }
 
-
-    //Setup program with defines in execute, as the slang files cannot compile if no scene is available at compile time for gScene acess
-    ProgramDesc desc;
-    desc.addShaderModules(mpScene->getShaderModules());
-    desc.addShaderLibrary(kShaderFile).csEntry("main");
-    auto corformances = mpScene->getTypeConformances();
-    desc.addTypeConformances(corformances);
-
-    DefineList defines;
-    defines = mpScene->getSceneDefines();
-
-
-    mpPass = ComputePass::create(mpDevice, desc, defines);
-
     //Setup bindings
     auto var = mpPass->getRootVar();
 
     mpScene->bindShaderData(var["gScene"]);
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
     var["gSampleCount"] = mSampleCount;
+    var["gRandomSeedOffset"] = mRandomSeedOffset;
 
     //Threadsgroups and execute, threadgroups should probably be improved
     uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
@@ -169,8 +154,8 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
     mpReadbackFence->wait();
     const BsdfSampleData* pData = (const BsdfSampleData*)mpReadbackBuffer->map();
 
-    std::filesystem::create_directories(kDataDir);
-    std::string outputPath = kDataDir + "/" + kOutputFileName;
+    std::filesystem::create_directories(mOutputDirectory);
+    std::string outputPath = mOutputDirectory + "/" + mOutputFileName;
     std::ofstream f(outputPath, std::ios::binary);
     logInfo("Writing samples to: " + outputPath);
 
@@ -184,12 +169,34 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
 
 }
 
+void OfflineDataGenerationPass::setRandomSeedOffset(uint32_t offset) {
+    mRandomSeedOffset = offset;
+}
+
+void OfflineDataGenerationPass::setupProgram() {
+
+}
+
 void OfflineDataGenerationPass::generate() {
     mbShouldGenerate = true;
 }
 
-
 void OfflineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
     mpScene = pScene;
+
+    if(mpScene == nullptr) return;
+
+    //Setup program with defines in execute, as the slang files cannot compile if no scene is available at compile time for gScene acess
+    ProgramDesc desc;
+    desc.addShaderModules(mpScene->getShaderModules());
+    desc.addShaderLibrary(kShaderFile).csEntry("main");
+    auto corformances = mpScene->getTypeConformances();
+    desc.addTypeConformances(corformances);
+
+    DefineList defines;
+    defines = mpScene->getSceneDefines();
+
+
+    mpPass = ComputePass::create(mpDevice, desc, defines);
 }

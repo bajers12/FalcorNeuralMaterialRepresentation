@@ -16,19 +16,13 @@ struct BsdfSampleData
     float3 albedo;
     float3 normal;
     float roughness;
-};
-
-struct BsdfTestSampleData
-{
-    float2 uv;
-    float3 wo;
-    float3 wi;
-    float3 f;
+    float pdf;
 };
 
 RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
-uint gSampleCount;
-uint gMaterialId = 3;
+uniform uint gSampleCount;
+uniform uint gMaterialId;
+uniform uint gRandomSeedOffset;
 
 uint hash(uint x)
 {
@@ -54,7 +48,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     uint idx = threadId.x;
 
     //Sample UV and view direction uniformly
-    uint seed = idx * 9781 + 6271;
+    uint seed = idx * 9781 + 6271 + gRandomSeedOffset;
 
     float2 uv = float2(rand(seed), rand(seed));
 
@@ -82,6 +76,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
     BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
+    BSDFSample sample;
+    mi.sample(sd, sg, sample);
     float3 f = mi.eval(sd, wo, sg);
 
     // Save results
@@ -96,6 +92,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     //Can also use normal after applied normal maps.
     //data.normal = props.guideNormal;
     data.roughness = props.roughness;
+    data.pdf = 0.0f;
 
     gSampleOutputBuffer[idx] = data;
 }
