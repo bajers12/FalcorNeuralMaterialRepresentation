@@ -20,11 +20,10 @@ struct BsdfSampleData
 
 struct BsdfTestSampleData
 {
-    float2 uv;
-    float2 _padding;
-    float4 wo;
-    float4 wi;
-    float4 f;
+    float4 uv; // uv.xy valid, zw unused
+    float4 wo; // wo.xyz valid, w unused
+    float4 wi; // wi.xyz valid, w unused
+    float4 f;  // f.xyz valid, w unused
 };
 
 RWStructuredBuffer<BsdfTestSampleData> gSampleOutputBuffer;
@@ -86,12 +85,12 @@ void main(uint3 threadId : SV_DispatchThreadID)
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
     float3 f = mi.eval(sd, wo, sg);
 
-    //Save results
+    // Save results
     BsdfTestSampleData data;
-    data.uv = uv;
-    data.wi = float4(wi.x, wi.y, wi.z, 0);  // incident direction
-    data.wo = float4(wo.x, wo.y, wo.z, 0);  // outgoing direction
-    data.f = float4(f.x, f.y, f.z, 0);
+    data.uv = float4(uv.x, uv.y, 0.f, 0.f);
+    data.wi = float4(wi.x, wi.y, wi.z, 0.f);
+    data.wo = float4(wo.x, wo.y, wo.z, 0.f);
+    data.f = float4(f.x, f.y, f.z, 0.f);
     //data.albedo = props.diffuseReflectionAlbedo;
     //data.specular = props.specularReflectionAlbedo;
     //data.roughness = props.roughness;

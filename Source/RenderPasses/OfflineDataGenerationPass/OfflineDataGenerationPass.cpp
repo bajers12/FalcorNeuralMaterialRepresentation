@@ -52,11 +52,10 @@ struct BsdfSampleData
 
 struct BsdfTestSampleData
 {
-    float2 uv;
-    float2 _padding;
-    float4 wo;
-    float4 wi;
-    float4 f;
+    float4 uv;      // uv.xy valid, zw unused
+    float4 wo;      // wo.xyz valid, w unused
+    float4 wi;      // wi.xyz valid, w unused
+    float4 f;       // f.xyz valid, w unused
 };
 
 OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {

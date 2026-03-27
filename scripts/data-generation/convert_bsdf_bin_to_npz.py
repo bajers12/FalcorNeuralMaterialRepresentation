@@ -2,12 +2,11 @@
 """
 Convert BSDF sampling .bin data into the .npz format expected by LatentMaterialML.py.
 
-Input binary layout (from DataGenerationTest.py):
-  uv      : float2
-  padding : float2
-  wo      : float4
-  wi      : float4
-  f       : float4
+Input binary layout:
+  uv4 : float4   (uv in xy, zw unused)
+  wo4 : float4   (xyz valid, w unused)
+  wi4 : float4   (xyz valid, w unused)
+  f4  : float4   (xyz valid, w unused)
 
 Output .npz keys (for LatentMaterialML.py):
   uv : [N,2] float32
@@ -35,11 +34,10 @@ import numpy as np
 
 
 BSDF_SAMPLE_DTYPE = np.dtype([
-    ("uv", "f4", (2,)),
-    ("_padding", "f4", (2,)),
-    ("wo", "f4", (4,)),
-    ("wi", "f4", (4,)),
-    ("f", "f4", (4,)),
+    ("uv4", "f4", (4,)),
+    ("wo4", "f4", (4,)),
+    ("wi4", "f4", (4,)),
+    ("f4",  "f4", (4,)),
 ])
 
 
@@ -190,16 +188,18 @@ def main() -> None:
         raise ValueError("When using --val-ratio > 0, you must provide both --train-output and --val-output")
 
     data = load_bin(input_bin)
+    uv4 = data["uv4"].astype(np.float32, copy=False)       # [N,4]
+    wo4 = data["wo4"].astype(np.float32, copy=False)       # [N,4]
+    wi4 = data["wi4"].astype(np.float32, copy=False)       # [N,4]
+    f4 = data["f4"].astype(np.float32, copy=False)         # [N,4]
 
-    uv = data["uv"].astype(np.float32, copy=False)          # [N,2]
-    wo4 = data["wo"].astype(np.float32, copy=False)         # [N,4]
-    wi4 = data["wi"].astype(np.float32, copy=False)         # [N,4]
-    f4 = data["f"].astype(np.float32, copy=False)           # [N,4]
+    uv = uv4[:, :2].copy()                                 # [N,2]
 
     # Trainer expects 3-vectors for wi/wo/y.
     wo = wo4[:, :3].copy()
     wi = wi4[:, :3].copy()
     f3 = f4[:, :3].copy()
+
 
     y = build_target(f3, wo, args.cosine)
     if args.clip_negative_targets:

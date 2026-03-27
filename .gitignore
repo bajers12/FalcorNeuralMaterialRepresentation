@@ -31,3 +31,6 @@
 *.tlog
 *.bak
 *.swp
+/scripts/data-generation/out_nm_512_2x32_e5_freeze1
+/scripts/data-generation/out_nm_512_2x32_e40_efreeze5
+/scripts/data-generation/out_nm_512_2x32_e20

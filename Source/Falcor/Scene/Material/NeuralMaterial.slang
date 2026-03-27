@@ -40,9 +40,11 @@ void fetchNeuralLatents(const MaterialSystem materials, const NeuralMaterialData
     z[4] = z1.x; z[5] = z1.y; z[6] = z1.z; z[7] = z1.w;
 }
 
-float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], float3 wiTowardLocal, float3 woLocal)
+float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], float3 wiLocal, float3 woLocal)
 {
-    if (wiTowardLocal.z >= 0.f || woLocal.z <= 0.f)
+    // Match the current training/data-generation convention:
+    // both wi and wo are local directions pointing away from the surface.
+    if (wiLocal.z <= 0.f || woLocal.z <= 0.f)
         return 0.f.xxx;
 
     ByteAddressBuffer frameLinear = materials.getBuffer(md.frameLinearBufferID);
@@ -65,17 +67,26 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
     }
 
     float x[20];
+
+    // Trainer contract:
+    //   - frame_linear(z) -> (Nxyz, Txyz) per frame, no +1 offsets
+    //   - B = normalize(cross(N, T))
+    //   - MLP input is [z, dir_feats]
+    //   - dir_feats flatten as [frame0(wi_TBN, wo_TBN), frame1(...)]
+    [unroll]
+    for (uint i = 0; i < 8; ++i) x[i] = z[i];
+
     [unroll]
     for (uint f = 0; f < 2; ++f)
     {
         uint sfBase = 6 * f;
-        uint xBase = 6 * f;
+        uint xBase = 8 + 6 * f;
 
-        float3 N = normalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2] + 1.f));
-        float3 T = normalize(float3(sf[sfBase + 3] + 1.f, sf[sfBase + 4], sf[sfBase + 5]));
-        float3 B = cross(N, T);
+        float3 N = normalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
+        float3 T = normalize(float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]));
+        float3 B = normalize(cross(N, T));
 
-        float3 wiPred = float3(dot(wiTowardLocal, T), dot(wiTowardLocal, B), dot(wiTowardLocal, N));
+        float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
         float3 woPred = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
 
         x[xBase + 0] = wiPred.x;
@@ -85,9 +96,6 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
         x[xBase + 4] = woPred.y;
         x[xBase + 5] = woPred.z;
     }
-
-    [unroll]
-    for (uint i = 0; i < 8; ++i) x[12 + i] = z[i];
 
     float h0[32];
     [unroll]
@@ -164,9 +172,9 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         z[0] = z0.x; z[1] = z0.y; z[2] = z0.z; z[3] = z0.w;
         z[4] = z1.x; z[5] = z1.y; z[6] = z1.z; z[7] = z1.w;
 
-        float3 wiTowardLocal = -sd.frame.toLocal(sd.V);
+        float3 wiLocal = sd.frame.toLocal(sd.V);
         float3 woLocal = sd.frame.toLocal(wo);
-        return evalNeuralBRDFFromLatents(gScene.materials, data, z, wiTowardLocal, woLocal);
+        return evalNeuralBRDFFromLatents(gScene.materials, data, z, wiLocal, woLocal);
     }
 
     [Differentiable]
@@ -191,8 +199,8 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         z[0] = z0.x; z[1] = z0.y; z[2] = z0.z; z[3] = z0.w;
         z[4] = z1.x; z[5] = z1.y; z[6] = z1.z; z[7] = z1.w;
 
-        float3 wiTowardLocal = -sd.frame.toLocal(sd.V);
-        float3 fcos = evalNeuralBRDFFromLatents(gScene.materials, data, z, wiTowardLocal, woLocal);
+        float3 wiLocal = sd.frame.toLocal(sd.V);
+        float3 fcos = evalNeuralBRDFFromLatents(gScene.materials, data, z, wiLocal, woLocal);
 
         result.wo = sd.frame.fromLocal(woLocal);
         result.pdf = pdf;
