@@ -52,6 +52,13 @@
 
 namespace Falcor
 {
+
+    // MaterialX graph material. This material type is used to represent materials that are generated from MaterialX graphs.
+    // It contains the information needed to generate the shader code and load the textures for the material, but it doesn't contain the actual shader code or textures.
+    // The shader code and textures are generated/loaded on demand when the material is used for rendering.
+    class MaterialXGraphMaterial;
+
+
     class FALCOR_API SceneBuilder
     {
     public:
@@ -525,11 +532,21 @@ namespace Falcor
             \param[in] slot Slot to load texture into.
             \param[in] path Texture file path.
         */
+        void replaceMaterialWithNeural(const std::string& materialName, const std::filesystem::path& basePath);
+
         void loadMaterialTexture(const ref<Material>& pMaterial, Material::TextureSlot slot, const std::filesystem::path& path);
 
         /** Wait until all material textures are loaded.
         */
         void waitForMaterialTextureLoading();
+
+        // SceneBuilder.h
+        ref<Material> createMaterialXGraphMaterial(
+            const std::string& name,
+            const std::filesystem::path& modulePath,
+            const std::string& typeName,
+            const std::filesystem::path& manifestPath
+        );
 
         // Volumes
 
@@ -671,6 +688,8 @@ namespace Falcor
         /** Returns texture manager used by the material system.
          */
         MaterialTextureLoader& getMaterialTextureLoader();
+
+        // Neural implementation
     private:
         struct InternalNode : Node
         {
@@ -840,6 +859,7 @@ namespace Falcor
         void createSceneGraph();
         void createMeshBoundingBoxes();
         void calculateCurveBoundingBoxes();
+
 
         friend class SceneCache;
         friend class SceneBuilderDump;

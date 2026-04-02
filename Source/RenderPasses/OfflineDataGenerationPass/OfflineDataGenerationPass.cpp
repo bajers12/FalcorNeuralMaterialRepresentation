@@ -133,8 +133,26 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
         return;
     }
 
+    if (mMaterialId >= mpScene->getMaterialCount())
+    {
+        logWarning("OfflineDataGenerationPass: Invalid material index {}.", mMaterialId);
+        return;
+    }
+
+
+
     //Setup bindings
     auto var = mpPass->getRootVar();
+
+    const auto& pMat = mpScene->getMaterials()[mMaterialId];
+    if (auto pMtlx = dynamic_ref_cast<MaterialXGraphMaterial>(pMat))
+    {
+        pMtlx->bindGeneratedResources(var);
+    }
+    else
+    {
+        logWarning("OfflineDataGenerationPass: Selected material is not a MaterialXGraphMaterial.");
+    }
 
     mpScene->bindShaderData(var["gScene"]);
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;

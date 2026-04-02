@@ -30,6 +30,7 @@
 #include "RenderGraph/RenderPass.h"
 #include <fstream>
 #include <filesystem>
+#include "Scene/Material/MaterialXGraphMaterial.h"
 
 using namespace Falcor;
 

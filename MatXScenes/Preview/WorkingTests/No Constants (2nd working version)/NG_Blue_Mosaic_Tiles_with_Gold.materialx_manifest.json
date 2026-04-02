@@ -1,0 +1,212 @@
+{
+  "materialName": "NG_Blue_Mosaic_Tiles_with_Gold",
+  "sourceMaterialXPath": "C:/Users/s204795/MaterialX/MaterialsToConvert/Blue_Mosaic_Tiles_with_Gold.mtlx",
+  "groupPath": "/NG_Blue_Mosaic_Tiles_with_Gold",
+  "modulePath": "NG_Blue_Mosaic_Tiles_with_Gold.falcor_material.slang",
+  "typeName": "NG_Blue_Mosaic_Tiles_with_Gold_GeneratedMtlxMaterial",
+  "entryFunction": "evalMaterialXSurface",
+  "outputs": {
+    "baseColor": {
+      "outputName": "base_color_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/base_color_output",
+      "stage": "pixel",
+      "callable": "eval_baseColor",
+      "namespace": "MtlxOut_base_color_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ]
+    },
+    "coatNormal": {
+      "outputName": "coat_normal_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/coat_normal_output",
+      "stage": "pixel",
+      "callable": "eval_coatNormal",
+      "namespace": "MtlxOut_coat_normal_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float3",
+          "name": "normalWorld",
+          "semantic": "normalWorld"
+        }
+      ]
+    },
+    "metallic": {
+      "outputName": "metalness_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/metalness_output",
+      "stage": "pixel",
+      "callable": "eval_metallic",
+      "namespace": "MtlxOut_metalness_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ]
+    },
+    "normal": {
+      "outputName": "normal_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/normal_output",
+      "stage": "pixel",
+      "callable": "eval_normal",
+      "namespace": "MtlxOut_normal_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        },
+        {
+          "type": "float3",
+          "name": "normalWorld",
+          "semantic": "normalWorld"
+        },
+        {
+          "type": "float3",
+          "name": "tangentWorld",
+          "semantic": "tangentWorld"
+        },
+        {
+          "type": "float3",
+          "name": "bitangentWorld",
+          "semantic": "bitangentWorld"
+        }
+      ]
+    },
+    "roughness": {
+      "outputName": "specular_roughness_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/specular_roughness_output",
+      "stage": "pixel",
+      "callable": "eval_roughness",
+      "namespace": "MtlxOut_specular_roughness_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float2",
+          "name": "texcoord_0",
+          "semantic": "texcoord_0"
+        }
+      ]
+    },
+    "tangent": {
+      "outputName": "tangent_output",
+      "path": "/NG_Blue_Mosaic_Tiles_with_Gold/tangent_output",
+      "stage": "pixel",
+      "callable": "eval_tangent",
+      "namespace": "MtlxOut_tangent_output",
+      "vertexStruct": "VertexData",
+      "vertexFields": [
+        {
+          "type": "float4",
+          "name": "SV_Position",
+          "semantic": "SV_Position"
+        },
+        {
+          "type": "float3",
+          "name": "tangentWorld",
+          "semantic": "tangentWorld"
+        }
+      ]
+    }
+  },
+  "textures": [
+    {
+      "semantic": "baseColor",
+      "file": "textures/Blue_Mosaic_Tiles_with_Gold_baseColor.png",
+      "shaderTextureName": "g_mtlx_baseColor_tex_0",
+      "shaderSamplerName": "g_mtlx_baseColor_sampler_0",
+      "colorSpace": "srgb_texture",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      }
+    },
+    {
+      "semantic": "metallic",
+      "file": "Tile_pattern_16.resources/Tile_pattern_16_roughness_height_metallic.png",
+      "shaderTextureName": "g_mtlx_metallic_tex_0",
+      "shaderSamplerName": "g_mtlx_metallic_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      }
+    },
+    {
+      "semantic": "normal",
+      "file": "textures/Blue_Mosaic_Tiles_with_Gold_normal.png",
+      "shaderTextureName": "g_mtlx_normal_tex_0",
+      "shaderSamplerName": "g_mtlx_normal_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      }
+    },
+    {
+      "semantic": "roughness",
+      "file": "Tile_pattern_16.resources/Tile_pattern_16_roughness_height_metallic.png",
+      "shaderTextureName": "g_mtlx_roughness_tex_0",
+      "shaderSamplerName": "g_mtlx_roughness_sampler_0",
+      "colorSpace": "raw",
+      "generateMipLevels": true,
+      "sampler": {
+        "filter": "linear",
+        "addressMode": "wrap",
+        "maxAnisotropy": 1
+      }
+    }
+  ],
+  "constants": {},
+  "ignoredOutputs": [],
+  "notes": [
+    "Ambient occlusion outputs are intentionally omitted.",
+    "The generated Falcor module uses StandardMaterialInstance as its BSDF implementation.",
+    "Exact MaterialX coat/sheen layering is not represented in Falcor's StandardBSDFData and is therefore approximate.",
+    "Per-hit alpha cutout integration is not generated here; opacity is exposed and the manifest alphaMode is set for host-side handling."
+  ],
+  "alphaMode": "opaque",
+  "alphaThreshold": 0.5,
+  "doubleSided": false,
+  "thinSurface": false,
+  "ior": 1.5
+}

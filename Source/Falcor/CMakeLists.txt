@@ -436,6 +436,8 @@ target_sources(Falcor PRIVATE
     Scene/Material/MaterialTypeRegistry.cpp
     Scene/Material/MaterialTypeRegistry.h
     Scene/Material/MaterialTypes.slang
+    Scene/Material/MaterialXGraphMaterial.cpp
+    Scene/Material/MaterialXGraphMaterial.h
     Scene/Material/MERLFile.cpp
     Scene/Material/MERLFile.h
     Scene/Material/MERLMaterial.cpp
@@ -444,6 +446,9 @@ target_sources(Falcor PRIVATE
     Scene/Material/MERLMixMaterial.cpp
     Scene/Material/MERLMixMaterial.h
     Scene/Material/MERLMixMaterialData.slang
+    Scene/Material/NeuralMaterial.cpp
+    Scene/Material/NeuralMaterial.h
+    Scene/Material/NeuralMaterial.slang
     Scene/Material/RGLCommon.cpp
     Scene/Material/RGLCommon.h
     Scene/Material/RGLFile.cpp
