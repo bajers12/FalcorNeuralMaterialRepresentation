@@ -1,0 +1,92 @@
+#include "Utils/Math/MathConstants.slangh"
+
+import Scene.Scene;
+import Scene.Shading;
+import Scene.Material.MaterialFactory;
+import Utils.Math.MathHelpers;
+import Utils.Sampling.UniformSampleGenerator;
+
+struct BsdfSampleData
+{
+    float2 uv;
+    float4 wo;
+    float4 wi;
+    float4 f;
+    float4 specular;
+    float4 albedo;
+    float4 roughness;
+    float4 normal;
+};
+
+RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
+uint gSampleCount;
+uint gMaterialId = 0;
+
+uint hash(uint x)
+{
+    x ^= x >> 17;
+    x *= 0xed5ad4bb;
+    x ^= x >> 11;
+    x *= 0xac4c1b51;
+    x ^= x >> 15;
+    x *= 0x31848bab;
+    x ^= x >> 14;
+    return x;
+}
+
+float rand(inout uint seed)
+{
+    seed = hash(seed);
+    return float(seed) / 4294967296.0;
+}
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void main(uint3 tid : SV_DispatchThreadID)
+{
+    uint idx = tid.x;
+    if (idx >= gSampleCount) return;
+
+    //Sample UV and view direction uniformly
+    uint seed = idx * 9781 + 6271;
+
+    float2 uv = float2(rand(seed), rand(seed));
+
+    float3 wo = sample_hemisphere(float2(rand(seed), rand(seed)));
+    float3 wi = sample_hemisphere(float2(rand(seed), rand(seed)));
+
+    //Construct Shadign data and samplers
+    UniformSampleGenerator sg = UniformSampleGenerator(1, 0);
+    let lod = ExplicitLodTextureSampler(0.f);
+
+    //Shading data should be prepared based on uniformly sampled UV value, used to reconstruct w_o
+    ShadingData sd = {};
+    sd.posW = float3(0.0, 0.0, 0.0);
+    sd.V = wi;
+    sd.frame = ShadingFrame::createIdentity();
+    sd.faceN = sd.frame.N;
+    sd.uv = uv;
+
+    // Get material Instance
+    // As we do not actually pass trace and evaluate abstractly, independent of geometry, we cannot use the straight getMaterialInstance method
+    // Hopefully we can still get valid instance despite invalid world position
+    sd.materialID = gMaterialId;
+    let mi = gScene.materials.getMaterialInstance(sd, lod);
+    BSDFProperties props = mi.getProperties(sd);
+
+    // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
+    float3 f = mi.eval(sd, wo, sg);
+
+    //Save results
+    BsdfSampleData data;
+    data.uv = uv;
+    data.wi = float4(sd.V.x, sd.V.y, sd.V.z, 0);
+    data.wo = float4(wo.x, wo.y, wo.z, 0);
+    data.f = float4(f.x, f.y, f.z, 0);
+    data.albedo = props.diffuseReflectionAlbedo;
+    data.specular = props.specularReflectionAlbedo;
+    data.roughness = props.roughness;
+    data.normal = sd.faceN;
+
+    gSampleOutputBuffer[idx] = data;
+}
