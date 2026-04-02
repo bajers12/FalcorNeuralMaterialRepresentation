@@ -56,20 +56,6 @@ print(f"Data shape: {data.shape}")
 print(f"Data dtype: {data.dtype}")
 print(f"data size: {data.itemsize}")
 
-# Print first few samples
-#print("\nFirst 5 samples:")
-#for i in range(min(5, len(data))):
-#    print(f"Sample {i}:")
-#    print(f"  uv: {data[i]['uv']}")
-#    print(f"  wo: {data[i]['wo']}")
-#    print(f"  wi: {data[i]['wi']}")
-#    print(f"  f: {data[i]['f']}")
-#    print(f"  specular: {data[i]['specular']}")
-#    print(f"  albedo: {data[i]['albedo']}")
-#    print(f"  normal: {data[i]['normal']}")
-#    print(f"  roughness: {data[i]['roughness']}")
-#    print(f"  pdf: {data[i]['pdf']}")
-
 # Optional: Convert to pandas DataFrame (flattening the arrays)
 # Flatten the structured array into a regular array
 flat_data = np.column_stack([
