@@ -9,27 +9,20 @@ import Utils.Sampling.UniformSampleGenerator;
 struct BsdfSampleData
 {
     float2 uv;
-    float4 wo;
-    float4 wi;
-    float4 f;
-    float4 specular;
-    float4 albedo;
-    float4 roughness;
-    float4 normal;
+    float3 wo;
+    float3 wi;
+    float3 f;
+    float3 specular;
+    float3 albedo;
+    float3 normal;
+    float roughness;
+    float pdf;
 };
 
-struct BsdfTestSampleData
-{
-    float4 uv; // uv.xy valid, zw unused
-    float4 wo; // wo.xyz valid, w unused
-    float4 wi; // wi.xyz valid, w unused
-    float4 f;  // f.xyz valid, w unused
-};
-
-RWStructuredBuffer<BsdfTestSampleData> gSampleOutputBuffer;
-uint gSampleCount;
-uint gMaterialId = 0;
-uint gFrameSeed;
+RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
+uniform uint gSampleCount;
+uniform uint gMaterialId;
+uniform uint gRandomSeedOffset;
 
 uint hash(uint x)
 {
@@ -55,7 +48,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     uint idx = threadId.x;
 
     //Sample UV and view direction uniformly
-    uint seed = idx * 9781 + 6271 + gFrameSeed;
+    uint seed = idx * 9781 + 6271 + gRandomSeedOffset;
 
     float2 uv = float2(rand(seed), rand(seed));
 
@@ -83,18 +76,23 @@ void main(uint3 threadId : SV_DispatchThreadID)
     BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
+    BSDFSample sample;
+    mi.sample(sd, sg, sample);
     float3 f = mi.eval(sd, wo, sg);
 
     // Save results
-    BsdfTestSampleData data;
-    data.uv = float4(uv.x, uv.y, 0.f, 0.f);
-    data.wi = float4(wi.x, wi.y, wi.z, 0.f);
-    data.wo = float4(wo.x, wo.y, wo.z, 0.f);
-    data.f = float4(f.x, f.y, f.z, 0.f);
-    //data.albedo = props.diffuseReflectionAlbedo;
-    //data.specular = props.specularReflectionAlbedo;
-    //data.roughness = props.roughness;
-    //data.normal = sd.faceN;
+    BsdfSampleData data;
+    data.uv = uv;
+    data.wi = wi;  // incident direction
+    data.wo = wo;  // outgoing direction
+    data.f = f;
+    data.albedo = props.diffuseReflectionAlbedo;
+    data.specular = props.specularReflectionAlbedo;
+    data.normal = sd.faceN;
+    //Can also use normal after applied normal maps.
+    //data.normal = props.guideNormal;
+    data.roughness = props.roughness;
+    data.pdf = 0.0f;
 
     gSampleOutputBuffer[idx] = data;
 }

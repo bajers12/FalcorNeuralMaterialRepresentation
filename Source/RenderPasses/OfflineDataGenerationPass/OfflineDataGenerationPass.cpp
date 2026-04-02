@@ -28,53 +28,53 @@
 #include "OfflineDataGenerationPass.h"
 
 const char kShaderFile[] = "RenderPasses/OfflineDataGenerationPass/OfflineDataGenerationPass.cs.slang";
-const std::string kOutputFileName = "bsdf_samples.bin";
-const std::string kDataDir = "samples";
 
 const uint32_t kThreadGroupSize = 64;
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
     registry.registerClass<RenderPass, OfflineDataGenerationPass>();
+    ScriptBindings::registerBinding(OfflineDataGenerationPass::registerBindings);
+}
+
+void OfflineDataGenerationPass::registerBindings(pybind11::module& m)
+{
+    pybind11::class_<OfflineDataGenerationPass, RenderPass, ref<OfflineDataGenerationPass>> pass(m, "OfflineDataGenerationPass");
+    pass.def("generate", &OfflineDataGenerationPass::generate);
+    pass.def("setRandomSeedOffset", &OfflineDataGenerationPass::setRandomSeedOffset);
 }
 
 struct BsdfSampleData
 {
     float2 uv;
-    float4 wo;
-    float4 wi;
-    float4 f;
-    float4 specular;
-    float4 albedo;
-    float4 roughness;
-    float4 normal;
+    float3 wo;
+    float3 wi;
+    float3 f;
+    float3 specular;
+    float3 albedo;
+    float3 normal;
+    float1 roughness;
+    float1 pdf;
 };
 
-struct BsdfTestSampleData
-{
-    float4 uv;      // uv.xy valid, zw unused
-    float4 wo;      // wo.xyz valid, w unused
-    float4 wi;      // wi.xyz valid, w unused
-    float4 f;       // f.xyz valid, w unused
-};
 
 OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
     mpDevice = pDevice;
-    mbShouldGenerate = false;
-    mSampleCount = 50000000;
+
+    parseProperties(props);
 
     //For readback syncronization
     mpReadbackFence = mpDevice->createFence();
 
     mpGpuSampleBuffer = mpDevice->createStructuredBuffer(
-        sizeof(BsdfTestSampleData),
+        sizeof(BsdfSampleData),
         mSampleCount,
         ResourceBindFlags::UnorderedAccess,
         MemoryType::DeviceLocal
     );
 
     mpReadbackBuffer = mpDevice->createStructuredBuffer(
-        sizeof(BsdfTestSampleData),
+        sizeof(BsdfSampleData),
         mSampleCount,
         ResourceBindFlags::None,
         MemoryType::ReadBack
@@ -84,9 +84,26 @@ OfflineDataGenerationPass::OfflineDataGenerationPass(ref<Device> pDevice, const 
 
 }
 
+void OfflineDataGenerationPass::parseProperties(const Properties& props)
+{
+    for (const auto& [key, value] : props)
+    {
+        if (key == "materialId") mMaterialId = value;
+        else if (key == "sampleCount") mSampleCount = value;
+        else if (key == "outputDirectory") mOutputDirectory = value.operator std::string();
+        else if (key == "outputFilename") mOutputFileName = value.operator std::string();
+    }
+}
+
 Properties OfflineDataGenerationPass::getProperties() const
 {
-    return {};
+    Properties props;
+    props["materialId"] = mMaterialId;
+    props["sampleCount"] = mSampleCount;
+    props["outputDirectory"] = mOutputDirectory;
+    props["outputFilename"] = mOutputFileName;
+
+    return props;
 }
 
 RenderPassReflection OfflineDataGenerationPass::reflect(const CompileData& compileData)
@@ -100,7 +117,7 @@ void OfflineDataGenerationPass::renderUI(Gui::Widgets& widget)
 {
     if (widget.button("Generate BSDF Samples"))
     {
-        mbShouldGenerate = true;
+        generate();
     }
 }
 
@@ -116,6 +133,77 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
         return;
     }
 
+    if (mMaterialId >= mpScene->getMaterialCount())
+    {
+        logWarning("OfflineDataGenerationPass: Invalid material index {}.", mMaterialId);
+        return;
+    }
+
+
+
+    //Setup bindings
+    auto var = mpPass->getRootVar();
+
+    const auto& pMat = mpScene->getMaterials()[mMaterialId];
+    if (auto pMtlx = dynamic_ref_cast<MaterialXGraphMaterial>(pMat))
+    {
+        pMtlx->bindGeneratedResources(var);
+    }
+    else
+    {
+        logWarning("OfflineDataGenerationPass: Selected material is not a MaterialXGraphMaterial.");
+    }
+
+    mpScene->bindShaderData(var["gScene"]);
+    var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
+    var["gSampleCount"] = mSampleCount;
+    var["gRandomSeedOffset"] = mRandomSeedOffset;
+
+    //Threadsgroups and execute, threadgroups should probably be improved
+    uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
+    mpPass->execute(pRenderContext, mSampleCount, 1, 1);
+    pRenderContext->uavBarrier(mpGpuSampleBuffer.get());
+
+
+    //map buffer address to cpu so we can read it using a readback buffer
+    pRenderContext->copyResource(mpReadbackBuffer.get(), mpGpuSampleBuffer.get());
+    pRenderContext->submit(false);
+    pRenderContext->signal(mpReadbackFence.get());
+    mpReadbackFence->wait();
+    const BsdfSampleData* pData = (const BsdfSampleData*)mpReadbackBuffer->map();
+
+    std::filesystem::create_directories(mOutputDirectory);
+    std::string outputPath = mOutputDirectory + "/" + mOutputFileName;
+    std::ofstream f(outputPath, std::ios::binary);
+    logInfo("Writing samples to: " + outputPath);
+
+    // write raw buffer
+    f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfSampleData) * mSampleCount);
+
+    f.close();
+
+    mpReadbackBuffer->unmap();
+
+
+}
+
+void OfflineDataGenerationPass::setRandomSeedOffset(uint32_t offset) {
+    mRandomSeedOffset = offset;
+}
+
+void OfflineDataGenerationPass::setupProgram() {
+
+}
+
+void OfflineDataGenerationPass::generate() {
+    mbShouldGenerate = true;
+}
+
+void OfflineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
+{
+    mpScene = pScene;
+
+    if(mpScene == nullptr) return;
 
     //Setup program with defines in execute, as the slang files cannot compile if no scene is available at compile time for gScene acess
     ProgramDesc desc;
@@ -129,63 +217,4 @@ void OfflineDataGenerationPass::execute(RenderContext* pRenderContext, const Ren
 
 
     mpPass = ComputePass::create(mpDevice, desc, defines);
-    mMaterialID = 0;
-    //Setup bindings
-    auto var = mpPass->getRootVar();
-    if (mMaterialID >= mpScene->getMaterialCount())
-    {
-        logWarning("OfflineDataGenerationPass: Invalid material index {}.", mMaterialID);
-        return;
-    }
-
-    const auto& pMat = mpScene->getMaterials()[mMaterialID];
-    if (auto pMtlx = dynamic_ref_cast<MaterialXGraphMaterial>(pMat))
-    {
-        pMtlx->bindGeneratedResources(var);
-    }
-    else
-    {
-        logWarning("OfflineDataGenerationPass: Selected material is not a MaterialXGraphMaterial.");
-    }
-
-    mpScene->bindShaderData(var["gScene"]);
-
-    std::random_device rd;
-    const uint32_t frameSeed = rd();    
-    var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
-    var["gSampleCount"] = mSampleCount;
-    var["gFrameSeed"] = frameSeed;
-
-    //Threadsgroups and execute, threadgroups should probably be improved
-    uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
-    mpPass->execute(pRenderContext, mSampleCount, 1, 1);
-    pRenderContext->uavBarrier(mpGpuSampleBuffer.get());
-
-
-    //map buffer address to cpu so we can read it using a readback buffer
-    pRenderContext->copyResource(mpReadbackBuffer.get(), mpGpuSampleBuffer.get());
-    pRenderContext->submit(false);
-    pRenderContext->signal(mpReadbackFence.get());
-    mpReadbackFence->wait();
-    const BsdfTestSampleData* pData = (const BsdfTestSampleData*)mpReadbackBuffer->map();
-
-    std::filesystem::create_directories(kDataDir);
-    std::string outputPath = kDataDir + "/" + kOutputFileName;
-    std::ofstream f(outputPath, std::ios::binary);
-    logInfo("Writing samples to: " + outputPath);
-
-    // write raw buffer
-    f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfTestSampleData) * mSampleCount);
-
-    f.close();
-
-    mpReadbackBuffer->unmap();
-
-
-}
-
-
-void OfflineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
-{
-    mpScene = pScene;
 }
