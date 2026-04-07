@@ -28,8 +28,9 @@
 #pragma once
 #include "Falcor.h"
 #include "RenderGraph/RenderPass.h"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <fstream>
+#include <filesystem>
+#include "Scene/Material/MaterialXGraphMaterial.h"
 
 using namespace Falcor;
 
@@ -53,13 +54,23 @@ public:
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
+    void generate();
+    void OnlineDataGenerationPass::setRandomSeedOffset(uint32_t offset);
+    static void registerBindings(pybind11::module& m);
 
 private:
+    void OnlineDataGenerationPass::parseProperties(const Properties& props);
+    void OnlineDataGenerationPass::setupProgram();
+
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;
     ref<Buffer> mpGpuSampleBuffer;
     ref<Buffer> mpReadbackBuffer;
     ref<Fence> mpReadbackFence;
-    uint32_t mTargetMaterialId;
     bool mbShouldGenerate;
+    uint32_t mRandomSeedOffset;
+    uint32_t mMaterialId;
+    uint32_t mSampleCount;
+    std::string mOutputDirectory;
+    std::string mOutputFileName;
 };
