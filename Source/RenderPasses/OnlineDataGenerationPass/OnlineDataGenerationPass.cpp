@@ -172,14 +172,14 @@ pybind11::array OnlineDataGenerationPass::getData()
 
     return pybind11::array(
         pybind11::buffer_info(
-            (void*)mpMappedData,              // pointer
-            sizeof(float),                   // scalar size
+            (void*)mpMappedData,
+            sizeof(float),
             pybind11::format_descriptor<float>::format(),
-            2,                               // ndim
-            { count, N },                    // shape
+            2,
+            { count, N },
             {
-                sizeof(BsdfSampleData),      // stride to next sample
-                sizeof(float)                // stride between elements
+                sizeof(BsdfSampleData),
+                sizeof(float)
             }
         )
     );

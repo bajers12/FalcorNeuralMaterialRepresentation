@@ -39,6 +39,7 @@ import time
 import argparse
 from dataclasses import dataclass, asdict
 from typing import Dict, Tuple, Optional
+from DataGenerator import DataGenerator
 
 import numpy as np
 import torch
@@ -109,20 +110,30 @@ class TrainConfig:
 # Dataset
 # =============================================================================
 
-class RayPairDataset(Dataset):
-    def __init__(self, path: str):
-        super().__init__()
+class StreamingDataset(Dataset):
+    def __init__(self, batchsize: int):
+        self.uv = None
+        self.wi = None
+        self.wo = None
+        self.y  = None
+        self.batchsize = batchsize
 
+    def update(self, data_dict):
+        self.uv = torch.from_numpy(data_dict["uv"]).float()
+        self.wi = torch.from_numpy(data_dict["wi"]).float()
+        self.wo = torch.from_numpy(data_dict["wo"]).float()
+        self.y  = torch.from_numpy(data_dict["y"]).float()
 
-    def _load(self, path: str) -> Dict[str, torch.Tensor]:
+    def __len__(self):
+        return self.batchsize
 
-
-    def __len__(self) -> int:
-        return self.uv.shape[0]
-
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-
-
+    def __getitem__(self, idx):
+        return {
+            "uv": self.uv[idx],
+            "wi": self.wi[idx],
+            "wo": self.wo[idx],
+            "y": self.y[idx],
+        }
 
 def make_dataloader(ds: Dataset, cfg: TrainConfig, shuffle: bool) -> DataLoader:
     """
@@ -718,7 +729,7 @@ def save_config(cfg: TrainConfig) -> None:
 
 def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser()
-    p.add_argument("--train_path", type=str, required=True)
+    p.add_argument("--train_path", type=str, default=None)
     p.add_argument("--val_path", type=str, default=None)
 
     p.add_argument("--out_dir", type=str, default="./out_neural_material_mvp")
@@ -746,7 +757,7 @@ def parse_args() -> TrainConfig:
     p.add_argument("--log_eps", type=float, default=1e-6)
     p.add_argument("--clamp_min_target", type=float, default=0.0)
 
-    p.add_argument("--num_workers", type=int, default=4)
+    p.add_argument("--num_workers", type=int, default=1)
     p.add_argument("--save_every", type=int, default=5)
     p.add_argument("--print_every_steps", type=int, default=50)
 
@@ -815,6 +826,24 @@ def parse_args() -> TrainConfig:
 
     return cfg
 
+def generate_new_data(data_generator: DataGenerator):
+    data = data_generator.generate_data(0)
+
+    # unpack (must match your struct layout!)
+    uv = data[:, 0:2]
+    wo = data[:, 2:5]
+    wi = data[:, 5:8]
+    f  = data[:, 8:11]
+
+    # your training expects y = f * cos term already baked
+    y = f
+
+    return {
+        "uv": uv,
+        "wi": wi,
+        "wo": wo,
+        "y": y,
+    }
 
 # =============================================================================
 # Main
@@ -823,6 +852,8 @@ def parse_args() -> TrainConfig:
 def main():
     cfg = parse_args()
     set_seed(cfg.seed)
+
+    data_generator = DataGenerator(sampleCount=cfg.batch_size)
 
     # Device
     if cfg.device == "cuda" and not torch.cuda.is_available():
@@ -836,12 +867,12 @@ def main():
     print("Config:", json.dumps(asdict(cfg), indent=2))
 
     # Data
-    train_ds = RayPairDataset(cfg.train_path)
+    train_ds = StreamingDataset(batchsize=cfg.batch_size)
     train_loader = make_dataloader(train_ds, cfg, shuffle=True)
 
     val_loader = None
     if cfg.val_path:
-        val_ds = RayPairDataset(cfg.val_path)
+        val_ds = StreamingDataset(batchsize=cfg.batch_size)
         val_loader = make_dataloader(val_ds, cfg, shuffle=False)
 
     # Model
@@ -856,6 +887,9 @@ def main():
 
     for epoch in range(cfg.max_epochs):
         maybe_freeze_parts(model, cfg, epoch=epoch, global_step=global_step)
+
+        data_batch = generate_new_data(data_generator)
+        train_ds.update(data_batch)
 
         train_metrics, global_step, opt, scheduler = train_one_epoch(
             model, train_loader, opt, scheduler, cfg, epoch, global_step_start=global_step
@@ -878,6 +912,8 @@ def main():
         else:
             if (epoch + 1) % cfg.save_every == 0 or epoch == cfg.max_epochs - 1:
                 save_checkpoint(model, opt, scheduler, cfg, epoch, metrics)
+
+        data_generator.release_data()
 
     if val_loader is not None and best_ckpt_path is not None:
         payload = load_model_weights_from_checkpoint(model, best_ckpt_path, device)
