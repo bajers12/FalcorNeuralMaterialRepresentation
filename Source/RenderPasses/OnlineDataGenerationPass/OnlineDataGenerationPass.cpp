@@ -42,20 +42,9 @@ void OnlineDataGenerationPass::registerBindings(pybind11::module& m)
     pybind11::class_<OnlineDataGenerationPass, RenderPass, ref<OnlineDataGenerationPass>> pass(m, "OnlineDataGenerationPass");
     pass.def("generate", &OnlineDataGenerationPass::generate);
     pass.def("setRandomSeedOffset", &OnlineDataGenerationPass::setRandomSeedOffset);
+    pass.def("getData", &OnlineDataGenerationPass::getData);
+    pass.def("releaseData", &OnlineDataGenerationPass::releaseData);
 }
-
-struct BsdfSampleData
-{
-    float2 uv;
-    float3 wo;
-    float3 wi;
-    float3 f;
-    float3 specular;
-    float3 albedo;
-    float3 normal;
-    float1 roughness;
-    float1 pdf;
-};
 
 
 OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Properties& props) : RenderPass(pDevice) {
@@ -90,8 +79,6 @@ void OnlineDataGenerationPass::parseProperties(const Properties& props)
     {
         if (key == "materialId") mMaterialId = value;
         else if (key == "sampleCount") mSampleCount = value;
-        else if (key == "outputDirectory") mOutputDirectory = value.operator std::string();
-        else if (key == "outputFilename") mOutputFileName = value.operator std::string();
     }
 }
 
@@ -100,8 +87,6 @@ Properties OnlineDataGenerationPass::getProperties() const
     Properties props;
     props["materialId"] = mMaterialId;
     props["sampleCount"] = mSampleCount;
-    props["outputDirectory"] = mOutputDirectory;
-    props["outputFilename"] = mOutputFileName;
 
     return props;
 }
@@ -170,21 +155,44 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     pRenderContext->submit(false);
     pRenderContext->signal(mpReadbackFence.get());
     mpReadbackFence->wait();
-    const BsdfSampleData* pData = (const BsdfSampleData*)mpReadbackBuffer->map();
+    mpMappedData = (BsdfSampleData*)mpReadbackBuffer->map();
+    mIsMapped = true;
 
-    std::filesystem::create_directories(mOutputDirectory);
-    std::string outputPath = mOutputDirectory + "/" + mOutputFileName;
-    std::ofstream f(outputPath, std::ios::binary);
-    logInfo("Writing samples to: " + outputPath);
+}
 
-    // write raw buffer
-    f.write(reinterpret_cast<const char*>(pData), sizeof(BsdfSampleData) * mSampleCount);
+pybind11::array OnlineDataGenerationPass::getData()
+{
+    if (!mIsMapped || mpMappedData == nullptr)
+        throw std::runtime_error("Buffer not mapped. Call execute() first.");
 
-    f.close();
+    size_t count = mSampleCount;
 
-    mpReadbackBuffer->unmap();
+    // Number of floats per sample:
+    constexpr size_t N = sizeof(BsdfSampleData) / sizeof(float);
 
+    return pybind11::array(
+        pybind11::buffer_info(
+            (void*)mpMappedData,              // pointer
+            sizeof(float),                   // scalar size
+            pybind11::format_descriptor<float>::format(),
+            2,                               // ndim
+            { count, N },                    // shape
+            {
+                sizeof(BsdfSampleData),      // stride to next sample
+                sizeof(float)                // stride between elements
+            }
+        )
+    );
+}
 
+void OnlineDataGenerationPass::releaseData()
+{
+    if (mIsMapped)
+    {
+        mpReadbackBuffer->unmap();
+        mpMappedData = nullptr;
+        mIsMapped = false;
+    }
 }
 
 void OnlineDataGenerationPass::setRandomSeedOffset(uint32_t offset) {
