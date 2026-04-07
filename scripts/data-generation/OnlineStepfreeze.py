@@ -40,6 +40,7 @@ import argparse
 from dataclasses import dataclass, asdict
 from typing import Dict, Tuple, Optional
 from DataGenerator import DataGenerator
+import random
 
 import numpy as np
 import torch
@@ -827,7 +828,7 @@ def parse_args() -> TrainConfig:
     return cfg
 
 def generate_new_data(data_generator: DataGenerator):
-    data = data_generator.generate_data(0)
+    data = data_generator.generate_data(random.randint(0, 2147483647 ))
 
     # unpack (must match your struct layout!)
     uv = data[:, 0:2]
