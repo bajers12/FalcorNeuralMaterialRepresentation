@@ -89,7 +89,7 @@ class TrainConfig:
     grad_clip_norm: Optional[float] = None
 
     # Logging / checkpoints
-    out_dir: str = "./out_neural_material_mvp"
+    out_dir: str = "./decoder_weights"
     save_every: int = 5
     print_every_steps: int = 50
 
@@ -954,4 +954,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-        

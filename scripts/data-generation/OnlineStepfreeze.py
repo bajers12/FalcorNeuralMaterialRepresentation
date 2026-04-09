@@ -835,15 +835,20 @@ def generate_new_data(data_generator: DataGenerator):
     wo = data[:, 2:5]
     wi = data[:, 5:8]
     f  = data[:, 8:11]
-
-    # your training expects y = f * cos term already baked
-    y = f
+    spec = data[:, 11:14]
+    albedo = data[:, 14:17]
+    roughness = data[:, 17]
+    pdf = data[:, 18]
 
     return {
         "uv": uv,
         "wi": wi,
         "wo": wo,
-        "y": y,
+        "y": f,
+        "spec": spec,
+        "albedo": albedo,
+        "roughness": roughness,
+        "pdf": pdf
     }
 
 # =============================================================================

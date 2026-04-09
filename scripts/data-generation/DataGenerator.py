@@ -7,26 +7,6 @@ import torch
 
 scene_path = 'C:/Users/Philip/FalcorNeuralMaterialRepresentation/media/Arcade/Arcade.pyscene'
 
-# Define the dtype for BsdfTestSampleData
-dt = np.dtype([
-    ('uv', 'f4', (2,)),
-
-    ('wo', 'f4', (3,)),
-
-    ('wi', 'f4', (3,)),
-
-    ('f', 'f4', (3,)),
-
-    ('specular', 'f4', (3,)),
-
-    ('albedo', 'f4', (3,)),
-
-    ('normal', 'f4', (3,)),
-
-    ('roughness', 'f4'),
-    ('pdf', 'f4'),
-])
-
 class DataGenerator():
     def __init__(self, materialId = 0, scene_path = 'C:/Users/Philip/FalcorNeuralMaterialRepresentation/media/Arcade/Arcade.pyscene', sampleCount = 10):
         self.testbed = falcor.Testbed(create_window=False)
