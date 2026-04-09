@@ -56,8 +56,6 @@ from torch.utils.data import Dataset, DataLoader
 @dataclass
 class TrainConfig:
     # Data
-    train_path: str
-    val_path: Optional[str] = None
     num_workers: int = 4
 
     # Latent texture
@@ -80,7 +78,8 @@ class TrainConfig:
     # Optimization
     device: str = "cuda"
     seed: int = 1337
-    batch_size: int = 65536
+    batch_size: int = math.ceil(64000 * 1.1)
+    validation_size: int = math.ceil(0.1 * 64000)
     max_epochs: int = 50
 
     lr: float = 1e-3
@@ -136,14 +135,14 @@ class StreamingDataset(Dataset):
             "y": self.y[idx],
         }
 
-def make_dataloader(ds: Dataset, cfg: TrainConfig, shuffle: bool) -> DataLoader:
+def make_dataloader(ds: Dataset, cfg: TrainConfig, size: int, shuffle: bool) -> DataLoader:
     """
     Creates a DataLoader. pin_memory is only useful when training on CUDA.
     """
     use_pin = (cfg.device == "cuda")
     return DataLoader(
         ds,
-        batch_size=cfg.batch_size,
+        batch_size=size,
         shuffle=shuffle,
         num_workers=cfg.num_workers,
         pin_memory=use_pin,
@@ -730,8 +729,6 @@ def save_config(cfg: TrainConfig) -> None:
 
 def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser()
-    p.add_argument("--train_path", type=str, default=None)
-    p.add_argument("--val_path", type=str, default=None)
 
     p.add_argument("--out_dir", type=str, default="./out_neural_material_mvp")
     p.add_argument("--device", type=str, default="cuda")
@@ -746,7 +743,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--mlp_depth", type=int, default=2)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
-    p.add_argument("--batch_size", type=int, default=65536)
+    p.add_argument("--batch_size", type=int, default=math.ceil(1.1 * 64000))
+    p.add_argument("--validation_size", type=int, default=math.ceil(0.1 * 64000))
     p.add_argument("--max_epochs", type=int, default=50)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
@@ -777,8 +775,7 @@ def parse_args() -> TrainConfig:
 
     args = p.parse_args()
 
-    cfg = TrainConfig(train_path=args.train_path)
-    cfg.val_path = args.val_path
+    cfg = TrainConfig()
     cfg.out_dir = args.out_dir
     cfg.device = args.device
     cfg.seed = args.seed
@@ -793,6 +790,7 @@ def parse_args() -> TrainConfig:
     cfg.exp_offset = args.exp_offset
 
     cfg.batch_size = args.batch_size
+    cfg.validation_size = args.validation_size
     cfg.max_epochs = args.max_epochs
     cfg.lr = args.lr
     cfg.lr_min = args.lr_min
@@ -827,10 +825,7 @@ def parse_args() -> TrainConfig:
 
     return cfg
 
-def generate_new_data(data_generator: DataGenerator):
-    data = data_generator.generate_data(random.randint(0, 1000000 ))
-
-    # unpack (must match your struct layout!)
+def data_to_dict(data: np.array):
     uv = data[:, 0:2]
     wo = data[:, 2:5]
     wi = data[:, 5:8]
@@ -861,7 +856,7 @@ def main():
     cfg = parse_args()
     set_seed(cfg.seed)
 
-    data_generator = DataGenerator(sampleCount=cfg.batch_size)
+    data_generator = DataGenerator(sampleCount=cfg.batch_size + cfg.validation_size)
 
     # Device
     if cfg.device == "cuda" and not torch.cuda.is_available():
@@ -876,12 +871,10 @@ def main():
 
     # Data
     train_ds = StreamingDataset(batchsize=cfg.batch_size)
-    train_loader = make_dataloader(train_ds, cfg, shuffle=True)
+    val_ds = StreamingDataset(batchsize=cfg.validation_size)
+    train_loader = make_dataloader(train_ds, cfg, size=cfg.batch_size, shuffle=True)
+    val_loader = make_dataloader(val_ds, cfg, size=cfg.validation_size,shuffle=False)
 
-    val_loader = None
-    if cfg.val_path:
-        val_ds = StreamingDataset(batchsize=cfg.batch_size)
-        val_loader = make_dataloader(val_ds, cfg, shuffle=False)
 
     # Model
     model = NeuralMaterialModel(cfg).to(device)
@@ -896,8 +889,14 @@ def main():
     for epoch in range(cfg.max_epochs):
         maybe_freeze_parts(model, cfg, epoch=epoch, global_step=global_step)
 
-        data_batch = generate_new_data(data_generator)
-        train_ds.update(data_batch)
+        data_batch = data_generator.generate_data(random.randint(0, 1000000 ))
+        training_batch = data_batch[cfg.validation_size:]
+        val_batch = data_batch[0:cfg.validation_size]
+
+        train_dict = data_to_dict(training_batch)
+        val_dict = data_to_dict(val_batch)
+        train_ds.update(train_dict)
+        val_ds.update(val_dict)
 
         train_metrics, global_step, opt, scheduler = train_one_epoch(
             model, train_loader, opt, scheduler, cfg, epoch, global_step_start=global_step
