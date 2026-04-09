@@ -828,7 +828,7 @@ def parse_args() -> TrainConfig:
     return cfg
 
 def generate_new_data(data_generator: DataGenerator):
-    data = data_generator.generate_data(random.randint(0, 2147483647 ))
+    data = data_generator.generate_data(random.randint(0, 1000000 ))
 
     # unpack (must match your struct layout!)
     uv = data[:, 0:2]
@@ -837,8 +837,9 @@ def generate_new_data(data_generator: DataGenerator):
     f  = data[:, 8:11]
     spec = data[:, 11:14]
     albedo = data[:, 14:17]
-    roughness = data[:, 17]
-    pdf = data[:, 18]
+    normal = data[:, 17:20]
+    roughness = data[:, 20]
+    pdf = data[:, 21]
 
     return {
         "uv": uv,
@@ -847,6 +848,7 @@ def generate_new_data(data_generator: DataGenerator):
         "y": f,
         "spec": spec,
         "albedo": albedo,
+        "normal": normal,
         "roughness": roughness,
         "pdf": pdf
     }

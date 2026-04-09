@@ -1,0 +1,44 @@
+# Minimal sphere scene for neural material preview.
+from pathlib import Path
+
+def get_base_dir():
+    # Case 1: Normal Python script
+    if "__file__" in globals():
+        return Path(__file__).resolve().parent
+
+    # Case 2: Interactive (Jupyter, REPL, Falcor console, etc.)
+    return Path.cwd()
+
+base_dir = get_base_dir()
+scene_path = base_dir / "SmoothUVSphere.glb"
+mat_path = base_dir / "NeuralMaterial"
+env_path = base_dir / '20050806-03_hd.hdr'
+# Import the sphere mesh exported from Blender.
+sceneBuilder.importScene(scene_path)
+
+# Replace the imported sphere material with the neural material.
+# This assumes the imported material name is 'NeuralPreviewMat'.
+# If your GLB uses a different material name, change that one string.
+sceneBuilder.replaceMaterialWithNeural(
+    'NeuralMat',
+    base_dir
+)
+
+# Add environment map.
+envMap = EnvMap(env_path)
+envMap.intensity = 1.0
+sceneBuilder.envMap = envMap
+
+# Add camera.
+camera = Camera()
+camera.position = float3(0.0, 0.0, 3.0)
+camera.target = float3(0.0, 0.0, 0.0)
+camera.up = float3(0.0, 1.0, 0.0)
+camera.focalLength = 50.0
+sceneBuilder.addCamera(camera)
+
+# Add one directional light.
+dirLight = DirectionalLight('KeyLight')
+dirLight.intensity = float3(2.0, 2.0, 2.0)
+dirLight.direction = float3(0.3, -1.0, -0.2)
+sceneBuilder.addLight(dirLight)
