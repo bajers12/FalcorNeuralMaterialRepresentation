@@ -78,7 +78,7 @@ class TrainConfig:
     # Optimization
     device: str = "cuda"
     seed: int = 1337
-    batch_size: int = math.ceil(64000 * 1.1)
+    batch_size: int = 64000
     validation_size: int = math.ceil(0.1 * 64000)
     max_epochs: int = 50
 
@@ -113,15 +113,15 @@ class TrainConfig:
 class StreamingDataset(Dataset):
     def __init__(self, batchsize: int):
         self.uv = None
-        self.wi = None
         self.wo = None
+        self.wi = None
         self.y  = None
         self.batchsize = batchsize
 
     def update(self, data_dict):
         self.uv = torch.from_numpy(data_dict["uv"]).float()
-        self.wi = torch.from_numpy(data_dict["wi"]).float()
         self.wo = torch.from_numpy(data_dict["wo"]).float()
+        self.wi = torch.from_numpy(data_dict["wi"]).float()
         self.y  = torch.from_numpy(data_dict["y"]).float()
 
     def __len__(self):
@@ -130,8 +130,8 @@ class StreamingDataset(Dataset):
     def __getitem__(self, idx):
         return {
             "uv": self.uv[idx],
-            "wi": self.wi[idx],
             "wo": self.wo[idx],
+            "wi": self.wi[idx],
             "y": self.y[idx],
         }
 
@@ -743,7 +743,7 @@ def parse_args() -> TrainConfig:
     p.add_argument("--mlp_depth", type=int, default=2)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
-    p.add_argument("--batch_size", type=int, default=math.ceil(1.1 * 64000))
+    p.add_argument("--batch_size", type=int, default=64000)
     p.add_argument("--validation_size", type=int, default=math.ceil(0.1 * 64000))
     p.add_argument("--max_epochs", type=int, default=50)
     p.add_argument("--lr", type=float, default=1e-3)
@@ -838,14 +838,14 @@ def data_to_dict(data: np.array):
 
     return {
         "uv": uv,
-        "wi": wi,
         "wo": wo,
+        "wi": wi,
         "y": f,
-        "spec": spec,
-        "albedo": albedo,
-        "normal": normal,
-        "roughness": roughness,
-        "pdf": pdf
+        #"spec": spec,
+        #"albedo": albedo,
+        #"normal": normal,
+        #"roughness": roughness,
+        #"pdf": pdf
     }
 
 # =============================================================================
@@ -872,7 +872,7 @@ def main():
     # Data
     train_ds = StreamingDataset(batchsize=cfg.batch_size)
     val_ds = StreamingDataset(batchsize=cfg.validation_size)
-    train_loader = make_dataloader(train_ds, cfg, size=cfg.batch_size, shuffle=True)
+    train_loader = make_dataloader(train_ds, cfg, size=cfg.batch_size, shuffle=False)
     val_loader = make_dataloader(val_ds, cfg, size=cfg.validation_size,shuffle=False)
 
 
@@ -891,7 +891,7 @@ def main():
 
         data_batch = data_generator.generate_data(random.randint(0, 1000000 ))
         training_batch = data_batch[cfg.validation_size:]
-        val_batch = data_batch[0:cfg.validation_size]
+        val_batch = data_batch[:cfg.validation_size]
 
         train_dict = data_to_dict(training_batch)
         val_dict = data_to_dict(val_batch)
