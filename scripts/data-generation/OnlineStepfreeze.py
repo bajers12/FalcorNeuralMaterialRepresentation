@@ -112,50 +112,15 @@ class TrainConfig:
 
 
 # =============================================================================
-# Dataset
+# Batch handling
 # =============================================================================
 
 
-class StreamingDataset(Dataset):
-    def __init__(self, n: int):
-        self.uv = None
-        self.wo = None
-        self.wi = None
-        self.y = None
-        self._n = n  # used as sentinel before first update()
-
-    def update(self, data_dict):
-        self.uv = torch.from_numpy(data_dict["uv"]).float()
-        self.wo = torch.from_numpy(data_dict["wo"]).float()
-        self.wi = torch.from_numpy(data_dict["wi"]).float()
-        self.y = torch.from_numpy(data_dict["y"]).float()
-        self._n = self.uv.shape[0]
-
-    def __len__(self):
-        return self._n
-
-    def __getitem__(self, idx):
-        return {
-            "uv": self.uv[idx],
-            "wo": self.wo[idx],
-            "wi": self.wi[idx],
-            "y": self.y[idx],
-        }
-
-
-def make_dataloader(
-    ds: Dataset, cfg: TrainConfig, batch_size: int, shuffle: bool
-) -> DataLoader:
-    use_pin = cfg.device == "cuda"
-    return DataLoader(
-        ds,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=cfg.num_workers,
-        pin_memory=use_pin,
-        drop_last=shuffle,
-        persistent_workers=(cfg.num_workers > 0),
-    )
+def tensorize_batch(data_dict: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]:
+    return {
+        key: torch.from_numpy(value).float() if isinstance(value, np.ndarray) else value
+        for key, value in data_dict.items()
+    }
 
 
 # =============================================================================
@@ -479,8 +444,7 @@ def make_optimizer(
 
 def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
     """
-    Cosine LR decay from the per-group base LR to the per-group minimum over
-    cfg.max_epochs (epoch-stepped).
+    Cosine LR decay from the per-group base LR to the per-group minimum over cfg.max_epochs (epoch-stepped).
     """
     base_by_name = {"latent": _latent_lr(cfg), "decoder": _decoder_lr(cfg)}
     min_by_name = {"latent": _latent_lr_min(cfg), "decoder": _decoder_lr_min(cfg)}
@@ -540,10 +504,7 @@ def maybe_freeze_parts(
 
 
 def maybe_rebuild_optimizer_and_scheduler(
-    model: NeuralMaterialModel,
-    opt: torch.optim.Optimizer,
-    scheduler,
-    cfg: TrainConfig,
+    model: NeuralMaterialModel, opt: torch.optim.Optimizer, scheduler, cfg: TrainConfig
 ):
     active_group_names = []
     if cfg.train_latent_texture and any(
@@ -610,7 +571,7 @@ def _maybe_transform_dirs_with_normals(
 
 def train_one_epoch(
     model: NeuralMaterialModel,
-    loader: DataLoader,
+    batch: Dict[str, torch.Tensor],
     opt: torch.optim.Optimizer,
     scheduler,
     cfg: TrainConfig,
@@ -621,90 +582,69 @@ def train_one_epoch(
     device = torch.device(cfg.device)
 
     t0 = time.time()
-    running_loss = 0.0
-    running_mae = 0.0
-    running_yhat_mean = 0.0
-    running_y_mean = 0.0
-    running_raw_mean = 0.0
-    running_raw_std = 0.0
-    n_batches = 0
     global_step = global_step_start
     decoder_frozen_logged = False
     latent_frozen_logged = False
 
-    for step, batch in enumerate(loader):
-        maybe_freeze_parts(model, cfg, global_step=global_step)
-        opt, scheduler = maybe_rebuild_optimizer_and_scheduler(
-            model, opt, scheduler, cfg
+    maybe_freeze_parts(model, cfg, global_step=global_step)
+    opt, scheduler = maybe_rebuild_optimizer_and_scheduler(model, opt, scheduler, cfg)
+
+    decoder_now_frozen = all(not p.requires_grad for p in model.decoder.parameters())
+    if decoder_now_frozen and not decoder_frozen_logged:
+        print(f"[train] freezing decoder at global_step={global_step}")
+        decoder_frozen_logged = True
+
+    latent_now_frozen = all(not p.requires_grad for p in model.latent.parameters())
+    if latent_now_frozen and not latent_frozen_logged:
+        print(f"[train] freezing latent texture at global_step={global_step}")
+        latent_frozen_logged = True
+
+    uv = batch["uv"].to(device, non_blocking=True)
+    y = batch["y"].to(device, non_blocking=True)
+
+    wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
+
+    if cfg.clamp_min_target > 0.0:
+        y = y.clamp_min(cfg.clamp_min_target)
+
+    y_hat, raw = model.forward_with_raw(uv, wi, wo)
+    loss = log_l1_loss(y_hat, y, cfg.log_eps)
+
+    opt.zero_grad(set_to_none=True)
+    loss.backward()
+
+    if cfg.grad_clip_norm is not None:
+        nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)
+
+    opt.step()
+
+    with torch.no_grad():
+        stats = compute_basic_stats(y_hat, y)
+        raw_stats = compute_raw_stats(raw)
+
+    global_step += 1
+
+    if cfg.print_every_steps <= 1:
+        dt = time.time() - t0
+        lr_summary = ", ".join(
+            [f"{pg.get('name','group')}={pg['lr']:.2e}" for pg in opt.param_groups]
         )
-
-        decoder_now_frozen = all(
-            not p.requires_grad for p in model.decoder.parameters()
+        print(
+            f"[train] epoch {epoch:03d} step {1:05d} global_step={global_step:07d} "
+            f"loss={loss.item():.6f} mae={stats['mae']:.6f} "
+            f"yhat_mean={stats['yhat_mean']:.3e} y_mean={stats['y_mean']:.3e} "
+            f"raw_mean={raw_stats['raw_mean']:.3f} raw_std={raw_stats['raw_std']:.3f} "
+            f"lr[{lr_summary}] time={dt:.1f}s"
         )
-        if decoder_now_frozen and not decoder_frozen_logged:
-            print(f"[train] freezing decoder at global_step={global_step}")
-            decoder_frozen_logged = True
-
-        latent_now_frozen = all(not p.requires_grad for p in model.latent.parameters())
-        if latent_now_frozen and not latent_frozen_logged:
-            print(f"[train] freezing latent texture at global_step={global_step}")
-            latent_frozen_logged = True
-
-        uv = batch["uv"].to(device, non_blocking=True)
-        y = batch["y"].to(device, non_blocking=True)
-
-        wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
-
-        if cfg.clamp_min_target > 0.0:
-            y = y.clamp_min(cfg.clamp_min_target)
-
-        y_hat, raw = model.forward_with_raw(uv, wi, wo)
-        loss = log_l1_loss(
-            y_hat, y, cfg.log_eps, mask_threshold=cfg.log_eps_mask_threshold
-        )
-
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-
-        if cfg.grad_clip_norm is not None:
-            nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)
-
-        opt.step()
-
-        with torch.no_grad():
-            stats = compute_basic_stats(y_hat, y)
-            raw_stats = compute_raw_stats(raw)
-
-        running_loss += loss.item()
-        running_mae += stats["mae"]
-        running_yhat_mean += stats["yhat_mean"]
-        running_y_mean += stats["y_mean"]
-        running_raw_mean += raw_stats["raw_mean"]
-        running_raw_std += raw_stats["raw_std"]
-        n_batches += 1
-        global_step += 1
-
-        if (step + 1) % cfg.print_every_steps == 0:
-            dt = time.time() - t0
-            lr_summary = ", ".join(
-                [f"{pg.get('name','group')}={pg['lr']:.2e}" for pg in opt.param_groups]
-            )
-            print(
-                f"[train] epoch {epoch:03d} step {step+1:05d} global_step={global_step:07d} "
-                f"loss={running_loss/n_batches:.6f} mae={running_mae/n_batches:.6f} "
-                f"yhat_mean={running_yhat_mean/n_batches:.3e} y_mean={running_y_mean/n_batches:.3e} "
-                f"raw_mean={running_raw_mean/n_batches:.3f} raw_std={running_raw_std/n_batches:.3f} "
-                f"lr[{lr_summary}] time={dt:.1f}s"
-            )
 
     return (
         {
-            "loss": running_loss / max(1, n_batches),
-            "mae": running_mae / max(1, n_batches),
-            "yhat_mean": running_yhat_mean / max(1, n_batches),
-            "y_mean": running_y_mean / max(1, n_batches),
-            "raw_mean": running_raw_mean / max(1, n_batches),
-            "raw_std": running_raw_std / max(1, n_batches),
+            "loss": loss.item(),
+            "mae": stats["mae"],
+            "yhat_mean": stats["yhat_mean"],
+            "y_mean": stats["y_mean"],
+            "raw_mean": raw_stats["raw_mean"],
+            "raw_std": raw_stats["raw_std"],
         },
         global_step,
         opt,
@@ -714,49 +654,36 @@ def train_one_epoch(
 
 @torch.no_grad()
 def validate(
-    model: NeuralMaterialModel, loader: DataLoader, cfg: TrainConfig, epoch: int
+    model: NeuralMaterialModel,
+    batch: Dict[str, torch.Tensor],
+    cfg: TrainConfig,
+    epoch: int,
 ) -> Dict[str, float]:
     model.eval()
     device = torch.device(cfg.device)
 
-    running_loss = 0.0
-    running_mae = 0.0
-    running_yhat_mean = 0.0
-    running_y_mean = 0.0
-    running_raw_mean = 0.0
-    running_raw_std = 0.0
-    n_batches = 0
+    uv = batch["uv"].to(device, non_blocking=True)
+    y = batch["y"].to(device, non_blocking=True)
 
-    for batch in loader:
-        uv = batch["uv"].to(device, non_blocking=True)
-        y = batch["y"].to(device, non_blocking=True)
+    wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
 
-        wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
+    if cfg.clamp_min_target > 0.0:
+        y = y.clamp_min(cfg.clamp_min_target)
 
-        if cfg.clamp_min_target > 0.0:
-            y = y.clamp_min(cfg.clamp_min_target)
-
-        y_hat, raw = model.forward_with_raw(uv, wi, wo)
-        loss = log_l1_loss(y_hat, y, cfg.log_eps)
-        stats = compute_basic_stats(y_hat, y)
-        raw_stats = compute_raw_stats(raw)
-
-        running_loss += loss.item()
-        running_mae += stats["mae"]
-        running_yhat_mean += stats["yhat_mean"]
-        running_y_mean += stats["y_mean"]
-        running_raw_mean += raw_stats["raw_mean"]
-        running_raw_std += raw_stats["raw_std"]
-        n_batches += 1
+    y_hat, raw = model.forward_with_raw(uv, wi, wo)
+    loss = log_l1_loss(y_hat, y, cfg.log_eps)
+    stats = compute_basic_stats(y_hat, y)
+    raw_stats = compute_raw_stats(raw)
 
     out = {
-        "val_loss": running_loss / max(1, n_batches),
-        "val_mae": running_mae / max(1, n_batches),
-        "val_yhat_mean": running_yhat_mean / max(1, n_batches),
-        "val_y_mean": running_y_mean / max(1, n_batches),
-        "val_raw_mean": running_raw_mean / max(1, n_batches),
-        "val_raw_std": running_raw_std / max(1, n_batches),
+        "val_loss": loss.item(),
+        "val_mae": stats["mae"],
+        "val_yhat_mean": stats["yhat_mean"],
+        "val_y_mean": stats["y_mean"],
+        "val_raw_mean": raw_stats["raw_mean"],
+        "val_raw_std": raw_stats["raw_std"],
     }
+    return out;
     print(
         f"[val] epoch {epoch:03d} val_loss={out['val_loss']:.6f} val_mae={out['val_mae']:.6f} "
         f"val_yhat_mean={out['val_yhat_mean']:.3e} val_y_mean={out['val_y_mean']:.3e} "
@@ -770,6 +697,12 @@ def validate(
 # =============================================================================
 
 
+def snapshot_model_state(model: NeuralMaterialModel) -> Dict[str, torch.Tensor]:
+    return {
+        key: value.detach().cpu().clone() for key, value in model.state_dict().items()
+    }
+
+
 def save_checkpoint(
     model: NeuralMaterialModel,
     opt,
@@ -777,6 +710,7 @@ def save_checkpoint(
     cfg: TrainConfig,
     epoch: int,
     metrics: Dict[str, float],
+    filename: Optional[str] = None,
 ) -> str:
     os.makedirs(cfg.out_dir, exist_ok=True)
     ckpt_path = os.path.join(cfg.out_dir, f"checkpoint_epoch.pt")
@@ -785,7 +719,7 @@ def save_checkpoint(
         "config": asdict(cfg),
         "metrics": metrics,
         "model": model.state_dict(),
-        "optimizer": opt.state_dict(),
+        "optimizer": None if opt is None else opt.state_dict(),
         "scheduler": None if scheduler is None else scheduler.state_dict(),
     }
     torch.save(payload, ckpt_path)
@@ -964,17 +898,22 @@ def data_to_dict(data: np.ndarray):
     wo = data[:, 2:5]
     wi = data[:, 5:8]
     f = data[:, 8:11]
-    # spec   = data[:, 11:14]
-    # albedo = data[:, 14:17]
-    # normal = data[:, 17:20]
-    # roughness = data[:, 20]
-    # pdf    = data[:, 21]
+    spec = data[:, 11:14]
+    albedo = data[:, 14:17]
+    normal = data[:, 17:20]
+    roughness = data[:, 20]
+    pdf = data[:, 21]
 
     return {
         "uv": uv,
         "wo": wo,
         "wi": wi,
         "y": f,
+        "spec": spec,
+        "albedo": albedo,
+        "normal": normal,
+        "roughness": roughness,
+        "pdf": pdf,
     }
 
 
@@ -987,8 +926,6 @@ def main():
     cfg = parse_args()
     set_seed(cfg.seed)
 
-    data_generator = DataGenerator(sampleCount=cfg.training_n + cfg.validation_n)
-
     # Device
     if cfg.device == "cuda" and not torch.cuda.is_available():
         print("CUDA requested but not available; falling back to CPU.")
@@ -1000,43 +937,34 @@ def main():
     save_config(cfg)
     print("Config:", json.dumps(asdict(cfg), indent=2))
 
-    train_n = cfg.training_n
-
-    train_ds = StreamingDataset(n=train_n)
-    val_ds = StreamingDataset(n=cfg.validation_n)
-
-    train_loader = make_dataloader(
-        train_ds, cfg, batch_size=cfg.batch_size, shuffle=True
-    )
-    val_loader = make_dataloader(
-        val_ds, cfg, batch_size=cfg.validation_n, shuffle=False
-    )
-
     # Model
     model = NeuralMaterialModel(cfg).to(device)
     opt = make_optimizer(model, cfg)
     scheduler = make_scheduler(opt, cfg)
 
     best_val = float("inf")
-    best_ckpt_path: Optional[str] = None
+    best_model_state: Optional[Dict[str, torch.Tensor]] = None
+    best_metrics: Optional[Dict[str, float]] = None
     best_epoch: Optional[int] = None
     global_step = 0
 
+    # Gene validation data only once, and keep as single holdout set for all epochs
+    data_generator = DataGenerator(sampleCount=cfg.validation_n)
+    validation_batch = data_generator.generate_data(random.randint(0, 1000000)).copy()
+    data_generator.release_data
+    validation_tensor = tensorize_batch(data_to_dict(validation_batch))
+
+    data_generator = DataGenerator(sampleCount=cfg.training_n)
     for epoch in range(cfg.max_epochs):
         maybe_freeze_parts(model, cfg, epoch=epoch, global_step=global_step)
 
-        data_batch = data_generator.generate_data(random.randint(0, 1_000_000))
-        training_batch = data_batch[cfg.validation_n :]
-        val_batch = data_batch[: cfg.validation_n]
-
-        train_dict = data_to_dict(training_batch)
-        val_dict = data_to_dict(val_batch)
-        train_ds.update(train_dict)
-        val_ds.update(val_dict)
+        data_batch = data_generator.generate_data(random.randint(0, 1000000))
+        training_batch = data_batch
+        training_tensor = tensorize_batch(data_to_dict(training_batch))
 
         train_metrics, global_step, opt, scheduler = train_one_epoch(
             model,
-            train_loader,
+            training_tensor,
             opt,
             scheduler,
             cfg,
@@ -1049,30 +977,36 @@ def main():
         metrics = dict(train_metrics)
         metrics["global_step"] = global_step
 
-        if val_loader is not None:
-            val_metrics = validate(model, val_loader, cfg, epoch)
-            metrics.update(val_metrics)
-            if metrics["val_loss"] < best_val:
-                best_val = metrics["val_loss"]
-                best_epoch = epoch
-                best_ckpt_path = save_checkpoint(
-                    model, opt, scheduler, cfg, epoch, metrics
-                )
-                print(
-                    f"[best] epoch {epoch:03d} val_loss={best_val:.6f} checkpoint={best_ckpt_path}"
-                )
-        else:
-            if (epoch + 1) % cfg.save_every == 0 or epoch == cfg.max_epochs - 1:
-                save_checkpoint(model, opt, scheduler, cfg, epoch, metrics)
+        val_metrics = validate(model, validation_tensor, cfg, epoch)
+        metrics.update(val_metrics)
+        if metrics["val_loss"] < best_val:
+            best_val = metrics["val_loss"]
+            best_epoch = epoch
+            best_metrics = dict(metrics)
+            best_model_state = snapshot_model_state(model)
+            print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
 
         data_generator.release_data()
 
-    if val_loader is not None and best_ckpt_path is not None:
-        payload = load_model_weights_from_checkpoint(model, best_ckpt_path, device)
+    if (
+        best_model_state is not None
+        and best_epoch is not None
+        and best_metrics is not None
+    ):
+        model.load_state_dict(best_model_state)
+        best_ckpt_path = save_checkpoint(
+            model,
+            None,
+            None,
+            cfg,
+            best_epoch,
+            best_metrics,
+            filename="best_checkpoint.pt",
+        )
         print(
-            f"[export] Reloaded best validation checkpoint from epoch "
-            f"{payload.get('epoch', best_epoch):03d} with val_loss="
-            f"{payload.get('metrics', {}).get('val_loss', float('nan')):.6f}"
+            f"[export] Restored best validation state from epoch "
+            f"{best_epoch:03d} with val_loss={best_metrics.get('val_loss', float('nan')):.6f} "
+            f"and saved {best_ckpt_path}"
         )
 
     export_latent_texture(model, cfg)
