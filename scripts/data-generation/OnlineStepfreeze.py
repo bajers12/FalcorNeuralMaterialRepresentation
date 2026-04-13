@@ -53,6 +53,7 @@ from torch.utils.data import Dataset, DataLoader
 # Config
 # =============================================================================
 
+
 @dataclass
 class TrainConfig:
     # Data
@@ -73,13 +74,15 @@ class TrainConfig:
     # Output parameterization
     exp_offset: float = 3.0
     clamp_min_target: float = 0.0  # safety clamp on y before log
-    log_eps: float = 1e-6          # y' = clamp(y, eps) for log
+    log_eps: float = 1e-6  # y' = clamp(y, eps) for log
+    log_eps_mask_threshold: float = 1e-4
 
     # Optimization
     device: str = "cuda"
     seed: int = 1337
-    batch_size: int = 64000
-    validation_size: int = math.ceil(0.1 * 64000)
+    training_n: int = 64000  # total samples generated per outer epoch
+    validation_n: int = math.ceil(0.1 * 64000)
+    batchsize: int = 64
     max_epochs: int = 50
 
     lr: float = 1e-3
@@ -103,29 +106,33 @@ class TrainConfig:
     freeze_decoder_after_step: Optional[int] = None
 
     # Normals support
-    use_normals: bool = False  # if True, expects batch['normal'] and converts wi/wo -> local
+    use_normals: bool = (
+        False  # if True, expects batch['normal'] and converts wi/wo -> local
+    )
 
 
 # =============================================================================
 # Dataset
 # =============================================================================
 
+
 class StreamingDataset(Dataset):
-    def __init__(self, batchsize: int):
+    def __init__(self, n: int):
         self.uv = None
         self.wo = None
         self.wi = None
-        self.y  = None
-        self.batchsize = batchsize
+        self.y = None
+        self._n = n  # used as sentinel before first update()
 
     def update(self, data_dict):
         self.uv = torch.from_numpy(data_dict["uv"]).float()
         self.wo = torch.from_numpy(data_dict["wo"]).float()
         self.wi = torch.from_numpy(data_dict["wi"]).float()
-        self.y  = torch.from_numpy(data_dict["y"]).float()
+        self.y = torch.from_numpy(data_dict["y"]).float()
+        self._n = self.uv.shape[0]
 
     def __len__(self):
-        return self.batchsize
+        return self._n
 
     def __getitem__(self, idx):
         return {
@@ -135,14 +142,14 @@ class StreamingDataset(Dataset):
             "y": self.y[idx],
         }
 
-def make_dataloader(ds: Dataset, cfg: TrainConfig, size: int, shuffle: bool) -> DataLoader:
-    """
-    Creates a DataLoader. pin_memory is only useful when training on CUDA.
-    """
-    use_pin = (cfg.device == "cuda")
+
+def make_dataloader(
+    ds: Dataset, cfg: TrainConfig, batch_size: int, shuffle: bool
+) -> DataLoader:
+    use_pin = cfg.device == "cuda"
     return DataLoader(
         ds,
-        batch_size=size,
+        batch_size=batch_size,
         shuffle=shuffle,
         num_workers=cfg.num_workers,
         pin_memory=use_pin,
@@ -154,6 +161,7 @@ def make_dataloader(ds: Dataset, cfg: TrainConfig, size: int, shuffle: bool) -> 
 # =============================================================================
 # Model
 # =============================================================================
+
 
 class LatentTexture(nn.Module):
     """
@@ -180,12 +188,12 @@ class LatentTexture(nn.Module):
         """
         grid = (uv * 2.0 - 1.0).view(1, -1, 1, 2)  # [1,B,1,2]
         z = F.grid_sample(
-            self.Z,                                # [1,C,H,W]
+            self.Z,  # [1,C,H,W]
             grid,
             mode="bilinear",
             padding_mode="border",
             align_corners=False,
-        )                                          # [1,C,B,1]
+        )  # [1,C,B,1]
         return z.squeeze(0).squeeze(-1).transpose(0, 1).contiguous()  # [B,C]
 
 
@@ -230,18 +238,30 @@ class Decoder(nn.Module):
     def _safe_normalize(v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
         return v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
 
-    def _predict_frames(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _predict_frames(
+        self, z: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        z [B,C] -> T,B,N each [B,F,3]
+        z [B,C] -> T, Bv, N  each [B, num_frames, 3]
         """
         Bsz = z.shape[0]
         ft = self.frame_linear(z).view(Bsz, self.num_frames, 6)
-        N = self._safe_normalize(ft[..., 0:3])
-        T = self._safe_normalize(ft[..., 3:6])
-        Bv = self._safe_normalize(torch.cross(N, T, dim=-1))
+
+        N = self._safe_normalize(ft[..., 0:3])  # [B, F, 3]
+
+        # Re-orthogonalise T against N (Gram-Schmidt), then normalise
+        T_raw = ft[..., 3:6]  # [B, F, 3]
+        T_raw = T_raw - (T_raw * N).sum(dim=-1, keepdim=True) * N
+        T = self._safe_normalize(T_raw)  # [B, F, 3]
+
+        # Bitangent: N × T is already unit length because N and T are orthonormal
+        Bv = torch.cross(N, T, dim=-1)  # [B, F, 3]
+
         return T, Bv, N
 
-    def forward_raw(self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor) -> torch.Tensor:
+    def forward_raw(
+        self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> torch.Tensor:
         """
         z:  [B,C]
         wi: [B,3] (local)
@@ -267,11 +287,15 @@ class Decoder(nn.Module):
             dim=-1,
         )
 
-        dir_feats = torch.cat([wi_f, wo_f], dim=-1).view(z.shape[0], 6 * self.num_frames)
+        dir_feats = torch.cat([wi_f, wo_f], dim=-1).view(
+            z.shape[0], 6 * self.num_frames
+        )
         x = torch.cat([z, dir_feats], dim=-1)
         return self.mlp(x)
 
-    def forward(self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> torch.Tensor:
         raw = self.forward_raw(z, wi, wo)
         return torch.exp(raw - self.exp_offset)
 
@@ -296,13 +320,17 @@ class NeuralMaterialModel(nn.Module):
             exp_offset=cfg.exp_offset,
         )
 
-    def forward_with_raw(self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward_with_raw(
+        self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         z = self.latent.sample(uv)
         raw = self.decoder.forward_raw(z, wi, wo)
         y_hat = torch.exp(raw - self.decoder.exp_offset)
         return y_hat, raw
 
-    def forward(self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> torch.Tensor:
         y_hat, _raw = self.forward_with_raw(uv, wi, wo)
         return y_hat
 
@@ -310,6 +338,7 @@ class NeuralMaterialModel(nn.Module):
 # =============================================================================
 # Normals -> local frame helpers
 # =============================================================================
+
 
 def build_tbn(n: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -322,7 +351,9 @@ def build_tbn(n: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor
 
     # Choose an "up" that is not parallel to n.
     up = torch.tensor([0.0, 1.0, 0.0], device=n.device, dtype=n.dtype).expand_as(n_unit)
-    alt = torch.tensor([1.0, 0.0, 0.0], device=n.device, dtype=n.dtype).expand_as(n_unit)
+    alt = torch.tensor([1.0, 0.0, 0.0], device=n.device, dtype=n.dtype).expand_as(
+        n_unit
+    )
     use_alt = (n_unit[:, 1].abs() > 0.99).unsqueeze(1)
     up = torch.where(use_alt, alt, up)
 
@@ -332,7 +363,9 @@ def build_tbn(n: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor
     return t, b, n_unit
 
 
-def to_local(v_world: torch.Tensor, t: torch.Tensor, b: torch.Tensor, n: torch.Tensor) -> torch.Tensor:
+def to_local(
+    v_world: torch.Tensor, t: torch.Tensor, b: torch.Tensor, n: torch.Tensor
+) -> torch.Tensor:
     """
     World->local using basis (t,b,n) as rows via dot products.
 
@@ -353,13 +386,24 @@ def to_local(v_world: torch.Tensor, t: torch.Tensor, b: torch.Tensor, n: torch.T
 # Loss / Metrics
 # =============================================================================
 
-def log_l1_loss(y_hat: torch.Tensor, y: torch.Tensor, eps: float) -> torch.Tensor:
+
+def log_l1_loss(
+    y_hat: torch.Tensor, y: torch.Tensor, eps: float, mask_threshold: float = 1e-4
+) -> torch.Tensor:
     """
     L1 loss in log space:
       mean(|log(y_hat+eps) - log(y+eps)|)
     """
-    y_hat_c = y_hat.clamp_min(eps)
-    y_c = y.clamp_min(eps)
+    # Build per-sample mask: keep samples that have at least one significant channel
+    valid = y.amax(dim=-1) >= mask_threshold  # [B]
+    if valid.any():
+        y_hat_c = y_hat[valid].clamp_min(eps)
+        y_c = y[valid].clamp_min(eps)
+    else:
+        # Fallback: use everything (avoids zero-element mean on pathological batches)
+        y_hat_c = y_hat.clamp_min(eps)
+        y_c = y.clamp_min(eps)
+
     return (torch.log(y_hat_c) - torch.log(y_c)).abs().mean()
 
 
@@ -386,6 +430,7 @@ def compute_raw_stats(raw: torch.Tensor) -> Dict[str, float]:
 # Training utilities
 # =============================================================================
 
+
 def set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -409,24 +454,33 @@ def _decoder_lr_min(cfg: TrainConfig) -> float:
     return cfg.lr_min if cfg.lr_decoder is None else min(cfg.lr_min, _decoder_lr(cfg))
 
 
-def make_optimizer(model: NeuralMaterialModel, cfg: TrainConfig) -> torch.optim.Optimizer:
+def make_optimizer(
+    model: NeuralMaterialModel, cfg: TrainConfig
+) -> torch.optim.Optimizer:
     param_groups = []
     if cfg.train_latent_texture:
         latent_params = [p for p in model.latent.parameters() if p.requires_grad]
         if latent_params:
-            param_groups.append({"params": latent_params, "lr": _latent_lr(cfg), "name": "latent"})
+            param_groups.append(
+                {"params": latent_params, "lr": _latent_lr(cfg), "name": "latent"}
+            )
     if cfg.train_decoder:
         decoder_params = [p for p in model.decoder.parameters() if p.requires_grad]
         if decoder_params:
-            param_groups.append({"params": decoder_params, "lr": _decoder_lr(cfg), "name": "decoder"})
+            param_groups.append(
+                {"params": decoder_params, "lr": _decoder_lr(cfg), "name": "decoder"}
+            )
     if not param_groups:
-        raise ValueError("Nothing to train: both train_latent_texture and train_decoder are False or all params are frozen")
+        raise ValueError(
+            "Nothing to train: both train_latent_texture and train_decoder are False or all params are frozen"
+        )
     return torch.optim.Adam(param_groups, weight_decay=cfg.weight_decay)
 
 
 def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
     """
-    Cosine LR decay from the per-group base LR to the per-group minimum over cfg.max_epochs (epoch-stepped).
+    Cosine LR decay from the per-group base LR to the per-group minimum over
+    cfg.max_epochs (epoch-stepped).
     """
     base_by_name = {"latent": _latent_lr(cfg), "decoder": _decoder_lr(cfg)}
     min_by_name = {"latent": _latent_lr_min(cfg), "decoder": _decoder_lr_min(cfg)}
@@ -438,7 +492,7 @@ def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
         def lr_lambda(epoch: int):
             if cfg.max_epochs <= 1:
                 return min_lr / max(base, 1e-12)
-            t = epoch / (cfg.max_epochs - 1)
+            t = min(epoch / max(cfg.max_epochs - 1, 1), 1.0)
             scale = 0.5 * (1.0 + math.cos(math.pi * t))
             lr_now = min_lr + (base - min_lr) * scale
             return lr_now / max(base, 1e-12)
@@ -449,44 +503,86 @@ def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
     return torch.optim.lr_scheduler.LambdaLR(opt, lambdas)
 
 
-def maybe_freeze_parts(model: NeuralMaterialModel, cfg: TrainConfig, *, epoch: Optional[int] = None, global_step: Optional[int] = None) -> None:
+def maybe_freeze_parts(
+    model: NeuralMaterialModel,
+    cfg: TrainConfig,
+    *,
+    epoch: Optional[int] = None,
+    global_step: Optional[int] = None,
+) -> None:
     if epoch is not None:
-        if cfg.freeze_latent_after_epoch is not None and epoch >= cfg.freeze_latent_after_epoch:
+        if (
+            cfg.freeze_latent_after_epoch is not None
+            and epoch >= cfg.freeze_latent_after_epoch
+        ):
             for p in model.latent.parameters():
                 p.requires_grad_(False)
-        if cfg.freeze_decoder_after_epoch is not None and epoch >= cfg.freeze_decoder_after_epoch:
+        if (
+            cfg.freeze_decoder_after_epoch is not None
+            and epoch >= cfg.freeze_decoder_after_epoch
+        ):
             for p in model.decoder.parameters():
                 p.requires_grad_(False)
 
     if global_step is not None:
-        if cfg.freeze_latent_after_step is not None and global_step >= cfg.freeze_latent_after_step:
+        if (
+            cfg.freeze_latent_after_step is not None
+            and global_step >= cfg.freeze_latent_after_step
+        ):
             for p in model.latent.parameters():
                 p.requires_grad_(False)
-        if cfg.freeze_decoder_after_step is not None and global_step >= cfg.freeze_decoder_after_step:
+        if (
+            cfg.freeze_decoder_after_step is not None
+            and global_step >= cfg.freeze_decoder_after_step
+        ):
             for p in model.decoder.parameters():
                 p.requires_grad_(False)
 
 
-def maybe_rebuild_optimizer_and_scheduler(model: NeuralMaterialModel, opt: torch.optim.Optimizer, scheduler, cfg: TrainConfig):
+def maybe_rebuild_optimizer_and_scheduler(
+    model: NeuralMaterialModel,
+    opt: torch.optim.Optimizer,
+    scheduler,
+    cfg: TrainConfig,
+):
     active_group_names = []
-    if cfg.train_latent_texture and any(p.requires_grad for p in model.latent.parameters()):
+    if cfg.train_latent_texture and any(
+        p.requires_grad for p in model.latent.parameters()
+    ):
         active_group_names.append("latent")
     if cfg.train_decoder and any(p.requires_grad for p in model.decoder.parameters()):
         active_group_names.append("decoder")
 
     current_group_names = [pg.get("name") for pg in opt.param_groups]
-    if active_group_names != current_group_names:
-        new_opt = make_optimizer(model, cfg)
-        new_scheduler = make_scheduler(new_opt, cfg)
-        if scheduler is not None and hasattr(scheduler, "last_epoch"):
-            new_scheduler.last_epoch = scheduler.last_epoch
-        print(f"[train] rebuilt optimizer groups: {current_group_names} -> {active_group_names}")
-        return new_opt, new_scheduler
+    if active_group_names == current_group_names:
+        return opt, scheduler
 
-    return opt, scheduler
+    # Build a mapping from parameter data_ptr -> old state so we can transfer moments
+    old_state = opt.state  # dict keyed by parameter tensor
+
+    new_opt = make_optimizer(model, cfg)
+
+    for pg in new_opt.param_groups:
+        for p in pg["params"]:
+            if p in old_state and len(old_state[p]) > 0:
+                new_opt.state[p] = {
+                    k: v.clone() if isinstance(v, torch.Tensor) else v
+                    for k, v in old_state[p].items()
+                }
+
+    new_scheduler = make_scheduler(new_opt, cfg)
+    if scheduler is not None and hasattr(scheduler, "last_epoch"):
+        new_scheduler.last_epoch = scheduler.last_epoch
+
+    print(
+        f"[train] rebuilt optimizer groups: {current_group_names} -> {active_group_names}"
+    )
+    return new_opt, new_scheduler
 
 
-def _maybe_transform_dirs_with_normals(batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+def _maybe_transform_dirs_with_normals(
+    batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     If cfg.use_normals:
       - expects batch['normal']
@@ -501,7 +597,9 @@ def _maybe_transform_dirs_with_normals(batch: Dict[str, torch.Tensor], cfg: Trai
         return wi, wo
 
     if "normal" not in batch:
-        raise ValueError("You passed --use_normals but your dataset batch has no 'normal' key.")
+        raise ValueError(
+            "You passed --use_normals but your dataset batch has no 'normal' key."
+        )
 
     n = batch["normal"].to(device, non_blocking=True)
     t, b, n_unit = build_tbn(n)
@@ -536,9 +634,13 @@ def train_one_epoch(
 
     for step, batch in enumerate(loader):
         maybe_freeze_parts(model, cfg, global_step=global_step)
-        opt, scheduler = maybe_rebuild_optimizer_and_scheduler(model, opt, scheduler, cfg)
+        opt, scheduler = maybe_rebuild_optimizer_and_scheduler(
+            model, opt, scheduler, cfg
+        )
 
-        decoder_now_frozen = all(not p.requires_grad for p in model.decoder.parameters())
+        decoder_now_frozen = all(
+            not p.requires_grad for p in model.decoder.parameters()
+        )
         if decoder_now_frozen and not decoder_frozen_logged:
             print(f"[train] freezing decoder at global_step={global_step}")
             decoder_frozen_logged = True
@@ -557,7 +659,9 @@ def train_one_epoch(
             y = y.clamp_min(cfg.clamp_min_target)
 
         y_hat, raw = model.forward_with_raw(uv, wi, wo)
-        loss = log_l1_loss(y_hat, y, cfg.log_eps)
+        loss = log_l1_loss(
+            y_hat, y, cfg.log_eps, mask_threshold=cfg.log_eps_mask_threshold
+        )
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -582,7 +686,9 @@ def train_one_epoch(
 
         if (step + 1) % cfg.print_every_steps == 0:
             dt = time.time() - t0
-            lr_summary = ", ".join([f"{pg.get('name','group')}={pg['lr']:.2e}" for pg in opt.param_groups])
+            lr_summary = ", ".join(
+                [f"{pg.get('name','group')}={pg['lr']:.2e}" for pg in opt.param_groups]
+            )
             print(
                 f"[train] epoch {epoch:03d} step {step+1:05d} global_step={global_step:07d} "
                 f"loss={running_loss/n_batches:.6f} mae={running_mae/n_batches:.6f} "
@@ -591,18 +697,25 @@ def train_one_epoch(
                 f"lr[{lr_summary}] time={dt:.1f}s"
             )
 
-    return {
-        "loss": running_loss / max(1, n_batches),
-        "mae": running_mae / max(1, n_batches),
-        "yhat_mean": running_yhat_mean / max(1, n_batches),
-        "y_mean": running_y_mean / max(1, n_batches),
-        "raw_mean": running_raw_mean / max(1, n_batches),
-        "raw_std": running_raw_std / max(1, n_batches),
-    }, global_step, opt, scheduler
+    return (
+        {
+            "loss": running_loss / max(1, n_batches),
+            "mae": running_mae / max(1, n_batches),
+            "yhat_mean": running_yhat_mean / max(1, n_batches),
+            "y_mean": running_y_mean / max(1, n_batches),
+            "raw_mean": running_raw_mean / max(1, n_batches),
+            "raw_std": running_raw_std / max(1, n_batches),
+        },
+        global_step,
+        opt,
+        scheduler,
+    )
 
 
 @torch.no_grad()
-def validate(model: NeuralMaterialModel, loader: DataLoader, cfg: TrainConfig, epoch: int) -> Dict[str, float]:
+def validate(
+    model: NeuralMaterialModel, loader: DataLoader, cfg: TrainConfig, epoch: int
+) -> Dict[str, float]:
     model.eval()
     device = torch.device(cfg.device)
 
@@ -656,9 +769,17 @@ def validate(model: NeuralMaterialModel, loader: DataLoader, cfg: TrainConfig, e
 # Export / Checkpoints
 # =============================================================================
 
-def save_checkpoint(model: NeuralMaterialModel, opt, scheduler, cfg: TrainConfig, epoch: int, metrics: Dict[str, float]) -> str:
+
+def save_checkpoint(
+    model: NeuralMaterialModel,
+    opt,
+    scheduler,
+    cfg: TrainConfig,
+    epoch: int,
+    metrics: Dict[str, float],
+) -> str:
     os.makedirs(cfg.out_dir, exist_ok=True)
-    ckpt_path = os.path.join(cfg.out_dir, f"checkpoint_epoch_{epoch:03d}.pt")
+    ckpt_path = os.path.join(cfg.out_dir, f"checkpoint_epoch.pt")
     payload = {
         "epoch": epoch,
         "config": asdict(cfg),
@@ -671,18 +792,22 @@ def save_checkpoint(model: NeuralMaterialModel, opt, scheduler, cfg: TrainConfig
     return ckpt_path
 
 
-def load_model_weights_from_checkpoint(model: NeuralMaterialModel, ckpt_path: str, device: torch.device) -> Dict:
+def load_model_weights_from_checkpoint(
+    model: NeuralMaterialModel, ckpt_path: str, device: torch.device
+) -> Dict:
     payload = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(payload["model"])
     return payload
-
 
 
 def export_latent_texture(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
 
     Z = model.latent.Z.detach().cpu()  # [1,C,H,W]
-    torch.save({"Z": Z, "shape": (cfg.tex_h, cfg.tex_w, cfg.latent_ch)}, os.path.join(cfg.out_dir, "latent_texture.pt"))
+    torch.save(
+        {"Z": Z, "shape": (cfg.tex_h, cfg.tex_w, cfg.latent_ch)},
+        os.path.join(cfg.out_dir, "latent_texture.pt"),
+    )
 
     Z_np = Z.numpy()
     if cfg.latent_ch == 8:
@@ -727,6 +852,7 @@ def save_config(cfg: TrainConfig) -> None:
 # CLI
 # =============================================================================
 
+
 def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser()
 
@@ -745,6 +871,7 @@ def parse_args() -> TrainConfig:
 
     p.add_argument("--batch_size", type=int, default=64000)
     p.add_argument("--validation_size", type=int, default=math.ceil(0.1 * 64000))
+    p.add_argument("--steps_per_epoch", type=int, default=10)
     p.add_argument("--max_epochs", type=int, default=50)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
@@ -754,6 +881,7 @@ def parse_args() -> TrainConfig:
     p.add_argument("--grad_clip_norm", type=float, default=None)
 
     p.add_argument("--log_eps", type=float, default=1e-6)
+    p.add_argument("--log_eps_mask_threshold", type=float, default=1e-4)
     p.add_argument("--clamp_min_target", type=float, default=0.0)
 
     p.add_argument("--num_workers", type=int, default=1)
@@ -770,8 +898,11 @@ def parse_args() -> TrainConfig:
     p.add_argument("--freeze_latent_after_step", type=int, default=None)
     p.add_argument("--freeze_decoder_after_step", type=int, default=None)
 
-    # normals flag
-    p.add_argument("--use_normals", action="store_true", help="Use per-sample normals to transform wi/wo into local frame.")
+    p.add_argument(
+        "--use_normals",
+        action="store_true",
+        help="Use per-sample normals to transform wi/wo into local frame.",
+    )
 
     args = p.parse_args()
 
@@ -789,8 +920,9 @@ def parse_args() -> TrainConfig:
     cfg.mlp_depth = args.mlp_depth
     cfg.exp_offset = args.exp_offset
 
-    cfg.batch_size = args.batch_size
-    cfg.validation_size = args.validation_size
+    cfg.training_n = args.batch_size
+    cfg.validation_n = args.validation_size
+    cfg.batchsize = args.steps_per_epoch
     cfg.max_epochs = args.max_epochs
     cfg.lr = args.lr
     cfg.lr_min = args.lr_min
@@ -800,6 +932,7 @@ def parse_args() -> TrainConfig:
     cfg.grad_clip_norm = args.grad_clip_norm
 
     cfg.log_eps = args.log_eps
+    cfg.log_eps_mask_threshold = args.log_eps_mask_threshold
     cfg.clamp_min_target = args.clamp_min_target
 
     cfg.num_workers = args.num_workers
@@ -825,38 +958,36 @@ def parse_args() -> TrainConfig:
 
     return cfg
 
-def data_to_dict(data: np.array):
+
+def data_to_dict(data: np.ndarray):
     uv = data[:, 0:2]
     wo = data[:, 2:5]
     wi = data[:, 5:8]
-    f  = data[:, 8:11]
-    spec = data[:, 11:14]
-    albedo = data[:, 14:17]
-    normal = data[:, 17:20]
-    roughness = data[:, 20]
-    pdf = data[:, 21]
+    f = data[:, 8:11]
+    # spec   = data[:, 11:14]
+    # albedo = data[:, 14:17]
+    # normal = data[:, 17:20]
+    # roughness = data[:, 20]
+    # pdf    = data[:, 21]
 
     return {
         "uv": uv,
         "wo": wo,
         "wi": wi,
         "y": f,
-        #"spec": spec,
-        #"albedo": albedo,
-        #"normal": normal,
-        #"roughness": roughness,
-        #"pdf": pdf
     }
+
 
 # =============================================================================
 # Main
 # =============================================================================
 
+
 def main():
     cfg = parse_args()
     set_seed(cfg.seed)
 
-    data_generator = DataGenerator(sampleCount=cfg.batch_size + cfg.validation_size)
+    data_generator = DataGenerator(sampleCount=cfg.training_n + cfg.validation_n)
 
     # Device
     if cfg.device == "cuda" and not torch.cuda.is_available():
@@ -869,12 +1000,18 @@ def main():
     save_config(cfg)
     print("Config:", json.dumps(asdict(cfg), indent=2))
 
-    # Data
-    train_ds = StreamingDataset(batchsize=cfg.batch_size)
-    val_ds = StreamingDataset(batchsize=cfg.validation_size)
-    train_loader = make_dataloader(train_ds, cfg, size=cfg.batch_size, shuffle=False)
-    val_loader = make_dataloader(val_ds, cfg, size=cfg.validation_size,shuffle=False)
+    train_n = cfg.training_n
+    sub_batch_size = max(1, train_n // cfg.batchsize)
 
+    train_ds = StreamingDataset(n=train_n)
+    val_ds = StreamingDataset(n=cfg.validation_n)
+
+    train_loader = make_dataloader(
+        train_ds, cfg, batch_size=sub_batch_size, shuffle=True
+    )
+    val_loader = make_dataloader(
+        val_ds, cfg, batch_size=cfg.validation_n, shuffle=False
+    )
 
     # Model
     model = NeuralMaterialModel(cfg).to(device)
@@ -889,9 +1026,9 @@ def main():
     for epoch in range(cfg.max_epochs):
         maybe_freeze_parts(model, cfg, epoch=epoch, global_step=global_step)
 
-        data_batch = data_generator.generate_data(random.randint(0, 1000000 ))
-        training_batch = data_batch[cfg.validation_size:]
-        val_batch = data_batch[:cfg.validation_size]
+        data_batch = data_generator.generate_data(random.randint(0, 1_000_000))
+        training_batch = data_batch[cfg.validation_n :]
+        val_batch = data_batch[: cfg.validation_n]
 
         train_dict = data_to_dict(training_batch)
         val_dict = data_to_dict(val_batch)
@@ -899,10 +1036,15 @@ def main():
         val_ds.update(val_dict)
 
         train_metrics, global_step, opt, scheduler = train_one_epoch(
-            model, train_loader, opt, scheduler, cfg, epoch, global_step_start=global_step
+            model,
+            train_loader,
+            opt,
+            scheduler,
+            cfg,
+            epoch,
+            global_step_start=global_step,
         )
 
-        # Step scheduler AFTER training epoch
         scheduler.step()
 
         metrics = dict(train_metrics)
@@ -914,8 +1056,12 @@ def main():
             if metrics["val_loss"] < best_val:
                 best_val = metrics["val_loss"]
                 best_epoch = epoch
-                best_ckpt_path = save_checkpoint(model, opt, scheduler, cfg, epoch, metrics)
-                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} checkpoint={best_ckpt_path}")
+                best_ckpt_path = save_checkpoint(
+                    model, opt, scheduler, cfg, epoch, metrics
+                )
+                print(
+                    f"[best] epoch {epoch:03d} val_loss={best_val:.6f} checkpoint={best_ckpt_path}"
+                )
         else:
             if (epoch + 1) % cfg.save_every == 0 or epoch == cfg.max_epochs - 1:
                 save_checkpoint(model, opt, scheduler, cfg, epoch, metrics)
