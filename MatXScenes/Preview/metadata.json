@@ -1,0 +1,35 @@
+{
+  "width": 1024,
+  "height": 1024,
+  "latent_dim": 8,
+  "num_frames": 2,
+  "exp_offset": 3.0,
+  "apply_exp": true,
+  "decoder_layout": {
+    "frame_linear.weight": [
+      12,
+      8
+    ],
+    "mlp.0.weight": [
+      32,
+      20
+    ],
+    "mlp.0.bias": [
+      32
+    ],
+    "mlp.2.weight": [
+      32,
+      32
+    ],
+    "mlp.2.bias": [
+      32
+    ],
+    "mlp.4.weight": [
+      3,
+      32
+    ],
+    "mlp.4.bias": [
+      3
+    ]
+  }
+}

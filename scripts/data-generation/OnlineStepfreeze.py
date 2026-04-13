@@ -82,7 +82,7 @@ class TrainConfig:
     seed: int = 1337
     training_n: int = 64000  # total samples generated per outer epoch
     validation_n: int = math.ceil(0.1 * 64000)
-    batchsize: int = 64
+    batch_size: int = 6400
     max_epochs: int = 50
 
     lr: float = 1e-3
@@ -860,8 +860,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=1337)
 
-    p.add_argument("--tex_h", type=int, default=512)
-    p.add_argument("--tex_w", type=int, default=512)
+    p.add_argument("--tex_h", type=int, default=1024)
+    p.add_argument("--tex_w", type=int, default=1024)
     p.add_argument("--latent_ch", type=int, default=8)
 
     p.add_argument("--num_frames", type=int, default=2)
@@ -869,10 +869,10 @@ def parse_args() -> TrainConfig:
     p.add_argument("--mlp_depth", type=int, default=2)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
-    p.add_argument("--batch_size", type=int, default=64000)
-    p.add_argument("--validation_size", type=int, default=math.ceil(0.1 * 64000))
-    p.add_argument("--steps_per_epoch", type=int, default=10)
-    p.add_argument("--max_epochs", type=int, default=50)
+    p.add_argument("--training_n", type=int, default=64000)
+    p.add_argument("--validation_size", type=int, default=6400)
+    p.add_argument("--batch_size", type=int, default=6400)
+    p.add_argument("--max_epochs", type=int, default=1000)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
     p.add_argument("--lr_latent", type=float, default=None)
@@ -884,8 +884,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--log_eps_mask_threshold", type=float, default=1e-4)
     p.add_argument("--clamp_min_target", type=float, default=0.0)
 
-    p.add_argument("--num_workers", type=int, default=1)
-    p.add_argument("--save_every", type=int, default=5)
+    p.add_argument("--num_workers", type=int, default=0)
+    p.add_argument("--save_every", type=int, default=100)
     p.add_argument("--print_every_steps", type=int, default=50)
 
     p.add_argument("--train_latent_texture", action="store_true")
@@ -920,9 +920,9 @@ def parse_args() -> TrainConfig:
     cfg.mlp_depth = args.mlp_depth
     cfg.exp_offset = args.exp_offset
 
-    cfg.training_n = args.batch_size
+    cfg.training_n = args.training_n
     cfg.validation_n = args.validation_size
-    cfg.batchsize = args.steps_per_epoch
+    cfg.batch_size = args.batch_size
     cfg.max_epochs = args.max_epochs
     cfg.lr = args.lr
     cfg.lr_min = args.lr_min
@@ -1001,13 +1001,12 @@ def main():
     print("Config:", json.dumps(asdict(cfg), indent=2))
 
     train_n = cfg.training_n
-    sub_batch_size = max(1, train_n // cfg.batchsize)
 
     train_ds = StreamingDataset(n=train_n)
     val_ds = StreamingDataset(n=cfg.validation_n)
 
     train_loader = make_dataloader(
-        train_ds, cfg, batch_size=sub_batch_size, shuffle=True
+        train_ds, cfg, batch_size=cfg.batch_size, shuffle=True
     )
     val_loader = make_dataloader(
         val_ds, cfg, batch_size=cfg.validation_n, shuffle=False
