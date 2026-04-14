@@ -9,18 +9,20 @@ import Utils.Sampling.UniformSampleGenerator;
 struct BsdfSampleData
 {
     float2 uv;
-    float4 wo;
-    float4 wi;
-    float4 f;
-    float4 specular;
-    float4 albedo;
-    float4 roughness;
-    float4 normal;
+    float3 wo;
+    float3 wi;
+    float3 f;
+    float3 specular;
+    float3 albedo;
+    float3 normal;
+    float roughness;
+    float pdf;
 };
 
 RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
-uint gSampleCount;
-uint gMaterialId = 0;
+uniform uint gSampleCount;
+uniform uint gMaterialId;
+uniform uint gRandomSeedOffset;
 
 uint hash(uint x)
 {
@@ -40,53 +42,57 @@ float rand(inout uint seed)
     return float(seed) / 4294967296.0;
 }
 
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void main(uint3 tid : SV_DispatchThreadID)
+[numthreads(1, 1, 1)]
+void main(uint3 threadId : SV_DispatchThreadID)
 {
-    uint idx = tid.x;
-    if (idx >= gSampleCount) return;
+    uint idx = threadId.x;
 
     //Sample UV and view direction uniformly
-    uint seed = idx * 9781 + 6271;
+    uint seed = idx * 9781 + 6271 + gRandomSeedOffset;
 
     float2 uv = float2(rand(seed), rand(seed));
 
     float3 wo = sample_hemisphere(float2(rand(seed), rand(seed)));
     float3 wi = sample_hemisphere(float2(rand(seed), rand(seed)));
 
-    //Construct Shadign data and samplers
-    UniformSampleGenerator sg = UniformSampleGenerator(1, 0);
+    // Construct Shadign data and samplers
+    UniformSampleGenerator sg = UniformSampleGenerator(idx, 0);
     let lod = ExplicitLodTextureSampler(0.f);
 
     //Shading data should be prepared based on uniformly sampled UV value, used to reconstruct w_o
     ShadingData sd = {};
     sd.posW = float3(0.0, 0.0, 0.0);
-    sd.V = wi;
+    sd.V = wi;  // V is the view direction (outgoing)
+    sd.uv = uv;
     sd.frame = ShadingFrame::createIdentity();
     sd.faceN = sd.frame.N;
-    sd.uv = uv;
+    sd.frontFacing = true;
 
-    // Get material Instance
-    // As we do not actually pass trace and evaluate abstractly, independent of geometry, we cannot use the straight getMaterialInstance method
-    // Hopefully we can still get valid instance despite invalid world position
+    sd.mtl = gScene.materials.getMaterialHeader(gMaterialId);
     sd.materialID = gMaterialId;
+    sd.IoR = 1.f;
+
     let mi = gScene.materials.getMaterialInstance(sd, lod);
     BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
+    BSDFSample sample;
+    mi.sample(sd, sg, sample);
     float3 f = mi.eval(sd, wo, sg);
 
-    //Save results
+    // Save results
     BsdfSampleData data;
     data.uv = uv;
-    data.wi = float4(sd.V.x, sd.V.y, sd.V.z, 0);
-    data.wo = float4(wo.x, wo.y, wo.z, 0);
-    data.f = float4(f.x, f.y, f.z, 0);
+    data.wi = wi;  // incident direction
+    data.wo = wo;  // outgoing direction
+    data.f = f;
     data.albedo = props.diffuseReflectionAlbedo;
     data.specular = props.specularReflectionAlbedo;
-    data.roughness = props.roughness;
     data.normal = sd.faceN;
+    //Can also use normal after applied normal maps.
+    //data.normal = props.guideNormal;
+    data.roughness = props.roughness;
+    data.pdf = 0.0f;
 
     gSampleOutputBuffer[idx] = data;
 }

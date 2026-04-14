@@ -28,10 +28,25 @@
 #pragma once
 #include "Falcor.h"
 #include "RenderGraph/RenderPass.h"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <fstream>
+#include <filesystem>
+#include "Scene/Material/MaterialXGraphMaterial.h"
+#include <pybind11/numpy.h>
 
 using namespace Falcor;
+
+struct BsdfSampleData
+{
+    float2 uv;
+    float3 wo;
+    float3 wi;
+    float3 f;
+    float3 specular;
+    float3 albedo;
+    float3 normal;
+    float1 roughness;
+    float1 pdf;
+};
 
 class OnlineDataGenerationPass : public RenderPass
 {
@@ -49,17 +64,29 @@ public:
     virtual RenderPassReflection reflect(const CompileData& compileData) override;
     virtual void compile(RenderContext* pRenderContext, const CompileData& compileData) override {}
     virtual void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
+    pybind11::array getData();
+    void releaseData();
     virtual void renderUI(Gui::Widgets& widget) override;
     virtual void setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) override;
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
+    void generate();
+    void OnlineDataGenerationPass::setRandomSeedOffset(uint32_t offset);
+    static void registerBindings(pybind11::module& m);
 
 private:
+    void OnlineDataGenerationPass::parseProperties(const Properties& props);
+    void OnlineDataGenerationPass::setupProgram();
+
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;
     ref<Buffer> mpGpuSampleBuffer;
     ref<Buffer> mpReadbackBuffer;
     ref<Fence> mpReadbackFence;
-    uint32_t mTargetMaterialId;
     bool mbShouldGenerate;
+    bool mIsMapped;
+    uint32_t mRandomSeedOffset;
+    uint32_t mMaterialId;
+    uint32_t mSampleCount;
+    BsdfSampleData* mpMappedData;
 };

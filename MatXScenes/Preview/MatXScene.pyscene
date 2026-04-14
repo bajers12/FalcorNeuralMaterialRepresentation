@@ -1,22 +1,38 @@
-# Minimal sphere scene for MaterialX material preview.
+from pathlib import Path
 
-sceneBuilder.importScene('SmoothUVSphereSmooth.glb')
+def get_base_dir():
+    # Case 1: Normal Python script
+    if "__file__" in globals():
+        return Path(__file__).resolve().parent
+
+    # Case 2: Interactive (Jupyter, REPL, Falcor console, etc.)
+    return Path.cwd()
+
+base_dir = get_base_dir()
+
+# Build relative paths
+scene_path = base_dir / "SmoothUVSphereSmooth.glb"
+material_path = base_dir / "NG_Blue_Mosaic_Tiles_with_Gold.falcor_material.slang"
+manifest_path = base_dir / "NG_Blue_Mosaic_Tiles_with_Gold.materialx_manifest.json"
+envmap_path = base_dir / "20050806-03_hd.hdr"
+
+# Minimal sphere scene for MaterialX material preview.
+sceneBuilder.importScene(str(scene_path))
 
 # Create the generated MaterialX material.
 mtlxMat = sceneBuilder.createMaterialXGraphMaterial(
     'BlueMosaicMtlx',
-    r'C:\Users\s204795\FalcorNeuralMaterialRepresentation\MatXScenes\Preview\NG_Blue_Mosaic_Tiles_with_Gold.falcor_material.slang',
+    str(material_path),
     'NG_Blue_Mosaic_Tiles_with_Gold_GeneratedMtlxMaterial',
-    r'C:\Users\s204795\FalcorNeuralMaterialRepresentation\MatXScenes\Preview\NG_Blue_Mosaic_Tiles_with_Gold.materialx_manifest.json'
+    str(manifest_path)
 )
 
 # Replace the imported material.
-# Change 'NeuralPreviewMat' to the actual imported material name if needed.
 oldMat = sceneBuilder.getMaterial('NeuralMat')
 sceneBuilder.replaceMaterial(oldMat, mtlxMat)
 
 # Add environment map.
-envMap = EnvMap('20050806-03_hd.hdr')
+envMap = EnvMap(str(envmap_path))
 envMap.intensity = 1.0
 sceneBuilder.envMap = envMap
 

@@ -34,3 +34,9 @@
 /scripts/data-generation/out_nm_512_2x32_e5_freeze1
 /scripts/data-generation/out_nm_512_2x32_e40_efreeze5
 /scripts/data-generation/out_nm_512_2x32_e20
+MatXScenes/Preview/decoder_weights.bin
+MatXScenes/Preview/latent0.exr
+MatXScenes/Preview/latent0.npy
+MatXScenes/Preview/latent1.exr
+MatXScenes/Preview/latent1.npy
+MatXScenes/Preview/metadata.json
