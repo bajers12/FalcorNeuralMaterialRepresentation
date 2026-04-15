@@ -299,35 +299,6 @@ class NeuralMaterialModel(nn.Module):
         y_hat, _raw = self.forward_with_raw(uv, wi, wo)
         return y_hat
 
-
-# =============================================================================
-# Normals -> local frame helpers
-# =============================================================================
-
-
-def build_tbn(n: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Build a stable tangent frame from per-sample normals.
-
-    n: [B,3] (not necessarily perfectly normalized)
-    returns (t, b, n_unit): each [B,3]
-    """
-    n_unit = n / n.norm(dim=1, keepdim=True).clamp_min(1e-8)
-
-    # Choose an "up" that is not parallel to n.
-    up = torch.tensor([0.0, 1.0, 0.0], device=n.device, dtype=n.dtype).expand_as(n_unit)
-    alt = torch.tensor([1.0, 0.0, 0.0], device=n.device, dtype=n.dtype).expand_as(
-        n_unit
-    )
-    use_alt = (n_unit[:, 1].abs() > 0.99).unsqueeze(1)
-    up = torch.where(use_alt, alt, up)
-
-    t = torch.cross(up, n_unit, dim=1)
-    t = t / t.norm(dim=1, keepdim=True).clamp_min(1e-8)
-    b = torch.cross(n_unit, t, dim=1)
-    return t, b, n_unit
-
-
 def to_local(
     v_world: torch.Tensor, t: torch.Tensor, b: torch.Tensor, n: torch.Tensor
 ) -> torch.Tensor:
@@ -541,33 +512,6 @@ def maybe_rebuild_optimizer_and_scheduler(
     return new_opt, new_scheduler
 
 
-def _maybe_transform_dirs_with_normals(
-    batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    If cfg.use_normals:
-      - expects batch['normal']
-      - converts wi/wo from that space into local space aligned with normal (+Z)
-    Else:
-      - returns wi/wo as-is
-    """
-    wi = batch["wi"].to(device, non_blocking=True)
-    wo = batch["wo"].to(device, non_blocking=True)
-
-    if not cfg.use_normals:
-        return wi, wo
-
-    if "normal" not in batch:
-        raise ValueError(
-            "You passed --use_normals but your dataset batch has no 'normal' key."
-        )
-
-    n = batch["normal"].to(device, non_blocking=True)
-    t, b, n_unit = build_tbn(n)
-    wi_l = to_local(wi, t, b, n_unit)
-    wo_l = to_local(wo, t, b, n_unit)
-    return wi_l, wo_l
-
 
 def train_one_epoch(
     model: NeuralMaterialModel,
@@ -602,7 +546,8 @@ def train_one_epoch(
     uv = batch["uv"].to(device, non_blocking=True)
     y = batch["y"].to(device, non_blocking=True)
 
-    wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
+    wo = batch["wo"].to(device, non_blocking=True)
+    wi = batch["wi"].to(device, non_blocking=True)
 
     if cfg.clamp_min_target > 0.0:
         y = y.clamp_min(cfg.clamp_min_target)
@@ -665,7 +610,8 @@ def validate(
     uv = batch["uv"].to(device, non_blocking=True)
     y = batch["y"].to(device, non_blocking=True)
 
-    wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
+    wo = batch["wo"].to(device, non_blocking=True)
+    wi = batch["wi"].to(device, non_blocking=True)
 
     if cfg.clamp_min_target > 0.0:
         y = y.clamp_min(cfg.clamp_min_target)
@@ -960,7 +906,8 @@ def main():
 
         data_batch = data_generator.generate_data(random.randint(0, 1000000))
         training_batch = data_batch
-        training_tensor = tensorize_batch(data_to_dict(training_batch))
+        training_dict = data_to_dict(training_batch)
+        training_tensor = tensorize_batch(training_dict)
 
         train_metrics, global_step, opt, scheduler = train_one_epoch(
             model,

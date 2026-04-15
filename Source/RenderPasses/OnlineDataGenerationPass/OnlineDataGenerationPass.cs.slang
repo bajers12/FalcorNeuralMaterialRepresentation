@@ -47,7 +47,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
 {
     uint idx = threadId.x;
 
-    //Sample UV and view direction uniformly
+    // Sample UV and view direction uniformly
     uint seed = idx * 9781 + 6271 + gRandomSeedOffset;
 
     float2 uv = float2(rand(seed), rand(seed));
@@ -55,44 +55,38 @@ void main(uint3 threadId : SV_DispatchThreadID)
     float3 wo = sample_hemisphere(float2(rand(seed), rand(seed)));
     float3 wi = sample_hemisphere(float2(rand(seed), rand(seed)));
 
-    // Construct Shadign data and samplers
-    UniformSampleGenerator sg = UniformSampleGenerator(idx, 0);
+    // Construct samplers
+    UniformSampleGenerator sg = UniformSampleGenerator(seed, 0);
     let lod = ExplicitLodTextureSampler(0.f);
 
-    //Shading data should be prepared based on uniformly sampled UV value, used to reconstruct w_o
-    ShadingData sd = {};
-    sd.posW = float3(0.0, 0.0, 0.0);
-    sd.V = wi;  // V is the view direction (outgoing)
-    sd.uv = uv;
-    sd.frame = ShadingFrame::createIdentity();
-    sd.faceN = sd.frame.N;
-    sd.frontFacing = true;
+    VertexData v = {};
+    v.posW        = float3(0.f, 0.f, 0.f);
+    v.normalW     = float3(0.f, 0.f, 1.f);         // flat geometric normal
+    v.tangentW    = float4(perp_stark(v.normalW), 1.f); // stable arbitrary tangent + sign
+    v.faceNormalW = v.normalW;
+    v.texC        = uv;
 
-    sd.mtl = gScene.materials.getMaterialHeader(gMaterialId);
-    sd.materialID = gMaterialId;
-    sd.IoR = 1.f;
+    ShadingData sd = gScene.materials.prepareShadingData(v, gMaterialId, wi);
 
     let mi = gScene.materials.getMaterialInstance(sd, lod);
     BSDFProperties props = mi.getProperties(sd);
 
-    // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
-    BSDFSample sample;
-    mi.sample(sd, sg, sample);
-    float3 f = mi.eval(sd, wo, sg);
+    // eval/evalPdf operate in the perturbed-normal frame built above.
+    // wo is the outgoing light sample direction.
+    float3 f   = mi.eval(sd, wo, sg);
+    float  pdf = mi.evalPdf(sd, wo);
 
     // Save results
     BsdfSampleData data;
-    data.uv = uv;
-    data.wi = wi;  // incident direction
-    data.wo = wo;  // outgoing direction
-    data.f = f;
-    data.albedo = props.diffuseReflectionAlbedo;
+    data.uv       = uv;
+    data.wi       = wi;   // incident/view direction
+    data.wo       = wo;   // sampled light direction
+    data.f        = f;
+    data.albedo   = props.diffuseReflectionAlbedo;
     data.specular = props.specularReflectionAlbedo;
-    data.normal = sd.faceN;
-    //Can also use normal after applied normal maps.
-    //data.normal = props.guideNormal;
+    data.normal   = props.guideNormal;   // normal-mapped guide normal in world space
     data.roughness = props.roughness;
-    data.pdf = 0.0f;
+    data.pdf      = pdf;
 
     gSampleOutputBuffer[idx] = data;
 }
