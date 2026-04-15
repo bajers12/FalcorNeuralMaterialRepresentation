@@ -23,6 +23,13 @@ RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
 uniform uint gSampleCount;
 uniform uint gMaterialId;
 uniform uint gRandomSeedOffset;
+uniform bool gUseUvGrid;
+uniform uint gUvGridFullWidth;
+uniform uint gUvGridFullHeight;
+uniform uint gUvGridRegionWidth;
+uniform uint gUvGridRegionHeight;
+uniform uint gUvGridOffsetX;
+uniform uint gUvGridOffsetY;
 
 uint hash(uint x)
 {
@@ -51,6 +58,12 @@ void main(uint3 threadId : SV_DispatchThreadID)
     uint seed = idx * 9781 + 6271 + gRandomSeedOffset;
 
     float2 uv = float2(rand(seed), rand(seed));
+    if (gUseUvGrid)
+    {
+        uint2 texel = uint2(idx % gUvGridRegionWidth, idx / gUvGridRegionWidth);
+        texel += uint2(gUvGridOffsetX, gUvGridOffsetY);
+        uv = (float2(texel) + 0.5f) / float2(gUvGridFullWidth, gUvGridFullHeight);
+    }
 
     float3 wo = sample_hemisphere(float2(rand(seed), rand(seed)));
     float3 wi = sample_hemisphere(float2(rand(seed), rand(seed)));
@@ -67,7 +80,6 @@ void main(uint3 threadId : SV_DispatchThreadID)
     sd.frame = ShadingFrame::createIdentity();
     sd.faceN = sd.frame.N;
     sd.frontFacing = true;
-
     sd.mtl = gScene.materials.getMaterialHeader(gMaterialId);
     sd.materialID = gMaterialId;
     sd.IoR = 1.f;
@@ -76,9 +88,9 @@ void main(uint3 threadId : SV_DispatchThreadID)
     BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
-    BSDFSample sample;
-    mi.sample(sd, sg, sample);
-    float3 f = mi.eval(sd, wo, sg);
+    // float3 f = mi.eval(sd, wo, sg);
+    // just use 0.0f for pdf, its working like shit right now
+    float pdf = 0.0f;
 
     // Save results
     BsdfSampleData data;
@@ -88,11 +100,9 @@ void main(uint3 threadId : SV_DispatchThreadID)
     data.f = f;
     data.albedo = props.diffuseReflectionAlbedo;
     data.specular = props.specularReflectionAlbedo;
-    data.normal = sd.faceN;
-    //Can also use normal after applied normal maps.
-    //data.normal = props.guideNormal;
+    data.normal = props.guideNormal;
     data.roughness = props.roughness;
-    data.pdf = 0.0f;
+    data.pdf = pdf;
 
     gSampleOutputBuffer[idx] = data;
 }

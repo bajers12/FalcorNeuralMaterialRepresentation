@@ -18,10 +18,8 @@ Dataset formats supported:
       optional: 'normal'
 
 Normals support:
-  If you pass --use_normals, the loader must provide 'normal' and wi/wo are assumed
-  to be in the SAME space as normal (typically world space). The script will build a
-  local frame from 'normal' and transform wi/wo into local space so that the decoder
-  sees directions with local +Z aligned to the normal.
+  Sampled normals are treated as training-side material information and are not used
+  to rotate wi/wo. The decoder always sees the original sampled directions.
 
 Exports:
   - latent_texture.pt: {"Z": [1,C,H,W], "shape": (H,W,C)}
@@ -105,10 +103,21 @@ class TrainConfig:
     freeze_latent_after_step: Optional[int] = None
     freeze_decoder_after_step: Optional[int] = None
 
-    # Normals support
-    use_normals: bool = (
-        False  # if True, expects batch['normal'] and converts wi/wo -> local
-    )
+    # Legacy flag retained for CLI compatibility. Direction transforms are disabled;
+    # sampled normals remain available only as training-side material features.
+    use_normals: bool = False
+
+    # Training-only encoder that maps sampled material values to latent codes.
+    encoder_width: int = 32
+    encoder_depth: int = 2
+    encoder_bootstrap_epochs: int = 200
+    latent_init_batch_size: int = 65536
+    latent_init_tile_size: int = 512
+    use_albedo_features: bool = True
+    use_spec_features: bool = True
+    use_normal_features: bool = True
+    use_roughness_feature: bool = True
+    use_pdf_feature: bool = True
 
 
 # =============================================================================
@@ -121,6 +130,38 @@ def tensorize_batch(data_dict: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]
         key: torch.from_numpy(value).float() if isinstance(value, np.ndarray) else value
         for key, value in data_dict.items()
     }
+
+
+def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
+    print(f"[debug] first sample from {label}:")
+    ordered_keys = ["uv", "wi", "wo", "y", "spec", "albedo", "normal", "roughness", "pdf"]
+    for key in ordered_keys:
+        if key not in batch:
+            continue
+        value = batch[key][0]
+        if value.ndim == 0:
+            print(f"  {key}: {value.item():.6f}")
+        else:
+            flat = value.detach().cpu().tolist()
+            formatted = ", ".join(f"{float(x):.6f}" for x in flat)
+            print(f"  {key}: [{formatted}]")
+
+
+def get_encoder_input_dim(cfg: TrainConfig) -> int:
+    dim = 0
+    if cfg.use_albedo_features:
+        dim += 3
+    if cfg.use_spec_features:
+        dim += 3
+    if cfg.use_normal_features:
+        dim += 3
+    if cfg.use_roughness_feature:
+        dim += 1
+    if cfg.use_pdf_feature:
+        dim += 1
+    if dim == 0:
+        raise ValueError("Encoder feature set is empty. Enable at least one training feature.")
+    return dim
 
 
 # =============================================================================
@@ -265,6 +306,27 @@ class Decoder(nn.Module):
         return torch.exp(raw - self.exp_offset)
 
 
+class MaterialEncoder(nn.Module):
+    """
+    Training-only encoder that maps sampled material parameters to latent codes.
+    The runtime path still only consumes the baked latent texture.
+    """
+
+    def __init__(self, input_ch: int, latent_ch: int, hidden_width: int = 32, depth: int = 2):
+        super().__init__()
+        layers = []
+        prev = input_ch
+        for _ in range(depth):
+            layers.append(nn.Linear(prev, hidden_width))
+            layers.append(nn.ReLU(inplace=True))
+            prev = hidden_width
+        layers.append(nn.Linear(prev, latent_ch))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        return self.net(features)
+
+
 class NeuralMaterialModel(nn.Module):
     """
     Wraps:
@@ -284,14 +346,25 @@ class NeuralMaterialModel(nn.Module):
             frame_linear_bias=cfg.frame_linear_bias,
             exp_offset=cfg.exp_offset,
         )
+        self.encoder = MaterialEncoder(
+            input_ch=get_encoder_input_dim(cfg),
+            latent_ch=cfg.latent_ch,
+            hidden_width=cfg.encoder_width,
+            depth=cfg.encoder_depth,
+        )
+
+    def decode_with_raw(
+        self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        raw = self.decoder.forward_raw(z, wi, wo)
+        y_hat = torch.exp(raw - self.decoder.exp_offset)
+        return y_hat, raw
 
     def forward_with_raw(
         self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         z = self.latent.sample(uv)
-        raw = self.decoder.forward_raw(z, wi, wo)
-        y_hat = torch.exp(raw - self.decoder.exp_offset)
-        return y_hat, raw
+        return self.decode_with_raw(z, wi, wo)
 
     def forward(
         self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
@@ -391,6 +464,110 @@ def compute_raw_stats(raw: torch.Tensor) -> Dict[str, float]:
     }
 
 
+def build_material_features(
+    batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
+) -> torch.Tensor:
+    features = []
+
+    if cfg.use_albedo_features:
+        features.append(batch["albedo"].to(device, non_blocking=True))
+
+    if cfg.use_spec_features:
+        features.append(batch["spec"].to(device, non_blocking=True))
+
+    if cfg.use_normal_features:
+        normal = F.normalize(
+            batch["normal"].to(device, non_blocking=True), dim=-1, eps=1e-8
+        )
+        features.append(normal)
+
+    if cfg.use_roughness_feature:
+        roughness = batch["roughness"].to(device, non_blocking=True).unsqueeze(-1)
+        features.append(roughness)
+
+    if cfg.use_pdf_feature:
+        pdf = (
+            torch.log1p(batch["pdf"].to(device, non_blocking=True).clamp_min(0.0))
+            .unsqueeze(-1)
+        )
+        features.append(pdf)
+
+    if not features:
+        raise ValueError("Encoder feature set is empty. Enable at least one training feature.")
+
+    return torch.cat(features, dim=-1)
+
+
+def get_training_phase(cfg: TrainConfig, epoch: int) -> str:
+    if epoch < cfg.encoder_bootstrap_epochs:
+        return "bootstrap"
+    return "finetune"
+
+
+@torch.no_grad()
+def initialize_latent_texture_from_encoder(
+    model: NeuralMaterialModel, cfg: TrainConfig, random_seed: int
+) -> None:
+    if get_encoder_input_dim(cfg) == 0:
+        raise ValueError("Cannot initialize latent texture without encoder features.")
+
+    device = torch.device(cfg.device)
+    model.eval()
+
+    print(
+        f"[bootstrap] Initializing latent texture from encoder on a {cfg.tex_w}x{cfg.tex_h} UV grid "
+        f"using {cfg.latent_init_tile_size}x{cfg.latent_init_tile_size} tiles"
+    )
+    tile_size = max(1, cfg.latent_init_tile_size)
+    latent_image = torch.empty(
+        cfg.tex_h, cfg.tex_w, cfg.latent_ch, dtype=model.latent.Z.dtype
+    )
+    generators: Dict[int, DataGenerator] = {}
+    try:
+        for offset_y in range(0, cfg.tex_h, tile_size):
+            tile_h = min(tile_size, cfg.tex_h - offset_y)
+            for offset_x in range(0, cfg.tex_w, tile_size):
+                tile_w = min(tile_size, cfg.tex_w - offset_x)
+                sample_count = tile_w * tile_h
+                if sample_count not in generators:
+                    generators[sample_count] = DataGenerator(sampleCount=sample_count)
+                grid_generator = generators[sample_count]
+                try:
+                    grid_batch = grid_generator.generate_grid_region_data(
+                        cfg.tex_w,
+                        cfg.tex_h,
+                        tile_w,
+                        tile_h,
+                        offset_x,
+                        offset_y,
+                        random_seed,
+                    ).copy()
+                finally:
+                    grid_generator.release_data()
+
+                grid_tensor = tensorize_batch(data_to_dict(grid_batch))
+                latent_chunks = []
+
+                for start in range(0, sample_count, cfg.latent_init_batch_size):
+                    end = min(start + cfg.latent_init_batch_size, sample_count)
+                    chunk = {key: value[start:end] for key, value in grid_tensor.items()}
+                    features = build_material_features(chunk, cfg, device)
+                    latent_chunks.append(model.encoder(features).cpu())
+
+                tile_latents = torch.cat(latent_chunks, dim=0).view(
+                    tile_h, tile_w, cfg.latent_ch
+                )
+                latent_image[
+                    offset_y : offset_y + tile_h, offset_x : offset_x + tile_w, :
+                ] = tile_latents
+    finally:
+        for generator in generators.values():
+            generator.release_data()
+
+    z_image = latent_image.permute(2, 0, 1).unsqueeze(0).contiguous()
+    model.latent.Z.copy_(z_image.to(device))
+
+
 # =============================================================================
 # Training utilities
 # =============================================================================
@@ -420,10 +597,10 @@ def _decoder_lr_min(cfg: TrainConfig) -> float:
 
 
 def make_optimizer(
-    model: NeuralMaterialModel, cfg: TrainConfig
+    model: NeuralMaterialModel, cfg: TrainConfig, phase: str
 ) -> torch.optim.Optimizer:
     param_groups = []
-    if cfg.train_latent_texture:
+    if phase == "finetune" and cfg.train_latent_texture:
         latent_params = [p for p in model.latent.parameters() if p.requires_grad]
         if latent_params:
             param_groups.append(
@@ -435,9 +612,15 @@ def make_optimizer(
             param_groups.append(
                 {"params": decoder_params, "lr": _decoder_lr(cfg), "name": "decoder"}
             )
+        if phase == "bootstrap":
+            encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
+            if encoder_params:
+                param_groups.append(
+                    {"params": encoder_params, "lr": _decoder_lr(cfg), "name": "encoder"}
+                )
     if not param_groups:
         raise ValueError(
-            "Nothing to train: both train_latent_texture and train_decoder are False or all params are frozen"
+            f"Nothing to train during {phase}: active parameter groups are empty"
         )
     return torch.optim.Adam(param_groups, weight_decay=cfg.weight_decay)
 
@@ -446,8 +629,16 @@ def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
     """
     Cosine LR decay from the per-group base LR to the per-group minimum over cfg.max_epochs (epoch-stepped).
     """
-    base_by_name = {"latent": _latent_lr(cfg), "decoder": _decoder_lr(cfg)}
-    min_by_name = {"latent": _latent_lr_min(cfg), "decoder": _decoder_lr_min(cfg)}
+    base_by_name = {
+        "latent": _latent_lr(cfg),
+        "decoder": _decoder_lr(cfg),
+        "encoder": _decoder_lr(cfg),
+    }
+    min_by_name = {
+        "latent": _latent_lr_min(cfg),
+        "decoder": _decoder_lr_min(cfg),
+        "encoder": _decoder_lr_min(cfg),
+    }
 
     def lr_lambda_factory(group_name: str):
         base = base_by_name[group_name]
@@ -485,8 +676,9 @@ def maybe_freeze_parts(
             cfg.freeze_decoder_after_epoch is not None
             and epoch >= cfg.freeze_decoder_after_epoch
         ):
-            for p in model.decoder.parameters():
-                p.requires_grad_(False)
+            for module in (model.decoder, model.encoder):
+                for p in module.parameters():
+                    p.requires_grad_(False)
 
     if global_step is not None:
         if (
@@ -499,20 +691,31 @@ def maybe_freeze_parts(
             cfg.freeze_decoder_after_step is not None
             and global_step >= cfg.freeze_decoder_after_step
         ):
-            for p in model.decoder.parameters():
-                p.requires_grad_(False)
+            for module in (model.decoder, model.encoder):
+                for p in module.parameters():
+                    p.requires_grad_(False)
 
 
 def maybe_rebuild_optimizer_and_scheduler(
-    model: NeuralMaterialModel, opt: torch.optim.Optimizer, scheduler, cfg: TrainConfig
+    model: NeuralMaterialModel,
+    opt: torch.optim.Optimizer,
+    scheduler,
+    cfg: TrainConfig,
+    phase: str,
 ):
     active_group_names = []
-    if cfg.train_latent_texture and any(
+    if phase == "finetune" and cfg.train_latent_texture and any(
         p.requires_grad for p in model.latent.parameters()
     ):
         active_group_names.append("latent")
     if cfg.train_decoder and any(p.requires_grad for p in model.decoder.parameters()):
         active_group_names.append("decoder")
+    if (
+        phase == "bootstrap"
+        and cfg.train_decoder
+        and any(p.requires_grad for p in model.encoder.parameters())
+    ):
+        active_group_names.append("encoder")
 
     current_group_names = [pg.get("name") for pg in opt.param_groups]
     if active_group_names == current_group_names:
@@ -521,7 +724,7 @@ def maybe_rebuild_optimizer_and_scheduler(
     # Build a mapping from parameter data_ptr -> old state so we can transfer moments
     old_state = opt.state  # dict keyed by parameter tensor
 
-    new_opt = make_optimizer(model, cfg)
+    new_opt = make_optimizer(model, cfg, phase)
 
     for pg in new_opt.param_groups:
         for p in pg["params"]:
@@ -545,28 +748,12 @@ def _maybe_transform_dirs_with_normals(
     batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    If cfg.use_normals:
-      - expects batch['normal']
-      - converts wi/wo from that space into local space aligned with normal (+Z)
-    Else:
-      - returns wi/wo as-is
+    Direction transforms are disabled. Sampled guide normals are treated as
+    training-side material parameters only, so wi/wo are always returned as-is.
     """
     wi = batch["wi"].to(device, non_blocking=True)
     wo = batch["wo"].to(device, non_blocking=True)
-
-    if not cfg.use_normals:
-        return wi, wo
-
-    if "normal" not in batch:
-        raise ValueError(
-            "You passed --use_normals but your dataset batch has no 'normal' key."
-        )
-
-    n = batch["normal"].to(device, non_blocking=True)
-    t, b, n_unit = build_tbn(n)
-    wi_l = to_local(wi, t, b, n_unit)
-    wo_l = to_local(wo, t, b, n_unit)
-    return wi_l, wo_l
+    return wi, wo
 
 
 def train_one_epoch(
@@ -576,6 +763,7 @@ def train_one_epoch(
     scheduler,
     cfg: TrainConfig,
     epoch: int,
+    phase: str,
     global_step_start: int = 0,
 ):
     model.train()
@@ -587,7 +775,9 @@ def train_one_epoch(
     latent_frozen_logged = False
 
     maybe_freeze_parts(model, cfg, global_step=global_step)
-    opt, scheduler = maybe_rebuild_optimizer_and_scheduler(model, opt, scheduler, cfg)
+    opt, scheduler = maybe_rebuild_optimizer_and_scheduler(
+        model, opt, scheduler, cfg, phase
+    )
 
     decoder_now_frozen = all(not p.requires_grad for p in model.decoder.parameters())
     if decoder_now_frozen and not decoder_frozen_logged:
@@ -603,12 +793,18 @@ def train_one_epoch(
     y = batch["y"].to(device, non_blocking=True)
 
     wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
-
     if cfg.clamp_min_target > 0.0:
         y = y.clamp_min(cfg.clamp_min_target)
 
-    y_hat, raw = model.forward_with_raw(uv, wi, wo)
-    loss = log_l1_loss(y_hat, y, cfg.log_eps)
+    if phase == "bootstrap":
+        material_features = build_material_features(batch, cfg, device)
+        z = model.encoder(material_features)
+    else:
+        z = model.latent.sample(uv)
+
+    y_hat, raw = model.decode_with_raw(z, wi, wo)
+    bsdf_loss = log_l1_loss(y_hat, y, cfg.log_eps)
+    loss = bsdf_loss
 
     opt.zero_grad(set_to_none=True)
     loss.backward()
@@ -631,7 +827,8 @@ def train_one_epoch(
         )
         print(
             f"[train] epoch {epoch:03d} step {1:05d} global_step={global_step:07d} "
-            f"loss={loss.item():.6f} mae={stats['mae']:.6f} "
+            f"phase={phase} loss={loss.item():.6f} bsdf_loss={bsdf_loss.item():.6f} "
+            f"mae={stats['mae']:.6f} "
             f"yhat_mean={stats['yhat_mean']:.3e} y_mean={stats['y_mean']:.3e} "
             f"raw_mean={raw_stats['raw_mean']:.3f} raw_std={raw_stats['raw_std']:.3f} "
             f"lr[{lr_summary}] time={dt:.1f}s"
@@ -640,6 +837,8 @@ def train_one_epoch(
     return (
         {
             "loss": loss.item(),
+            "bsdf_loss": bsdf_loss.item(),
+            "phase": phase,
             "mae": stats["mae"],
             "yhat_mean": stats["yhat_mean"],
             "y_mean": stats["y_mean"],
@@ -658,6 +857,7 @@ def validate(
     batch: Dict[str, torch.Tensor],
     cfg: TrainConfig,
     epoch: int,
+    phase: str,
 ) -> Dict[str, float]:
     model.eval()
     device = torch.device(cfg.device)
@@ -666,29 +866,31 @@ def validate(
     y = batch["y"].to(device, non_blocking=True)
 
     wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
-
     if cfg.clamp_min_target > 0.0:
         y = y.clamp_min(cfg.clamp_min_target)
 
-    y_hat, raw = model.forward_with_raw(uv, wi, wo)
-    loss = log_l1_loss(y_hat, y, cfg.log_eps)
+    if phase == "bootstrap":
+        material_features = build_material_features(batch, cfg, device)
+        z = model.encoder(material_features)
+    else:
+        z = model.latent.sample(uv)
+
+    y_hat, raw = model.decode_with_raw(z, wi, wo)
+    bsdf_loss = log_l1_loss(y_hat, y, cfg.log_eps)
+    loss = bsdf_loss
     stats = compute_basic_stats(y_hat, y)
     raw_stats = compute_raw_stats(raw)
 
     out = {
+        "phase": phase,
         "val_loss": loss.item(),
+        "val_bsdf_loss": bsdf_loss.item(),
         "val_mae": stats["mae"],
         "val_yhat_mean": stats["yhat_mean"],
         "val_y_mean": stats["y_mean"],
         "val_raw_mean": raw_stats["raw_mean"],
         "val_raw_std": raw_stats["raw_std"],
     }
-    return out;
-    print(
-        f"[val] epoch {epoch:03d} val_loss={out['val_loss']:.6f} val_mae={out['val_mae']:.6f} "
-        f"val_yhat_mean={out['val_yhat_mean']:.3e} val_y_mean={out['val_y_mean']:.3e} "
-        f"val_raw_mean={out['val_raw_mean']:.3f} val_raw_std={out['val_raw_std']:.3f}"
-    )
     return out
 
 
@@ -835,7 +1037,52 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--use_normals",
         action="store_true",
-        help="Use per-sample normals to transform wi/wo into local frame.",
+        help="Legacy no-op kept for CLI compatibility. Sampled guide normals stay on the training/material side only.",
+    )
+    p.add_argument("--encoder_width", type=int, default=32)
+    p.add_argument("--encoder_depth", type=int, default=2)
+    p.add_argument(
+        "--encoder_bootstrap_epochs",
+        type=int,
+        default=200,
+        help="Number of epochs to train encoder -> decoder directly before initializing the latent texture.",
+    )
+    p.add_argument(
+        "--latent_init_batch_size",
+        type=int,
+        default=65536,
+        help="Batch size used when initializing the latent texture from encoder outputs.",
+    )
+    p.add_argument(
+        "--latent_init_tile_size",
+        type=int,
+        default=512,
+        help="Tile size used for UV-grid latent initialization. Smaller tiles reduce memory use at high resolutions.",
+    )
+    p.add_argument(
+        "--no_albedo_feature",
+        action="store_true",
+        help="Exclude albedo from the training-only material encoder.",
+    )
+    p.add_argument(
+        "--no_spec_feature",
+        action="store_true",
+        help="Exclude specular from the training-only material encoder.",
+    )
+    p.add_argument(
+        "--no_normal_feature",
+        action="store_true",
+        help="Exclude guide normal from the training-only material encoder.",
+    )
+    p.add_argument(
+        "--no_roughness_feature",
+        action="store_true",
+        help="Exclude roughness from the training-only material encoder.",
+    )
+    p.add_argument(
+        "--no_pdf_feature",
+        action="store_true",
+        help="Exclude BSDF pdf from the training-only material encoder.",
     )
 
     args = p.parse_args()
@@ -889,6 +1136,16 @@ def parse_args() -> TrainConfig:
     cfg.freeze_decoder_after_step = args.freeze_decoder_after_step
 
     cfg.use_normals = args.use_normals
+    cfg.encoder_width = args.encoder_width
+    cfg.encoder_depth = args.encoder_depth
+    cfg.encoder_bootstrap_epochs = max(0, args.encoder_bootstrap_epochs)
+    cfg.latent_init_batch_size = max(1, args.latent_init_batch_size)
+    cfg.latent_init_tile_size = max(1, args.latent_init_tile_size)
+    cfg.use_albedo_features = not args.no_albedo_feature
+    cfg.use_spec_features = not args.no_spec_feature
+    cfg.use_normal_features = not args.no_normal_feature
+    cfg.use_roughness_feature = not args.no_roughness_feature
+    cfg.use_pdf_feature = not args.no_pdf_feature
 
     return cfg
 
@@ -926,6 +1183,11 @@ def main():
     cfg = parse_args()
     set_seed(cfg.seed)
 
+    if cfg.encoder_bootstrap_epochs > 0 and not cfg.train_decoder:
+        raise ValueError(
+            "Encoder bootstrap requires decoder training. Enable --train_decoder or set --encoder_bootstrap_epochs 0."
+        )
+
     # Device
     if cfg.device == "cuda" and not torch.cuda.is_available():
         print("CUDA requested but not available; falling back to CPU.")
@@ -936,31 +1198,59 @@ def main():
     os.makedirs(cfg.out_dir, exist_ok=True)
     save_config(cfg)
     print("Config:", json.dumps(asdict(cfg), indent=2))
+    if cfg.use_normals:
+        print(
+            "[train] --use_normals is currently a no-op for wi/wo. "
+            "Sampled guide normals remain available only as training-side material data."
+        )
 
     # Model
     model = NeuralMaterialModel(cfg).to(device)
-    opt = make_optimizer(model, cfg)
+    current_phase = get_training_phase(cfg, 0)
+    opt = make_optimizer(model, cfg, current_phase)
     scheduler = make_scheduler(opt, cfg)
 
     best_val = float("inf")
     best_model_state: Optional[Dict[str, torch.Tensor]] = None
     best_metrics: Optional[Dict[str, float]] = None
     best_epoch: Optional[int] = None
+    best_phase: Optional[str] = None
     global_step = 0
 
     # Gene validation data only once, and keep as single holdout set for all epochs
     data_generator = DataGenerator(sampleCount=cfg.validation_n)
+    if cfg.encoder_bootstrap_epochs > 0 and not hasattr(
+        data_generator.generation_pass, "setUvGridRegion"
+    ):
+        raise RuntimeError(
+            "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with tiled UV-grid support. "
+            "Rebuild Falcor/plugin binaries so setUvGridRegion is available, or set --encoder_bootstrap_epochs 0."
+        )
     validation_batch = data_generator.generate_data(random.randint(0, 1000000)).copy()
-    data_generator.release_data
+    data_generator.release_data()
     validation_tensor = tensorize_batch(data_to_dict(validation_batch))
+    print_first_sample(validation_tensor, "validation batch")
 
     data_generator = DataGenerator(sampleCount=cfg.training_n)
     for epoch in range(cfg.max_epochs):
+        phase = get_training_phase(cfg, epoch)
+        if phase != current_phase:
+            print(f"[train] switching phase: {current_phase} -> {phase} at epoch {epoch:03d}")
+            if phase == "finetune":
+                initialize_latent_texture_from_encoder(
+                    model, cfg, random.randint(0, 1000000)
+                )
+                for p in model.encoder.parameters():
+                    p.requires_grad_(False)
+            current_phase = phase
+
         maybe_freeze_parts(model, cfg, epoch=epoch, global_step=global_step)
 
         data_batch = data_generator.generate_data(random.randint(0, 1000000))
         training_batch = data_batch
         training_tensor = tensorize_batch(data_to_dict(training_batch))
+        if epoch == 0:
+            print_first_sample(training_tensor, "training batch")
 
         train_metrics, global_step, opt, scheduler = train_one_epoch(
             model,
@@ -969,6 +1259,7 @@ def main():
             scheduler,
             cfg,
             epoch,
+            phase,
             global_step_start=global_step,
         )
 
@@ -977,11 +1268,12 @@ def main():
         metrics = dict(train_metrics)
         metrics["global_step"] = global_step
 
-        val_metrics = validate(model, validation_tensor, cfg, epoch)
+        val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
         metrics.update(val_metrics)
         if metrics["val_loss"] < best_val:
             best_val = metrics["val_loss"]
             best_epoch = epoch
+            best_phase = phase
             best_metrics = dict(metrics)
             best_model_state = snapshot_model_state(model)
             print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
@@ -994,6 +1286,10 @@ def main():
         and best_metrics is not None
     ):
         model.load_state_dict(best_model_state)
+        if best_phase == "bootstrap":
+            initialize_latent_texture_from_encoder(
+                model, cfg, random.randint(0, 1000000)
+            )
         best_ckpt_path = save_checkpoint(
             model,
             None,
