@@ -50,7 +50,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
 {
     uint idx = threadId.x;
 
-    //Sample UV and view direction uniformly
+    // Sample UV and view direction uniformly
     uint seed = idx * 9781 + 6271 + gRandomSeedOffset;
 
     float2 uv = float2(rand(seed), rand(seed));
@@ -63,23 +63,18 @@ void main(uint3 threadId : SV_DispatchThreadID)
     float3 wo = sample_hemisphere(float2(rand(seed), rand(seed)));
     float3 wi = sample_hemisphere(float2(rand(seed), rand(seed)));
 
-    // Construct Shadign data and samplers
-    UniformSampleGenerator sg = UniformSampleGenerator(idx, 0);
+    // Construct samplers
+    UniformSampleGenerator sg = UniformSampleGenerator(seed, 0);
     let lod = ExplicitLodTextureSampler(0.f);
 
-    //Shading data should be prepared based on uniformly sampled UV value, used to reconstruct w_o
-    ShadingData sd = {};
-    sd.posW = float3(0.0, 0.0, 0.0);
-    sd.V = wi;  // V is the view direction (outgoing)
-    sd.uv = uv;
-    sd.frame = ShadingFrame::createIdentity();
-    sd.faceN = sd.frame.N;
-    // Provide a complete canonical tangent frame for the flat UV-sampled surface.
-    sd.tangentW = float4(1.0, 0.0, 0.0, 1.0);
-    sd.frontFacing = dot(sd.V, sd.faceN) >= 0.f;
-    sd.mtl = gScene.materials.getMaterialHeader(gMaterialId);
-    sd.materialID = gMaterialId;
-    sd.IoR = 1.f;
+    VertexData v = {};
+    v.posW        = float3((uv[0]-0.5f)*2, (uv[1]-0.5f)*2, 0.f);
+    v.normalW     = float3(0.f, 0.f, 1.f);         // flat geometric normal
+    v.tangentW    = float4(perp_stark(v.normalW), 1.f); // stable arbitrary tangent + sign
+    v.faceNormalW = v.normalW;
+    v.texC        = uv;
+
+    ShadingData sd = gScene.materials.prepareShadingData(v, gMaterialId, wi);
 
     let mi = gScene.materials.getMaterialInstance(sd, lod);
     BSDFProperties props = mi.getProperties(sd);
@@ -91,11 +86,11 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
     // Save results
     BsdfSampleData data;
-    data.uv = uv;
-    data.wi = wi;  // incident direction
-    data.wo = wo;  // outgoing direction
-    data.f = f;
-    data.albedo = props.diffuseReflectionAlbedo;
+    data.uv       = uv;
+    data.wi       = wi;   // incident/view direction
+    data.wo       = wo;   // sampled light direction
+    data.f        = f;
+    data.albedo   = props.diffuseReflectionAlbedo;
     data.specular = props.specularReflectionAlbedo;
     data.normal = props.guideNormal;
     data.roughness = props.roughness;

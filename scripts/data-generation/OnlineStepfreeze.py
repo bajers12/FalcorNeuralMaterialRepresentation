@@ -118,7 +118,6 @@ class TrainConfig:
     use_roughness_feature: bool = True
     use_pdf_feature: bool = False
 
-
 # =============================================================================
 # Batch handling
 # =============================================================================
@@ -370,35 +369,6 @@ class NeuralMaterialModel(nn.Module):
     ) -> torch.Tensor:
         y_hat, _raw = self.forward_with_raw(uv, wi, wo)
         return y_hat
-
-
-# =============================================================================
-# Normals -> local frame helpers
-# =============================================================================
-
-
-def build_tbn(n: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    Build a stable tangent frame from per-sample normals.
-
-    n: [B,3] (not necessarily perfectly normalized)
-    returns (t, b, n_unit): each [B,3]
-    """
-    n_unit = n / n.norm(dim=1, keepdim=True).clamp_min(1e-8)
-
-    # Choose an "up" that is not parallel to n.
-    up = torch.tensor([0.0, 1.0, 0.0], device=n.device, dtype=n.dtype).expand_as(n_unit)
-    alt = torch.tensor([1.0, 0.0, 0.0], device=n.device, dtype=n.dtype).expand_as(
-        n_unit
-    )
-    use_alt = (n_unit[:, 1].abs() > 0.99).unsqueeze(1)
-    up = torch.where(use_alt, alt, up)
-
-    t = torch.cross(up, n_unit, dim=1)
-    t = t / t.norm(dim=1, keepdim=True).clamp_min(1e-8)
-    b = torch.cross(n_unit, t, dim=1)
-    return t, b, n_unit
-
 
 def to_local(
     v_world: torch.Tensor, t: torch.Tensor, b: torch.Tensor, n: torch.Tensor
@@ -729,7 +699,6 @@ def _maybe_transform_dirs_with_normals(
     wi = batch["wi"].to(device, non_blocking=True)
     wo = batch["wo"].to(device, non_blocking=True)
     return wi, wo
-
 
 def train_one_epoch(
     model: NeuralMaterialModel,
