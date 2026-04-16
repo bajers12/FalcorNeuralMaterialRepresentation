@@ -105,11 +105,6 @@ class TrainConfig:
     freeze_latent_after_step: Optional[int] = None
     freeze_decoder_after_step: Optional[int] = None
 
-    # Normals support
-    use_normals: bool = (
-        False  # if True, expects batch['normal'] and converts wi/wo -> local
-    )
-
 
 # =============================================================================
 # Batch handling
@@ -897,7 +892,6 @@ def main():
     # Gene validation data only once, and keep as single holdout set for all epochs
     data_generator = DataGenerator(sampleCount=cfg.validation_n)
     validation_batch = data_generator.generate_data(random.randint(0, 1000000)).copy()
-    data_generator.release_data
     validation_tensor = tensorize_batch(data_to_dict(validation_batch))
 
     data_generator = DataGenerator(sampleCount=cfg.training_n)
