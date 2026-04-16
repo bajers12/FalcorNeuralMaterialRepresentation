@@ -74,7 +74,6 @@ void main(uint3 threadId : SV_DispatchThreadID)
     // eval/evalPdf operate in the perturbed-normal frame built above.
     // wo is the outgoing light sample direction.
     float3 f   = mi.eval(sd, wo, sg);
-    float  pdf = mi.evalPdf(sd, wo);
 
     // Save results
     BsdfSampleData data;
@@ -86,7 +85,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     data.specular = props.specularReflectionAlbedo;
     data.normal   = props.guideNormal;   // normal-mapped guide normal in world space
     data.roughness = props.roughness;
-    data.pdf      = pdf;
+    data.pdf      = 0.0f;
 
     gSampleOutputBuffer[idx] = data;
 }
