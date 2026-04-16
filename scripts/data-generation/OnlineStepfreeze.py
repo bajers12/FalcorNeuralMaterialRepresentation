@@ -112,12 +112,11 @@ class TrainConfig:
     encoder_depth: int = 2
     encoder_bootstrap_epochs: int = 200
     latent_init_batch_size: int = 65536
-    latent_init_tile_size: int = 512
     use_albedo_features: bool = True
     use_spec_features: bool = True
     use_normal_features: bool = True
     use_roughness_feature: bool = True
-    use_pdf_feature: bool = True
+    use_pdf_feature: bool = False
 
 
 # =============================================================================
@@ -515,54 +514,30 @@ def initialize_latent_texture_from_encoder(
     model.eval()
 
     print(
-        f"[bootstrap] Initializing latent texture from encoder on a {cfg.tex_w}x{cfg.tex_h} UV grid "
-        f"using {cfg.latent_init_tile_size}x{cfg.latent_init_tile_size} tiles"
+        f"[bootstrap] Initializing latent texture from encoder on a full "
+        f"{cfg.tex_w}x{cfg.tex_h} UV grid in a single batch"
     )
-    tile_size = max(1, cfg.latent_init_tile_size)
-    latent_image = torch.empty(
-        cfg.tex_h, cfg.tex_w, cfg.latent_ch, dtype=model.latent.Z.dtype
-    )
-    generators: Dict[int, DataGenerator] = {}
+    sample_count = cfg.tex_w * cfg.tex_h
+    grid_generator = DataGenerator(sampleCount=sample_count)
     try:
-        for offset_y in range(0, cfg.tex_h, tile_size):
-            tile_h = min(tile_size, cfg.tex_h - offset_y)
-            for offset_x in range(0, cfg.tex_w, tile_size):
-                tile_w = min(tile_size, cfg.tex_w - offset_x)
-                sample_count = tile_w * tile_h
-                if sample_count not in generators:
-                    generators[sample_count] = DataGenerator(sampleCount=sample_count)
-                grid_generator = generators[sample_count]
-                try:
-                    grid_batch = grid_generator.generate_grid_region_data(
-                        cfg.tex_w,
-                        cfg.tex_h,
-                        tile_w,
-                        tile_h,
-                        offset_x,
-                        offset_y,
-                        random_seed,
-                    ).copy()
-                finally:
-                    grid_generator.release_data()
-
-                grid_tensor = tensorize_batch(data_to_dict(grid_batch))
-                latent_chunks = []
-
-                for start in range(0, sample_count, cfg.latent_init_batch_size):
-                    end = min(start + cfg.latent_init_batch_size, sample_count)
-                    chunk = {key: value[start:end] for key, value in grid_tensor.items()}
-                    features = build_material_features(chunk, cfg, device)
-                    latent_chunks.append(model.encoder(features).cpu())
-
-                tile_latents = torch.cat(latent_chunks, dim=0).view(
-                    tile_h, tile_w, cfg.latent_ch
-                )
-                latent_image[
-                    offset_y : offset_y + tile_h, offset_x : offset_x + tile_w, :
-                ] = tile_latents
+        grid_batch = grid_generator.generate_grid_data(
+            cfg.tex_w, cfg.tex_h, random_seed
+        ).copy()
     finally:
-        for generator in generators.values():
-            generator.release_data()
+        grid_generator.release_data()
+
+    grid_tensor = tensorize_batch(data_to_dict(grid_batch))
+    latent_chunks = []
+
+    for start in range(0, sample_count, cfg.latent_init_batch_size):
+        end = min(start + cfg.latent_init_batch_size, sample_count)
+        chunk = {key: value[start:end] for key, value in grid_tensor.items()}
+        features = build_material_features(chunk, cfg, device)
+        latent_chunks.append(model.encoder(features).cpu())
+
+    latent_image = torch.cat(latent_chunks, dim=0).view(
+        cfg.tex_h, cfg.tex_w, cfg.latent_ch
+    )
 
     z_image = latent_image.permute(2, 0, 1).unsqueeze(0).contiguous()
     model.latent.Z.copy_(z_image.to(device))
@@ -1054,12 +1029,6 @@ def parse_args() -> TrainConfig:
         help="Batch size used when initializing the latent texture from encoder outputs.",
     )
     p.add_argument(
-        "--latent_init_tile_size",
-        type=int,
-        default=512,
-        help="Tile size used for UV-grid latent initialization. Smaller tiles reduce memory use at high resolutions.",
-    )
-    p.add_argument(
         "--no_albedo_feature",
         action="store_true",
         help="Exclude albedo from the training-only material encoder.",
@@ -1083,6 +1052,11 @@ def parse_args() -> TrainConfig:
         "--no_pdf_feature",
         action="store_true",
         help="Exclude BSDF pdf from the training-only material encoder.",
+    )
+    p.add_argument(
+        "--use_pdf_feature",
+        action="store_true",
+        help="Explicitly include BSDF pdf in the training-only material encoder.",
     )
 
     args = p.parse_args()
@@ -1140,12 +1114,15 @@ def parse_args() -> TrainConfig:
     cfg.encoder_depth = args.encoder_depth
     cfg.encoder_bootstrap_epochs = max(0, args.encoder_bootstrap_epochs)
     cfg.latent_init_batch_size = max(1, args.latent_init_batch_size)
-    cfg.latent_init_tile_size = max(1, args.latent_init_tile_size)
     cfg.use_albedo_features = not args.no_albedo_feature
     cfg.use_spec_features = not args.no_spec_feature
     cfg.use_normal_features = not args.no_normal_feature
     cfg.use_roughness_feature = not args.no_roughness_feature
-    cfg.use_pdf_feature = not args.no_pdf_feature
+    cfg.use_pdf_feature = cfg.use_pdf_feature
+    if args.use_pdf_feature:
+        cfg.use_pdf_feature = True
+    if args.no_pdf_feature:
+        cfg.use_pdf_feature = False
 
     return cfg
 
@@ -1219,12 +1196,10 @@ def main():
 
     # Gene validation data only once, and keep as single holdout set for all epochs
     data_generator = DataGenerator(sampleCount=cfg.validation_n)
-    if cfg.encoder_bootstrap_epochs > 0 and not hasattr(
-        data_generator.generation_pass, "setUvGridRegion"
-    ):
+    if cfg.encoder_bootstrap_epochs > 0 and not data_generator.supports_uv_grid():
         raise RuntimeError(
-            "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with tiled UV-grid support. "
-            "Rebuild Falcor/plugin binaries so setUvGridRegion is available, or set --encoder_bootstrap_epochs 0."
+            "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
+            "Rebuild Falcor/plugin binaries so setUvGrid/clearUvGrid are available, or set --encoder_bootstrap_epochs 0."
         )
     validation_batch = data_generator.generate_data(random.randint(0, 1000000)).copy()
     data_generator.release_data()

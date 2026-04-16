@@ -43,7 +43,6 @@ void OnlineDataGenerationPass::registerBindings(pybind11::module& m)
     pass.def("generate", &OnlineDataGenerationPass::generate);
     pass.def("setRandomSeedOffset", &OnlineDataGenerationPass::setRandomSeedOffset);
     pass.def("setUvGrid", &OnlineDataGenerationPass::setUvGrid);
-    pass.def("setUvGridRegion", &OnlineDataGenerationPass::setUvGridRegion);
     pass.def("clearUvGrid", &OnlineDataGenerationPass::clearUvGrid);
     pass.def("getData", &OnlineDataGenerationPass::getData);
     pass.def("releaseData", &OnlineDataGenerationPass::releaseData);
@@ -59,10 +58,6 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
     mSampleCount = 0;
     mUvGridFullWidth = 0;
     mUvGridFullHeight = 0;
-    mUvGridRegionWidth = 0;
-    mUvGridRegionHeight = 0;
-    mUvGridOffsetX = 0;
-    mUvGridOffsetY = 0;
     mpMappedData = nullptr;
 
     parseProperties(props);
@@ -162,10 +157,6 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gUseUvGrid"] = mUseUvGrid;
     var["gUvGridFullWidth"] = mUvGridFullWidth;
     var["gUvGridFullHeight"] = mUvGridFullHeight;
-    var["gUvGridRegionWidth"] = mUvGridRegionWidth;
-    var["gUvGridRegionHeight"] = mUvGridRegionHeight;
-    var["gUvGridOffsetX"] = mUvGridOffsetX;
-    var["gUvGridOffsetY"] = mUvGridOffsetY;
 
     //Threadsgroups and execute, threadgroups should probably be improved
     uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
@@ -224,25 +215,9 @@ void OnlineDataGenerationPass::setRandomSeedOffset(uint32_t offset) {
 
 void OnlineDataGenerationPass::setUvGrid(uint32_t width, uint32_t height)
 {
-    setUvGridRegion(width, height, width, height, 0, 0);
-}
-
-void OnlineDataGenerationPass::setUvGridRegion(
-    uint32_t fullWidth,
-    uint32_t fullHeight,
-    uint32_t regionWidth,
-    uint32_t regionHeight,
-    uint32_t offsetX,
-    uint32_t offsetY
-)
-{
     mUseUvGrid = true;
-    mUvGridFullWidth = fullWidth;
-    mUvGridFullHeight = fullHeight;
-    mUvGridRegionWidth = regionWidth;
-    mUvGridRegionHeight = regionHeight;
-    mUvGridOffsetX = offsetX;
-    mUvGridOffsetY = offsetY;
+    mUvGridFullWidth = width;
+    mUvGridFullHeight = height;
 }
 
 void OnlineDataGenerationPass::clearUvGrid()
@@ -250,10 +225,6 @@ void OnlineDataGenerationPass::clearUvGrid()
     mUseUvGrid = false;
     mUvGridFullWidth = 0;
     mUvGridFullHeight = 0;
-    mUvGridRegionWidth = 0;
-    mUvGridRegionHeight = 0;
-    mUvGridOffsetX = 0;
-    mUvGridOffsetY = 0;
 }
 
 void OnlineDataGenerationPass::setupProgram() {

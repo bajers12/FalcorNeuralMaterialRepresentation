@@ -73,14 +73,6 @@ public:
     void generate();
     void OnlineDataGenerationPass::setRandomSeedOffset(uint32_t offset);
     void setUvGrid(uint32_t width, uint32_t height);
-    void setUvGridRegion(
-        uint32_t fullWidth,
-        uint32_t fullHeight,
-        uint32_t regionWidth,
-        uint32_t regionHeight,
-        uint32_t offsetX,
-        uint32_t offsetY
-    );
     void clearUvGrid();
     static void registerBindings(pybind11::module& m);
 
@@ -101,9 +93,5 @@ private:
     uint32_t mSampleCount;
     uint32_t mUvGridFullWidth = 0;
     uint32_t mUvGridFullHeight = 0;
-    uint32_t mUvGridRegionWidth = 0;
-    uint32_t mUvGridRegionHeight = 0;
-    uint32_t mUvGridOffsetX = 0;
-    uint32_t mUvGridOffsetY = 0;
     BsdfSampleData* mpMappedData;
 };

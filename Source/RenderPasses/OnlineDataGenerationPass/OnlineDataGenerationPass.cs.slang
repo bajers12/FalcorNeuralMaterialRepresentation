@@ -26,10 +26,6 @@ uniform uint gRandomSeedOffset;
 uniform bool gUseUvGrid;
 uniform uint gUvGridFullWidth;
 uniform uint gUvGridFullHeight;
-uniform uint gUvGridRegionWidth;
-uniform uint gUvGridRegionHeight;
-uniform uint gUvGridOffsetX;
-uniform uint gUvGridOffsetY;
 
 uint hash(uint x)
 {
@@ -60,8 +56,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     float2 uv = float2(rand(seed), rand(seed));
     if (gUseUvGrid)
     {
-        uint2 texel = uint2(idx % gUvGridRegionWidth, idx / gUvGridRegionWidth);
-        texel += uint2(gUvGridOffsetX, gUvGridOffsetY);
+        uint2 texel = uint2(idx % gUvGridFullWidth, idx / gUvGridFullWidth);
         uv = (float2(texel) + 0.5f) / float2(gUvGridFullWidth, gUvGridFullHeight);
     }
 
@@ -79,7 +74,9 @@ void main(uint3 threadId : SV_DispatchThreadID)
     sd.uv = uv;
     sd.frame = ShadingFrame::createIdentity();
     sd.faceN = sd.frame.N;
-    sd.frontFacing = true;
+    // Provide a complete canonical tangent frame for the flat UV-sampled surface.
+    sd.tangentW = float4(1.0, 0.0, 0.0, 1.0);
+    sd.frontFacing = dot(sd.V, sd.faceN) >= 0.f;
     sd.mtl = gScene.materials.getMaterialHeader(gMaterialId);
     sd.materialID = gMaterialId;
     sd.IoR = 1.f;
@@ -88,8 +85,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
     BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
-    // float3 f = mi.eval(sd, wo, sg);
-    // just use 0.0f for pdf, its working like shit right now
+    float3 f = mi.eval(sd, wo, sg);
+    f *= max(dot(props.guideNormal, wo), 0.f);
     float pdf = 0.0f;
 
     // Save results
