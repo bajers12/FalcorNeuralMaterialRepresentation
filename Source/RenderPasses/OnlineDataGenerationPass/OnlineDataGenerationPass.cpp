@@ -143,6 +143,7 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
     var["gSampleCount"] = mSampleCount;
     var["gRandomSeedOffset"] = mRandomSeedOffset;
+    var["gMaterialId"] = mMaterialId;
 
     //Threadsgroups and execute, threadgroups should probably be improved
     uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;

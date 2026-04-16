@@ -60,7 +60,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     let lod = ExplicitLodTextureSampler(0.f);
 
     VertexData v = {};
-    v.posW        = float3(0.f, 0.f, 0.f);
+    v.posW        = float3((uv[0]-0.5f)*2, (uv[1]-0.5f)*2, 0.f);
     v.normalW     = float3(0.f, 0.f, 1.f);         // flat geometric normal
     v.tangentW    = float4(perp_stark(v.normalW), 1.f); // stable arbitrary tangent + sign
     v.faceNormalW = v.normalW;
