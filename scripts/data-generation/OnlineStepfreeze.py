@@ -734,15 +734,6 @@ def train_one_epoch(
         stats = compute_basic_stats(y_hat, y)
         raw_stats = compute_raw_stats(raw)
 
-    if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
-        elapsed = time.time() - run_start_time
-        print(
-            f"[train] epoch {epoch:03d} "
-            f"phase={phase} loss={loss.item():.6f} "
-            f"yhat_mean={stats['yhat_mean']:.3e} "
-            f"elapsed={elapsed:.1f}s"
-        )
-
     return (
         {
             "loss": loss.item(),
@@ -1167,26 +1158,37 @@ def main():
 
             metrics = dict(train_metrics)
 
-            val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
-            metrics.update(val_metrics)
-            last_epoch = epoch
-            last_metrics = dict(metrics)
-            if metrics["val_loss"] < best_val:
-                best_val = metrics["val_loss"]
-                best_epoch = epoch
-                best_phase = phase
-                best_metrics = dict(metrics)
-                best_model_state = snapshot_model_state(model)
-                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
+        val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
+        metrics.update(val_metrics)
+        last_epoch = epoch
+        last_metrics = dict(metrics)
 
-            if run_logger.should_log_progress(
-                epoch=epoch,
-                phase_changed=phase_changed,
-                is_final=(epoch == cfg.max_epochs - 1),
-            ):
-                run_logger.append_progress(epoch, metrics, phase)
+        if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
+            elapsed = time.time() - run_start_time
+            print(
+                f"[train] epoch {epoch:03d} "
+                f"phase={phase} train_loss={metrics['loss']:.6f} "
+                f"val_loss={metrics['val_loss']:.6f} "
+                f"yhat_mean={metrics['yhat_mean']:.3e} "
+                f"elapsed={elapsed:.1f}s"
+            )
 
-            data_generator.release_data()
+        if metrics["val_loss"] < best_val:
+            best_val = metrics["val_loss"]
+            best_epoch = epoch
+            best_phase = phase
+            best_metrics = dict(metrics)
+            best_model_state = snapshot_model_state(model)
+            print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
+
+        if run_logger.should_log_progress(
+            epoch=epoch,
+            phase_changed=phase_changed,
+            is_final=(epoch == cfg.max_epochs - 1),
+        ):
+            run_logger.append_progress(epoch, metrics, phase)
+
+        data_generator.release_data()
     except KeyboardInterrupt:
         run_status = "interrupted"
         raise
