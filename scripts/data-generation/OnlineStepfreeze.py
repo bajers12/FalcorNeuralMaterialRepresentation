@@ -38,13 +38,13 @@ import argparse
 from dataclasses import dataclass, asdict
 from typing import Dict, Tuple, Optional
 from DataGenerator import DataGenerator
+from training_run_logging import TrainingRunLogger
 import random
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
 
 
 # =============================================================================
@@ -54,9 +54,6 @@ from torch.utils.data import Dataset, DataLoader
 
 @dataclass
 class TrainConfig:
-    # Data
-    num_workers: int = 4
-
     # Latent texture
     tex_h: int = 512
     tex_w: int = 512
@@ -73,14 +70,12 @@ class TrainConfig:
     exp_offset: float = 3.0
     clamp_min_target: float = 0.0  # safety clamp on y before log
     log_eps: float = 1e-6  # y' = clamp(y, eps) for log
-    log_eps_mask_threshold: float = 1e-4
 
     # Optimization
     device: str = "cuda"
     seed: int = 1337
-    training_n: int = 64000  # total samples generated per outer epoch
-    validation_n: int = math.ceil(0.1 * 64000)
-    batch_size: int = 6400
+    training_n: int = 65536 # total samples generated per outer epoch
+    validation_n: int = 65536
     max_epochs: int = 50
 
     lr: float = 1e-3
@@ -92,16 +87,13 @@ class TrainConfig:
 
     # Logging / checkpoints
     out_dir: str = "./out_neural_material_mvp"
-    save_every: int = 5
-    print_every_steps: int = 50
+    print_every_epochs: int = 10000
 
     # Training behavior
     train_latent_texture: bool = True
     train_decoder: bool = True
     freeze_latent_after_epoch: Optional[int] = None
     freeze_decoder_after_epoch: Optional[int] = None
-    freeze_latent_after_step: Optional[int] = None
-    freeze_decoder_after_step: Optional[int] = None
 
     # Legacy flag retained for CLI compatibility. Direction transforms are disabled;
     # sampled normals remain available only as training-side material features.
@@ -608,7 +600,6 @@ def maybe_freeze_parts(
     cfg: TrainConfig,
     *,
     epoch: Optional[int] = None,
-    global_step: Optional[int] = None,
 ) -> None:
     if epoch is not None:
         if (
@@ -620,21 +611,6 @@ def maybe_freeze_parts(
         if (
             cfg.freeze_decoder_after_epoch is not None
             and epoch >= cfg.freeze_decoder_after_epoch
-        ):
-            for module in (model.decoder, model.encoder):
-                for p in module.parameters():
-                    p.requires_grad_(False)
-
-    if global_step is not None:
-        if (
-            cfg.freeze_latent_after_step is not None
-            and global_step >= cfg.freeze_latent_after_step
-        ):
-            for p in model.latent.parameters():
-                p.requires_grad_(False)
-        if (
-            cfg.freeze_decoder_after_step is not None
-            and global_step >= cfg.freeze_decoder_after_step
         ):
             for module in (model.decoder, model.encoder):
                 for p in module.parameters():
@@ -708,29 +684,26 @@ def train_one_epoch(
     cfg: TrainConfig,
     epoch: int,
     phase: str,
-    global_step_start: int = 0,
 ):
     model.train()
     device = torch.device(cfg.device)
 
     t0 = time.time()
-    global_step = global_step_start
     decoder_frozen_logged = False
     latent_frozen_logged = False
 
-    maybe_freeze_parts(model, cfg, global_step=global_step)
     opt, scheduler = maybe_rebuild_optimizer_and_scheduler(
         model, opt, scheduler, cfg, phase
     )
 
     decoder_now_frozen = all(not p.requires_grad for p in model.decoder.parameters())
     if decoder_now_frozen and not decoder_frozen_logged:
-        print(f"[train] freezing decoder at global_step={global_step}")
+        print(f"[train] freezing decoder at epoch={epoch}")
         decoder_frozen_logged = True
 
     latent_now_frozen = all(not p.requires_grad for p in model.latent.parameters())
     if latent_now_frozen and not latent_frozen_logged:
-        print(f"[train] freezing latent texture at global_step={global_step}")
+        print(f"[train] freezing latent texture at epoch={epoch}")
         latent_frozen_logged = True
 
     uv = batch["uv"].to(device, non_blocking=True)
@@ -762,20 +735,13 @@ def train_one_epoch(
         stats = compute_basic_stats(y_hat, y)
         raw_stats = compute_raw_stats(raw)
 
-    global_step += 1
-
-    if cfg.print_every_steps <= 1:
+    if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
         dt = time.time() - t0
-        lr_summary = ", ".join(
-            [f"{pg.get('name','group')}={pg['lr']:.2e}" for pg in opt.param_groups]
-        )
         print(
-            f"[train] epoch {epoch:03d} step {1:05d} global_step={global_step:07d} "
-            f"phase={phase} loss={loss.item():.6f} bsdf_loss={bsdf_loss.item():.6f} "
-            f"mae={stats['mae']:.6f} "
-            f"yhat_mean={stats['yhat_mean']:.3e} y_mean={stats['y_mean']:.3e} "
-            f"raw_mean={raw_stats['raw_mean']:.3f} raw_std={raw_stats['raw_std']:.3f} "
-            f"lr[{lr_summary}] time={dt:.1f}s"
+            f"[train] epoch {epoch:03d} "
+            f"phase={phase} loss={loss.item():.6f} "
+            f"yhat_mean={stats['yhat_mean']:.3e} "
+            f"time={dt:.1f}s"
         )
 
     return (
@@ -789,7 +755,6 @@ def train_one_epoch(
             "raw_mean": raw_stats["raw_mean"],
             "raw_std": raw_stats["raw_std"],
         },
-        global_step,
         opt,
         scheduler,
     )
@@ -949,9 +914,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--mlp_depth", type=int, default=2)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
-    p.add_argument("--training_n", type=int, default=64000)
-    p.add_argument("--validation_size", type=int, default=6400)
-    p.add_argument("--batch_size", type=int, default=6400)
+    p.add_argument("--training_n", type=int, default=65536)
+    p.add_argument("--validation_size", type=int, default=65536)
     p.add_argument("--max_epochs", type=int, default=1000)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
@@ -961,13 +925,9 @@ def parse_args() -> TrainConfig:
     p.add_argument("--grad_clip_norm", type=float, default=None)
 
     p.add_argument("--log_eps", type=float, default=1e-6)
-    p.add_argument("--log_eps_mask_threshold", type=float, default=1e-4)
     p.add_argument("--clamp_min_target", type=float, default=0.0)
 
-    p.add_argument("--num_workers", type=int, default=0)
-    p.add_argument("--save_every", type=int, default=100)
-    p.add_argument("--print_every_steps", type=int, default=50)
-
+    p.add_argument("--print_every_epochs", type=int, default=10000)
     p.add_argument("--train_latent_texture", action="store_true")
     p.add_argument("--no_train_latent_texture", action="store_true")
     p.add_argument("--train_decoder", action="store_true")
@@ -975,8 +935,6 @@ def parse_args() -> TrainConfig:
 
     p.add_argument("--freeze_latent_after_epoch", type=int, default=None)
     p.add_argument("--freeze_decoder_after_epoch", type=int, default=None)
-    p.add_argument("--freeze_latent_after_step", type=int, default=None)
-    p.add_argument("--freeze_decoder_after_step", type=int, default=None)
 
     p.add_argument(
         "--use_normals",
@@ -1046,7 +1004,6 @@ def parse_args() -> TrainConfig:
 
     cfg.training_n = args.training_n
     cfg.validation_n = args.validation_size
-    cfg.batch_size = args.batch_size
     cfg.max_epochs = args.max_epochs
     cfg.lr = args.lr
     cfg.lr_min = args.lr_min
@@ -1056,13 +1013,9 @@ def parse_args() -> TrainConfig:
     cfg.grad_clip_norm = args.grad_clip_norm
 
     cfg.log_eps = args.log_eps
-    cfg.log_eps_mask_threshold = args.log_eps_mask_threshold
     cfg.clamp_min_target = args.clamp_min_target
 
-    cfg.num_workers = args.num_workers
-    cfg.save_every = args.save_every
-    cfg.print_every_steps = args.print_every_steps
-
+    cfg.print_every_epochs = max(0, args.print_every_epochs)
     if args.no_train_latent_texture:
         cfg.train_latent_texture = False
     elif args.train_latent_texture:
@@ -1075,8 +1028,6 @@ def parse_args() -> TrainConfig:
 
     cfg.freeze_latent_after_epoch = args.freeze_latent_after_epoch
     cfg.freeze_decoder_after_epoch = args.freeze_decoder_after_epoch
-    cfg.freeze_latent_after_step = args.freeze_latent_after_step
-    cfg.freeze_decoder_after_step = args.freeze_decoder_after_step
 
     cfg.use_normals = args.use_normals
     cfg.encoder_width = args.encoder_width
@@ -1143,6 +1094,7 @@ def main():
 
     os.makedirs(cfg.out_dir, exist_ok=True)
     save_config(cfg)
+    run_logger = TrainingRunLogger(cfg)
     print("Config:", json.dumps(asdict(cfg), indent=2))
     if cfg.use_normals:
         print(
@@ -1161,68 +1113,93 @@ def main():
     best_metrics: Optional[Dict[str, float]] = None
     best_epoch: Optional[int] = None
     best_phase: Optional[str] = None
-    global_step = 0
+    last_epoch: Optional[int] = None
+    last_metrics: Optional[Dict[str, float]] = None
+    run_status = "completed"
 
-    # Gene validation data only once, and keep as single holdout set for all epochs
-    data_generator = DataGenerator(sampleCount=cfg.validation_n)
-    if cfg.encoder_bootstrap_epochs > 0 and not data_generator.supports_uv_grid():
-        raise RuntimeError(
-            "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
-            "Rebuild Falcor/plugin binaries so setUvGrid/clearUvGrid are available, or set --encoder_bootstrap_epochs 0."
-        )
-    validation_batch = data_generator.generate_data(random.randint(0, 1000000)).copy()
-    data_generator.release_data()
-    validation_tensor = tensorize_batch(data_to_dict(validation_batch))
-    print_first_sample(validation_tensor, "validation batch")
-
-    data_generator = DataGenerator(sampleCount=cfg.training_n)
-    for epoch in range(cfg.max_epochs):
-        phase = get_training_phase(cfg, epoch)
-        if phase != current_phase:
-            print(f"[train] switching phase: {current_phase} -> {phase} at epoch {epoch:03d}")
-            if phase == "finetune":
-                initialize_latent_texture_from_encoder(
-                    model, cfg, random.randint(0, 1000000)
-                )
-                for p in model.encoder.parameters():
-                    p.requires_grad_(False)
-            current_phase = phase
-
-        maybe_freeze_parts(model, cfg, epoch=epoch, global_step=global_step)
-
-        data_batch = data_generator.generate_data(random.randint(0, 1000000))
-        training_batch = data_batch
-        training_tensor = tensorize_batch(data_to_dict(training_batch))
-        if epoch == 0:
-            print_first_sample(training_tensor, "training batch")
-
-        train_metrics, global_step, opt, scheduler = train_one_epoch(
-            model,
-            training_tensor,
-            opt,
-            scheduler,
-            cfg,
-            epoch,
-            phase,
-            global_step_start=global_step,
-        )
-
-        scheduler.step()
-
-        metrics = dict(train_metrics)
-        metrics["global_step"] = global_step
-
-        val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
-        metrics.update(val_metrics)
-        if metrics["val_loss"] < best_val:
-            best_val = metrics["val_loss"]
-            best_epoch = epoch
-            best_phase = phase
-            best_metrics = dict(metrics)
-            best_model_state = snapshot_model_state(model)
-            print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
-
+    try:
+        # Gene validation data only once, and keep as single holdout set for all epochs
+        data_generator = DataGenerator(sampleCount=cfg.validation_n)
+        if cfg.encoder_bootstrap_epochs > 0 and not data_generator.supports_uv_grid():
+            raise RuntimeError(
+                "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
+                "Rebuild Falcor/plugin binaries so setUvGrid/clearUvGrid are available, or set --encoder_bootstrap_epochs 0."
+            )
+        validation_batch = data_generator.generate_data(random.randint(0, 1000000)).copy()
         data_generator.release_data()
+        validation_tensor = tensorize_batch(data_to_dict(validation_batch))
+        print_first_sample(validation_tensor, "validation batch")
+
+        data_generator = DataGenerator(sampleCount=cfg.training_n)
+        for epoch in range(cfg.max_epochs):
+            phase = get_training_phase(cfg, epoch)
+            phase_changed = phase != current_phase
+            if phase_changed:
+                print(f"[train] switching phase: {current_phase} -> {phase} at epoch {epoch:03d}")
+                if phase == "finetune":
+                    initialize_latent_texture_from_encoder(
+                        model, cfg, random.randint(0, 1000000)
+                    )
+                    for p in model.encoder.parameters():
+                        p.requires_grad_(False)
+                current_phase = phase
+
+            maybe_freeze_parts(model, cfg, epoch=epoch)
+
+            data_batch = data_generator.generate_data(random.randint(0, 1000000))
+            training_batch = data_batch
+            training_tensor = tensorize_batch(data_to_dict(training_batch))
+            if epoch == 0:
+                print_first_sample(training_tensor, "training batch")
+
+            train_metrics, opt, scheduler = train_one_epoch(
+                model,
+                training_tensor,
+                opt,
+                scheduler,
+                cfg,
+                epoch,
+                phase,
+            )
+
+            scheduler.step()
+
+            metrics = dict(train_metrics)
+
+            val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
+            metrics.update(val_metrics)
+            last_epoch = epoch
+            last_metrics = dict(metrics)
+            if metrics["val_loss"] < best_val:
+                best_val = metrics["val_loss"]
+                best_epoch = epoch
+                best_phase = phase
+                best_metrics = dict(metrics)
+                best_model_state = snapshot_model_state(model)
+                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
+
+            if run_logger.should_log_progress(
+                epoch=epoch,
+                phase_changed=phase_changed,
+                is_final=(epoch == cfg.max_epochs - 1),
+            ):
+                run_logger.append_progress(epoch, metrics, phase)
+
+            data_generator.release_data()
+    except KeyboardInterrupt:
+        run_status = "interrupted"
+        raise
+    except Exception:
+        run_status = "failed"
+        raise
+    finally:
+        run_logger.write_summary(
+            status=run_status,
+            best_epoch=best_epoch,
+            best_metrics=best_metrics,
+            last_epoch=last_epoch,
+            last_metrics=last_metrics,
+        )
 
     if (
         best_model_state is not None

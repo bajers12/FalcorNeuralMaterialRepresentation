@@ -2,6 +2,7 @@ import Scene.Scene;
 import Scene.Material.MaterialSystem;
 import Rendering.Materials.IMaterial;
 import Rendering.Materials.IMaterialInstance;
+import Utils.Math.ShadingFrame;
 
 static const float kPi = 3.14159265358979323846f;
 static const float kInvPi = 0.31830988618379067154f;
@@ -84,10 +85,10 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
 
         float3 N = normalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
         float3 T = normalize(float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]));
-        float3 B = normalize(cross(N, T));
+        ShadingFrame predFrame = ShadingFrame(N, float4(T, 1.f));
 
-        float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
-        float3 woPred = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
+        float3 wiPred = predFrame.toLocal(wiLocal);
+        float3 woPred = predFrame.toLocal(woLocal);
 
         x[xBase + 0] = wiPred.x;
         x[xBase + 1] = wiPred.y;

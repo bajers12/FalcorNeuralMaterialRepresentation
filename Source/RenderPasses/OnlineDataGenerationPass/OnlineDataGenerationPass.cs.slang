@@ -81,7 +81,6 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
     float3 f = mi.eval(sd, wo, sg);
-    f *= max(dot(props.guideNormal, wo), 0.f);
     float pdf = 0.0f;
 
     // Save results
