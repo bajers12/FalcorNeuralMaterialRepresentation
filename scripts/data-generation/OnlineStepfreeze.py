@@ -684,11 +684,10 @@ def train_one_epoch(
     cfg: TrainConfig,
     epoch: int,
     phase: str,
+    run_start_time: float,
 ):
     model.train()
     device = torch.device(cfg.device)
-
-    t0 = time.time()
     decoder_frozen_logged = False
     latent_frozen_logged = False
 
@@ -736,12 +735,12 @@ def train_one_epoch(
         raw_stats = compute_raw_stats(raw)
 
     if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
-        dt = time.time() - t0
+        elapsed = time.time() - run_start_time
         print(
             f"[train] epoch {epoch:03d} "
             f"phase={phase} loss={loss.item():.6f} "
             f"yhat_mean={stats['yhat_mean']:.3e} "
-            f"time={dt:.1f}s"
+            f"elapsed={elapsed:.1f}s"
         )
 
     return (
@@ -1079,6 +1078,7 @@ def data_to_dict(data: np.ndarray):
 def main():
     cfg = parse_args()
     set_seed(cfg.seed)
+    run_start_time = time.time()
 
     if cfg.encoder_bootstrap_epochs > 0 and not cfg.train_decoder:
         raise ValueError(
@@ -1160,6 +1160,7 @@ def main():
                 cfg,
                 epoch,
                 phase,
+                run_start_time,
             )
 
             scheduler.step()
