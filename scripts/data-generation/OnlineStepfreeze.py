@@ -936,7 +936,7 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--encoder_bootstrap_epochs",
         type=int,
-        default=200,
+        default=2000,
         help="Number of epochs to train encoder -> decoder directly before initializing the latent texture.",
     )
     p.add_argument(
@@ -1158,37 +1158,37 @@ def main():
 
             metrics = dict(train_metrics)
 
-        val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
-        metrics.update(val_metrics)
-        last_epoch = epoch
-        last_metrics = dict(metrics)
+            val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
+            metrics.update(val_metrics)
+            last_epoch = epoch
+            last_metrics = dict(metrics)
 
-        if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
-            elapsed = time.time() - run_start_time
-            print(
-                f"[train] epoch {epoch:03d} "
-                f"phase={phase} train_loss={metrics['loss']:.6f} "
-                f"val_loss={metrics['val_loss']:.6f} "
-                f"yhat_mean={metrics['yhat_mean']:.3e} "
-                f"elapsed={elapsed:.1f}s"
-            )
+            if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
+                elapsed = time.time() - run_start_time
+                print(
+                    f"[train] epoch {epoch:03d} "
+                    f"phase={phase} train_loss={metrics['loss']:.6f} "
+                    f"val_loss={metrics['val_loss']:.6f} "
+                    f"yhat_mean={metrics['yhat_mean']:.3e} "
+                    f"elapsed={elapsed:.1f}s"
+                )
 
-        if metrics["val_loss"] < best_val:
-            best_val = metrics["val_loss"]
-            best_epoch = epoch
-            best_phase = phase
-            best_metrics = dict(metrics)
-            best_model_state = snapshot_model_state(model)
-            print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
+            if metrics["val_loss"] < best_val:
+                best_val = metrics["val_loss"]
+                best_epoch = epoch
+                best_phase = phase
+                best_metrics = dict(metrics)
+                best_model_state = snapshot_model_state(model)
+                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
 
-        if run_logger.should_log_progress(
-            epoch=epoch,
-            phase_changed=phase_changed,
-            is_final=(epoch == cfg.max_epochs - 1),
-        ):
-            run_logger.append_progress(epoch, metrics, phase)
+            if run_logger.should_log_progress(
+                epoch=epoch,
+                phase_changed=phase_changed,
+                is_final=(epoch == cfg.max_epochs - 1),
+            ):
+                run_logger.append_progress(epoch, metrics, phase)
 
-        data_generator.release_data()
+            data_generator.release_data()
     except KeyboardInterrupt:
         run_status = "interrupted"
         raise

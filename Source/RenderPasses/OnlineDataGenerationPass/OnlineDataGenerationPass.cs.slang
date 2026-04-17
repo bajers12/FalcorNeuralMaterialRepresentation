@@ -70,7 +70,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     VertexData v = {};
     v.posW        = float3((uv[0]-0.5f)*2, (uv[1]-0.5f)*2, 0.f);
     v.normalW     = float3(0.f, 0.f, 1.f);         // flat geometric normal
-    v.tangentW    = float4(perp_stark(v.normalW), 1.f); // stable arbitrary tangent + sign
+    v.tangentW    = float4(1.f, 0.f, 0.f, 1.f);
     v.faceNormalW = v.normalW;
     v.texC        = uv;
 
