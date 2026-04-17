@@ -22,10 +22,12 @@ Normals support:
   to rotate wi/wo. The decoder always sees the original sampled directions.
 
 Exports:
-  - latent_texture.pt: {"Z": [1,C,H,W], "shape": (H,W,C)}
-  - latent_rgba0.npz / latent_rgba1.npz if C==8 (for renderer-friendly RGBA splits)
-  - decoder.pt: PyTorch state_dict
-  - decoder_weights.npz: Numpy arrays for renderer-side loading
+    - latent_texture.pt: {"Z": [1,C,H,W], "shape": (H,W,C)}
+    - latent_rgba0.npz / latent_rgba1.npz if C==8 (for renderer-friendly RGBA splits)
+    - latent0.exr / latent1.exr if C==8 (renderer-ready assets)
+    - decoder.pt: PyTorch state_dict
+    - decoder_weights.npz: Numpy arrays for renderer-side loading
+    - decoder_weights.bin / metadata.json: renderer-ready bundle for NeuralMaterial
 """
 
 from __future__ import annotations
@@ -35,7 +37,9 @@ import math
 import json
 import time
 import argparse
+import struct
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import Dict, Tuple, Optional
 from DataGenerator import DataGenerator
 from training_run_logging import TrainingRunLogger
@@ -86,7 +90,8 @@ class TrainConfig:
     grad_clip_norm: Optional[float] = None
 
     # Logging / checkpoints
-    out_dir: str = "./out_neural_material_mvp"
+    out_dir: str = "./output_weights"
+    preview_out_dir: str = ""
     print_every_epochs: int = 10000
 
     # Training behavior
@@ -877,6 +882,139 @@ def export_decoder_weights(model: NeuralMaterialModel, cfg: TrainConfig) -> None
     np.savez_compressed(os.path.join(cfg.out_dir, "decoder_weights.npz"), **out)
 
 
+def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
+    rgba_hw4 = np.asarray(rgba_hw4, dtype=np.float32)
+    assert rgba_hw4.ndim == 3 and rgba_hw4.shape[2] == 4, f"Expected HxWx4, got {rgba_hw4.shape}"
+
+    h, w, _ = rgba_hw4.shape
+
+    try:
+        import OpenEXR
+        import Imath
+
+        header = OpenEXR.Header(w, h)
+        pt = Imath.PixelType(Imath.PixelType.FLOAT)
+        header["channels"] = {
+            "R": Imath.Channel(pt),
+            "G": Imath.Channel(pt),
+            "B": Imath.Channel(pt),
+            "A": Imath.Channel(pt),
+        }
+
+        exr = OpenEXR.OutputFile(str(path), header)
+        exr.writePixels(
+            {
+                "R": rgba_hw4[:, :, 0].astype(np.float32).tobytes(),
+                "G": rgba_hw4[:, :, 1].astype(np.float32).tobytes(),
+                "B": rgba_hw4[:, :, 2].astype(np.float32).tobytes(),
+                "A": rgba_hw4[:, :, 3].astype(np.float32).tobytes(),
+            }
+        )
+        exr.close()
+        return
+    except Exception:
+        pass
+
+    try:
+        import imageio.v3 as iio
+
+        iio.imwrite(str(path), rgba_hw4)
+        return
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to write EXR '{path}'. Install either OpenEXR or imageio with EXR support.\n{e}"
+        )
+
+
+def save_weights_bin(path: Path, weights: dict) -> None:
+    latent_ch = int(np.asarray(weights["latent_ch"]).reshape(-1)[0])
+    num_frames = int(np.asarray(weights["num_frames"]).reshape(-1)[0])
+    exp_offset = float(np.asarray(weights["exp_offset"]).reshape(-1)[0])
+
+    ordered = [
+        ("frame_linear.weight", (12, 8)),
+        ("mlp.0.weight", (32, 20)),
+        ("mlp.0.bias", (32,)),
+        ("mlp.2.weight", (32, 32)),
+        ("mlp.2.bias", (32,)),
+        ("mlp.4.weight", (3, 32)),
+        ("mlp.4.bias", (3,)),
+    ]
+
+    with open(path, "wb") as f:
+        f.write(b"NMDLWT01")
+        f.write(struct.pack("<iiif", latent_ch, num_frames, 1, exp_offset))
+
+        for name, expected_shape in ordered:
+            arr = np.asarray(weights[name], dtype=np.float32)
+            if tuple(arr.shape) != expected_shape:
+                raise ValueError(f"{name} expected shape {expected_shape}, got {arr.shape}")
+            f.write(arr.astype(np.float32).ravel(order="C").tobytes())
+
+
+def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
+    _, h, w = latent.shape
+    metadata = {
+        "width": int(w),
+        "height": int(h),
+        "latent_dim": int(latent.shape[0]),
+        "num_frames": int(np.asarray(weights["num_frames"]).reshape(-1)[0]),
+        "exp_offset": float(np.asarray(weights["exp_offset"]).reshape(-1)[0]),
+        "apply_exp": True,
+        "decoder_layout": {
+            "frame_linear.weight": [12, 8],
+            "mlp.0.weight": [32, 20],
+            "mlp.0.bias": [32],
+            "mlp.2.weight": [32, 32],
+            "mlp.2.bias": [32],
+            "mlp.4.weight": [3, 32],
+            "mlp.4.bias": [3],
+        },
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
+    preview_dir = Path(cfg.preview_out_dir) if cfg.preview_out_dir else Path(__file__).resolve().parents[2] / "MatXScenes" / "Preview"
+    os.makedirs(preview_dir, exist_ok=True)
+
+    if cfg.latent_ch != 8:
+        print(
+            f"[export] Skipping renderer-ready latent/weight bundle because latent_ch={cfg.latent_ch}; expected 8."
+        )
+        return
+
+    latent = model.latent.Z.detach().cpu().numpy()[0]
+    rgba0 = latent[0:4].transpose(1, 2, 0).copy()
+    rgba1 = latent[4:8].transpose(1, 2, 0).copy()
+
+    write_exr(preview_dir / "latent0.exr", rgba0)
+    write_exr(preview_dir / "latent1.exr", rgba1)
+
+    np.save(preview_dir / "latent0.npy", rgba0)
+    np.save(preview_dir / "latent1.npy", rgba1)
+
+    sd = model.decoder.state_dict()
+    weights = {
+        "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
+        "num_frames": np.array([cfg.num_frames], dtype=np.int32),
+        "exp_offset": np.array([cfg.exp_offset], dtype=np.float32),
+        "frame_linear.weight": sd["frame_linear.weight"].detach().cpu().numpy(),
+        "mlp.0.weight": sd["mlp.0.weight"].detach().cpu().numpy(),
+        "mlp.0.bias": sd["mlp.0.bias"].detach().cpu().numpy(),
+        "mlp.2.weight": sd["mlp.2.weight"].detach().cpu().numpy(),
+        "mlp.2.bias": sd["mlp.2.bias"].detach().cpu().numpy(),
+        "mlp.4.weight": sd["mlp.4.weight"].detach().cpu().numpy(),
+        "mlp.4.bias": sd["mlp.4.bias"].detach().cpu().numpy(),
+    }
+
+    save_weights_bin(preview_dir / "decoder_weights.bin", weights)
+    save_metadata(preview_dir / "metadata.json", latent, weights)
+
+    print(f"[export] Renderer-ready assets written to: {preview_dir}")
+
+
 def save_config(cfg: TrainConfig) -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
     with open(os.path.join(cfg.out_dir, "config.json"), "w", encoding="utf-8") as f:
@@ -891,7 +1029,13 @@ def save_config(cfg: TrainConfig) -> None:
 def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser()
 
-    p.add_argument("--out_dir", type=str, default="./out_neural_material_mvp")
+    p.add_argument("--out_dir", type=str, default="./output_weights")
+    p.add_argument(
+        "--preview_out_dir",
+        type=str,
+        default="",
+        help="Directory for final renderer-ready assets. Defaults to MatXScenes/Preview.",
+    )
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=1337)
 
@@ -980,6 +1124,7 @@ def parse_args() -> TrainConfig:
 
     cfg = TrainConfig()
     cfg.out_dir = args.out_dir
+    cfg.preview_out_dir = args.preview_out_dir
     cfg.device = args.device
     cfg.seed = args.seed
 
@@ -1231,6 +1376,7 @@ def main():
 
     export_latent_texture(model, cfg)
     export_decoder_weights(model, cfg)
+    export_renderer_assets(model, cfg)
     print("Done. Exports written to:", cfg.out_dir)
 
 
