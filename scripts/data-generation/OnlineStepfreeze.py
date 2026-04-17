@@ -684,11 +684,10 @@ def train_one_epoch(
     cfg: TrainConfig,
     epoch: int,
     phase: str,
+    run_start_time: float,
 ):
     model.train()
     device = torch.device(cfg.device)
-
-    t0 = time.time()
     decoder_frozen_logged = False
     latent_frozen_logged = False
 
@@ -734,15 +733,6 @@ def train_one_epoch(
     with torch.no_grad():
         stats = compute_basic_stats(y_hat, y)
         raw_stats = compute_raw_stats(raw)
-
-    if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
-        dt = time.time() - t0
-        print(
-            f"[train] epoch {epoch:03d} "
-            f"phase={phase} loss={loss.item():.6f} "
-            f"yhat_mean={stats['yhat_mean']:.3e} "
-            f"time={dt:.1f}s"
-        )
 
     return (
         {
@@ -946,7 +936,7 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--encoder_bootstrap_epochs",
         type=int,
-        default=200,
+        default=2000,
         help="Number of epochs to train encoder -> decoder directly before initializing the latent texture.",
     )
     p.add_argument(
@@ -1079,6 +1069,7 @@ def data_to_dict(data: np.ndarray):
 def main():
     cfg = parse_args()
     set_seed(cfg.seed)
+    run_start_time = time.time()
 
     if cfg.encoder_bootstrap_epochs > 0 and not cfg.train_decoder:
         raise ValueError(
@@ -1160,6 +1151,7 @@ def main():
                 cfg,
                 epoch,
                 phase,
+                run_start_time,
             )
 
             scheduler.step()
@@ -1170,6 +1162,17 @@ def main():
             metrics.update(val_metrics)
             last_epoch = epoch
             last_metrics = dict(metrics)
+
+            if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
+                elapsed = time.time() - run_start_time
+                print(
+                    f"[train] epoch {epoch:03d} "
+                    f"phase={phase} train_loss={metrics['loss']:.6f} "
+                    f"val_loss={metrics['val_loss']:.6f} "
+                    f"yhat_mean={metrics['yhat_mean']:.3e} "
+                    f"elapsed={elapsed:.1f}s"
+                )
+
             if metrics["val_loss"] < best_val:
                 best_val = metrics["val_loss"]
                 best_epoch = epoch
