@@ -6,7 +6,11 @@ import pandas as pd
 import random
 
 class DataGenerator():
-    def __init__(self, materialId = 0, scene_path = 'C:/Users/s204795/FalcorNeuralMaterialRepresentation/MatXScenes/Preview/MatXScene.pyscene', sampleCount = 10):
+    def __init__(self, materialId = 0, scene_path = 'MatXScenes/Preview/MatXScene.pyscene', sampleCount = 10000):
+        # Construct path relative to project root
+        project_root = Path(__file__).parent.parent.parent
+        full_scene_path = project_root / scene_path
+
         self.testbed = falcor.Testbed(create_window=False)
         self.device = device = self.testbed.device
         self.graph = self.testbed.create_render_graph("OnlineDataGeneration")
@@ -14,7 +18,7 @@ class DataGenerator():
         self.graph.mark_output("OnlineDataGenerationPass.output")
         self.testbed.render_graph = self.graph;
 
-        self.testbed.load_scene(scene_path)
+        self.testbed.load_scene(str(full_scene_path))
 
     def supports_uv_grid(self):
         return hasattr(self.generation_pass, "setUvGrid") and hasattr(
