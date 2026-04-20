@@ -79,15 +79,14 @@ void main(uint3 threadId : SV_DispatchThreadID)
     let mi = gScene.materials.getMaterialInstance(sd, lod);
     BSDFProperties props = mi.getProperties(sd);
 
-    // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
     float3 f = mi.eval(sd, wo, sg);
     float pdf = 0.0f;
 
     // Save results
     BsdfSampleData data;
     data.uv       = uv;
-    data.wi       = wi;   // incident/view direction
-    data.wo       = wo;   // sampled light direction
+    data.wi       = wi;   // incident/view direction, towards viewer
+    data.wo       = wo;   // sampled light direction, away from surface
     data.f        = f;
     data.albedo   = props.diffuseReflectionAlbedo;
     data.specular = props.specularReflectionAlbedo;

@@ -915,16 +915,6 @@ def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
     except Exception:
         pass
 
-    try:
-        import imageio.v3 as iio
-
-        iio.imwrite(str(path), rgba_hw4)
-        return
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to write EXR '{path}'. Install either OpenEXR or imageio with EXR support.\n{e}"
-        )
-
 
 def save_weights_bin(path: Path, weights: dict) -> None:
     latent_ch = int(np.asarray(weights["latent_ch"]).reshape(-1)[0])
@@ -1374,8 +1364,6 @@ def main():
             f"and saved {best_ckpt_path}"
         )
 
-    export_latent_texture(model, cfg)
-    export_decoder_weights(model, cfg)
     export_renderer_assets(model, cfg)
     print("Done. Exports written to:", cfg.out_dir)
 
