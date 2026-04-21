@@ -8,7 +8,8 @@ namespace Falcor
 {
     namespace
     {
-        constexpr const char kWeightMagic[8] = { 'N','M','D','L','W','T','0','1' };
+        constexpr const char kWeightMagic01[8] = { 'N','M','D','L','W','T','0','1' };
+        constexpr const char kWeightMagic02[8] = { 'N','M','D','L','W','T','0','2' };
         const std::string kShaderFile = "Scene/Material/NeuralMaterial.slang";
     }   
     namespace
@@ -70,31 +71,61 @@ namespace Falcor
 
         char magic[8];
         f.read(magic, 8);
-        if (!f || std::memcmp(magic, kWeightMagic, 8) != 0)
+        if (!f)
+            FALCOR_THROW("Invalid weight file magic in: {}", weightsPath.string());
+
+        const bool isLegacyLayout = std::memcmp(magic, kWeightMagic01, 8) == 0;
+        const bool isFamilyLayout = std::memcmp(magic, kWeightMagic02, 8) == 0;
+        if (!isLegacyLayout && !isFamilyLayout)
             FALCOR_THROW("Invalid weight file magic in: {}", weightsPath.string());
 
         int32_t latentCh = 0;
         int32_t numFrames = 0;
         int32_t applyExp = 0;
         float expOffset = 0.f;
+        int32_t mlpWidth = 32;
+        int32_t mlpDepth = 2;
 
         f.read(reinterpret_cast<char*>(&latentCh), sizeof(int32_t));
         f.read(reinterpret_cast<char*>(&numFrames), sizeof(int32_t));
         f.read(reinterpret_cast<char*>(&applyExp), sizeof(int32_t));
         f.read(reinterpret_cast<char*>(&expOffset), sizeof(float));
+        if (isFamilyLayout)
+        {
+            f.read(reinterpret_cast<char*>(&mlpWidth), sizeof(int32_t));
+            f.read(reinterpret_cast<char*>(&mlpDepth), sizeof(int32_t));
+        }
         if (!f) FALCOR_THROW("Failed reading weight file header: {}", weightsPath.string());
 
-        // This patch targets the current eval-only 2x32 export.
         if (latentCh != 8) FALCOR_THROW("Expected latentCh == 8, got {} in {}", latentCh, weightsPath.string());
         if (numFrames != 2) FALCOR_THROW("Expected numFrames == 2, got {} in {}", numFrames, weightsPath.string());
+        if (mlpWidth != 16 && mlpWidth != 32 && mlpWidth != 64)
+            FALCOR_THROW("Expected mlpWidth in {16, 32, 64}, got {} in {}", mlpWidth, weightsPath.string());
+        if (mlpDepth != 2 && mlpDepth != 3)
+            FALCOR_THROW("Expected mlpDepth in {2, 3}, got {} in {}", mlpDepth, weightsPath.string());
 
         auto frameLinear = readFloatArray(f, 12 * 8);
-        auto w0 = readFloatArray(f, 32 * 20);
-        auto b0 = readFloatArray(f, 32);
-        auto w1 = readFloatArray(f, 32 * 32);
-        auto b1 = readFloatArray(f, 32);
-        auto w2 = readFloatArray(f, 3 * 32);
-        auto b2 = readFloatArray(f, 3);
+        auto w0 = readFloatArray(f, static_cast<size_t>(mlpWidth) * 20);
+        auto b0 = readFloatArray(f, static_cast<size_t>(mlpWidth));
+        auto w1 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
+        auto b1 = readFloatArray(f, static_cast<size_t>(mlpWidth));
+        std::vector<float> w2;
+        std::vector<float> b2;
+        std::vector<float> w3;
+        std::vector<float> b3;
+
+        if (mlpDepth == 2)
+        {
+            w2 = readFloatArray(f, static_cast<size_t>(3) * static_cast<size_t>(mlpWidth));
+            b2 = readFloatArray(f, 3);
+        }
+        else
+        {
+            w2 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
+            b2 = readFloatArray(f, static_cast<size_t>(mlpWidth));
+            w3 = readFloatArray(f, static_cast<size_t>(3) * static_cast<size_t>(mlpWidth));
+            b3 = readFloatArray(f, 3);
+        }
 
         auto makeStructured = [&](const std::vector<float>& data) -> ref<Buffer>
         {
@@ -116,6 +147,8 @@ namespace Falcor
         mpB1 = makeStructured(b1);
         mpW2 = makeStructured(w2);
         mpB2 = makeStructured(b2);
+        mpW3 = w3.empty() ? makeStructured(std::vector<float>{ 0.f }) : makeStructured(w3);
+        mpB3 = b3.empty() ? makeStructured(std::vector<float>{ 0.f }) : makeStructured(b3);
 
         if (!mpSampler)
         {
@@ -127,6 +160,8 @@ namespace Falcor
 
         mData.applyExp = applyExp != 0 ? 1u : 0u;
         mData.expOffset = expOffset;
+        mData.mlpWidth = static_cast<uint32_t>(mlpWidth);
+        mData.mlpDepth = static_cast<uint32_t>(mlpDepth);
     }
 
     uint32_t NeuralMaterial::uploadBuffer(MaterialSystem* pOwner, const ref<Buffer>& pBuffer, uint32_t& id)
@@ -162,6 +197,8 @@ namespace Falcor
         uploadBuffer(pOwner, mpB1, mData.B1BufferID);
         uploadBuffer(pOwner, mpW2, mData.W2BufferID);
         uploadBuffer(pOwner, mpB2, mData.B2BufferID);
+        uploadBuffer(pOwner, mpW3, mData.W3BufferID);
+        uploadBuffer(pOwner, mpB3, mData.B3BufferID);
 
         return updates;
     }
@@ -178,7 +215,8 @@ namespace Falcor
                mpFrameLinear == p->mpFrameLinear &&
                mpW0 == p->mpW0 && mpB0 == p->mpB0 &&
                mpW1 == p->mpW1 && mpB1 == p->mpB1 &&
-               mpW2 == p->mpW2 && mpB2 == p->mpB2;
+               mpW2 == p->mpW2 && mpB2 == p->mpB2 &&
+               mpW3 == p->mpW3 && mpB3 == p->mpB3;
     }
 
     MaterialDataBlob NeuralMaterial::getDataBlob() const

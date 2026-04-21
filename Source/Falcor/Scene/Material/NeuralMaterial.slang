@@ -19,16 +19,263 @@ struct NeuralMaterialData
     uint B1BufferID = 0;
     uint W2BufferID = 0;
     uint B2BufferID = 0;
+    uint W3BufferID = 0;
+    uint B3BufferID = 0;
 
     uint applyExp = 1;
     float expOffset = 3.f;
-    uint _pad0 = 0;
-    uint _pad1 = 0;
+    uint mlpWidth = 32;
+    uint mlpDepth = 2;
 };
 
 float neuralBufferLoad(ByteAddressBuffer buf, uint index)
 {
     return asfloat(buf.Load(index * 4));
+}
+
+float4 neuralBufferLoad4(ByteAddressBuffer buf, uint index)
+{
+    return asfloat(buf.Load4(index * 4));
+}
+
+float3 neuralSafeNormalize(float3 v)
+{
+    return v * rsqrt(max(dot(v, v), 1e-16f));
+}
+
+float3 evalMLP16x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, const float x[20])
+{
+    float4 x4[5];
+    [unroll]
+    for (uint i = 0; i < 5; ++i)
+    {
+        uint base = 4 * i;
+        x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
+    }
+
+    float h0[16];
+    [unroll]
+    for (uint r = 0; r < 16; ++r)
+    {
+        float s = neuralBufferLoad(B0, r);
+        [unroll]
+        for (uint g = 0; g < 5; ++g)
+            s += dot(neuralBufferLoad4(W0, r * 20 + g * 4), x4[g]);
+        h0[r] = max(s, 0.f);
+    }
+
+    float h1[16];
+    [unroll]
+    for (uint r = 0; r < 16; ++r)
+    {
+        float s = neuralBufferLoad(B1, r);
+        [unroll]
+        for (uint g = 0; g < 4; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
+            s += dot(neuralBufferLoad4(W1, r * 16 + base), h);
+        }
+        h1[r] = max(s, 0.f);
+    }
+
+    float3 y = 0.f.xxx;
+    [unroll]
+    for (uint r = 0; r < 3; ++r)
+    {
+        float s = neuralBufferLoad(B2, r);
+        [unroll]
+        for (uint g = 0; g < 4; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
+            s += dot(neuralBufferLoad4(W2, r * 16 + base), h);
+        }
+        if (r == 0) y.x = s;
+        else if (r == 1) y.y = s;
+        else y.z = s;
+    }
+    return y;
+}
+
+float3 evalMLP32x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, const float x[20])
+{
+    float4 x4[5];
+    [unroll]
+    for (uint i = 0; i < 5; ++i)
+    {
+        uint base = 4 * i;
+        x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
+    }
+
+    float h0[32];
+    [unroll]
+    for (uint r = 0; r < 32; ++r)
+    {
+        float s = neuralBufferLoad(B0, r);
+        [unroll]
+        for (uint g = 0; g < 5; ++g)
+            s += dot(neuralBufferLoad4(W0, r * 20 + g * 4), x4[g]);
+        h0[r] = max(s, 0.f);
+    }
+
+    float h1[32];
+    [unroll]
+    for (uint r = 0; r < 32; ++r)
+    {
+        float s = neuralBufferLoad(B1, r);
+        [unroll]
+        for (uint g = 0; g < 8; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
+            s += dot(neuralBufferLoad4(W1, r * 32 + base), h);
+        }
+        h1[r] = max(s, 0.f);
+    }
+
+    float3 y = 0.f.xxx;
+    [unroll]
+    for (uint r = 0; r < 3; ++r)
+    {
+        float s = neuralBufferLoad(B2, r);
+        [unroll]
+        for (uint g = 0; g < 8; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
+            s += dot(neuralBufferLoad4(W2, r * 32 + base), h);
+        }
+        if (r == 0) y.x = s;
+        else if (r == 1) y.y = s;
+        else y.z = s;
+    }
+    return y;
+}
+
+float3 evalMLP64x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, const float x[20])
+{
+    float4 x4[5];
+    [unroll]
+    for (uint i = 0; i < 5; ++i)
+    {
+        uint base = 4 * i;
+        x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
+    }
+
+    float h0[64];
+    [unroll]
+    for (uint r = 0; r < 64; ++r)
+    {
+        float s = neuralBufferLoad(B0, r);
+        [unroll]
+        for (uint g = 0; g < 5; ++g)
+            s += dot(neuralBufferLoad4(W0, r * 20 + g * 4), x4[g]);
+        h0[r] = max(s, 0.f);
+    }
+
+    float h1[64];
+    [unroll]
+    for (uint r = 0; r < 64; ++r)
+    {
+        float s = neuralBufferLoad(B1, r);
+        [unroll]
+        for (uint g = 0; g < 16; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
+            s += dot(neuralBufferLoad4(W1, r * 64 + base), h);
+        }
+        h1[r] = max(s, 0.f);
+    }
+
+    float3 y = 0.f.xxx;
+    [unroll]
+    for (uint r = 0; r < 3; ++r)
+    {
+        float s = neuralBufferLoad(B2, r);
+        [unroll]
+        for (uint g = 0; g < 16; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
+            s += dot(neuralBufferLoad4(W2, r * 64 + base), h);
+        }
+        if (r == 0) y.x = s;
+        else if (r == 1) y.y = s;
+        else y.z = s;
+    }
+    return y;
+}
+
+float3 evalMLP64x3(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, ByteAddressBuffer W3, ByteAddressBuffer B3, const float x[20])
+{
+    float4 x4[5];
+    [unroll]
+    for (uint i = 0; i < 5; ++i)
+    {
+        uint base = 4 * i;
+        x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
+    }
+
+    float h0[64];
+    [unroll]
+    for (uint r = 0; r < 64; ++r)
+    {
+        float s = neuralBufferLoad(B0, r);
+        [unroll]
+        for (uint g = 0; g < 5; ++g)
+            s += dot(neuralBufferLoad4(W0, r * 20 + g * 4), x4[g]);
+        h0[r] = max(s, 0.f);
+    }
+
+    float h1[64];
+    [unroll]
+    for (uint r = 0; r < 64; ++r)
+    {
+        float s = neuralBufferLoad(B1, r);
+        [unroll]
+        for (uint g = 0; g < 16; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
+            s += dot(neuralBufferLoad4(W1, r * 64 + base), h);
+        }
+        h1[r] = max(s, 0.f);
+    }
+
+    float h2[64];
+    [unroll]
+    for (uint r = 0; r < 64; ++r)
+    {
+        float s = neuralBufferLoad(B2, r);
+        [unroll]
+        for (uint g = 0; g < 16; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
+            s += dot(neuralBufferLoad4(W2, r * 64 + base), h);
+        }
+        h2[r] = max(s, 0.f);
+    }
+
+    float3 y = 0.f.xxx;
+    [unroll]
+    for (uint r = 0; r < 3; ++r)
+    {
+        float s = neuralBufferLoad(B3, r);
+        [unroll]
+        for (uint g = 0; g < 16; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h2[base + 0], h2[base + 1], h2[base + 2], h2[base + 3]);
+            s += dot(neuralBufferLoad4(W3, r * 64 + base), h);
+        }
+        if (r == 0) y.x = s;
+        else if (r == 1) y.y = s;
+        else y.z = s;
+    }
+    return y;
 }
 
 void fetchNeuralLatents(const MaterialSystem materials, const NeuralMaterialData md, const uint materialID, const float2 uv, out float z[8])
@@ -55,15 +302,24 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
     ByteAddressBuffer B1 = materials.getBuffer(md.B1BufferID);
     ByteAddressBuffer W2 = materials.getBuffer(md.W2BufferID);
     ByteAddressBuffer B2 = materials.getBuffer(md.B2BufferID);
+    ByteAddressBuffer W3 = materials.getBuffer(md.W3BufferID);
+    ByteAddressBuffer B3 = materials.getBuffer(md.B3BufferID);
+
+    if (md.mlpWidth == 0 || md.mlpWidth > 64)
+        return 0.f.xxx;
+    if (md.mlpDepth != 2 && md.mlpDepth != 3)
+        return 0.f.xxx;
+
+    float4 z4a = float4(z[0], z[1], z[2], z[3]);
+    float4 z4b = float4(z[4], z[5], z[6], z[7]);
 
     float sf[12];
     [unroll]
     for (uint r = 0; r < 12; ++r)
     {
         float s = 0.f;
-        [unroll]
-        for (uint c = 0; c < 8; ++c)
-            s += neuralBufferLoad(frameLinear, r * 8 + c) * z[c];
+        s += dot(neuralBufferLoad4(frameLinear, r * 8 + 0), z4a);
+        s += dot(neuralBufferLoad4(frameLinear, r * 8 + 4), z4b);
         sf[r] = s;
     }
 
@@ -83,12 +339,13 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
         uint sfBase = 6 * f;
         uint xBase = 8 + 6 * f;
 
-        float3 N = normalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
-        float3 T = normalize(float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]));
-        ShadingFrame predFrame = ShadingFrame(N, float4(T, 1.f));
+        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
+        float3 Traw = float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]);
+        float3 T = neuralSafeNormalize(Traw - dot(Traw, N) * N);
+        float3 B = cross(N, T);
 
-        float3 wiPred = predFrame.toLocal(wiLocal);
-        float3 woPred = predFrame.toLocal(woLocal);
+        float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
+        float3 woPred = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
 
         x[xBase + 0] = wiPred.x;
         x[xBase + 1] = wiPred.y;
@@ -98,41 +355,17 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
         x[xBase + 5] = woPred.z;
     }
 
-    float h0[32];
-    [unroll]
-    for (uint r = 0; r < 32; ++r)
-    {
-        float s = neuralBufferLoad(B0, r);
-        [unroll]
-        for (uint c = 0; c < 20; ++c)
-            s += neuralBufferLoad(W0, r * 20 + c) * x[c];
-        h0[r] = max(s, 0.f);
-    }
-
-    float h1[32];
-    [unroll]
-    for (uint r = 0; r < 32; ++r)
-    {
-        float s = neuralBufferLoad(B1, r);
-        [unroll]
-        for (uint c = 0; c < 32; ++c)
-            s += neuralBufferLoad(W1, r * 32 + c) * h0[c];
-        h1[r] = max(s, 0.f);
-    }
-
     float3 y = 0.f.xxx;
-    [unroll]
-    for (uint r = 0; r < 3; ++r)
-    {
-        float s = neuralBufferLoad(B2, r);
-        [unroll]
-        for (uint c = 0; c < 32; ++c)
-            s += neuralBufferLoad(W2, r * 32 + c) * h1[c];
-
-        if (r == 0) y.x = s;
-        else if (r == 1) y.y = s;
-        else y.z = s;
-    }
+    if (md.mlpWidth == 16 && md.mlpDepth == 2)
+        y = evalMLP16x2(W0, B0, W1, B1, W2, B2, x);
+    else if (md.mlpWidth == 32 && md.mlpDepth == 2)
+        y = evalMLP32x2(W0, B0, W1, B1, W2, B2, x);
+    else if (md.mlpWidth == 64 && md.mlpDepth == 2)
+        y = evalMLP64x2(W0, B0, W1, B1, W2, B2, x);
+    else if (md.mlpWidth == 64 && md.mlpDepth == 3)
+        y = evalMLP64x3(W0, B0, W1, B1, W2, B2, W3, B3, x);
+    else
+        return 0.f.xxx;
 
     float3 outValue = md.applyExp != 0 ? exp(y - md.expOffset) : y;
     if (any(isnan(outValue)) || any(isinf(outValue))) return 0.f.xxx;

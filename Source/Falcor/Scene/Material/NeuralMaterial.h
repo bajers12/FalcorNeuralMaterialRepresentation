@@ -42,7 +42,7 @@ namespace Falcor
         TypeConformanceList getTypeConformances() const override;
 
         size_t getMaxTextureCount() const override { return 2; }
-        size_t getMaxBufferCount() const override { return 7; }
+        size_t getMaxBufferCount() const override { return 9; }
         size_t getMaterialInstanceByteSize() const override { return 128; }
 
         void setDefaultTextureSampler(const ref<Sampler>& pSampler) override { mpSampler = pSampler; }
@@ -61,11 +61,13 @@ namespace Falcor
             uint32_t B1BufferID = uint32_t(-1);
             uint32_t W2BufferID = uint32_t(-1);
             uint32_t B2BufferID = uint32_t(-1);
+            uint32_t W3BufferID = uint32_t(-1);
+            uint32_t B3BufferID = uint32_t(-1);
 
             uint32_t applyExp = 1;
             float expOffset = 3.f;
-            uint32_t _pad0 = 0;
-            uint32_t _pad1 = 0;
+            uint32_t mlpWidth = 32;
+            uint32_t mlpDepth = 2;
         };
         static_assert(sizeof(Data) <= sizeof(MaterialPayload), "NeuralMaterial payload must fit in MaterialPayload");
 
@@ -85,6 +87,8 @@ namespace Falcor
         ref<Buffer> mpB1;
         ref<Buffer> mpW2;
         ref<Buffer> mpB2;
+        ref<Buffer> mpW3;
+        ref<Buffer> mpB3;
 
         Data mData = {};
     };

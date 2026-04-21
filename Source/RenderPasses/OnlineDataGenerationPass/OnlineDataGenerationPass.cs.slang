@@ -76,7 +76,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
     ShadingData sd = gScene.materials.prepareShadingData(v, gMaterialId, wi);
 
-    let mi = gScene.materials.getMaterialInstance(sd, lod);
+    const uint materialHints = (uint)MaterialInstanceHints::AdjustShadingNormal;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, materialHints);
     BSDFProperties props = mi.getProperties(sd);
 
     float3 f = mi.eval(sd, wo, sg);
