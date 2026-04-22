@@ -46,6 +46,7 @@
 
 // Neural Implementation
 #include "Material/NeuralMaterial.h"
+#include "Material/LayeredTextureMaterial.h"
 
 namespace Falcor
 {
@@ -966,6 +967,44 @@ namespace Falcor
         FALCOR_CHECK(!resolvedPath.empty(), "Neural material path '{}' could not be resolved.", basePath.string());
 
         auto pNew = NeuralMaterial::create(mpDevice, pOld->getName(), resolvedPath);
+        pNew->setDoubleSided(pOld->isDoubleSided());
+        pNew->setThinSurface(pOld->isThinSurface());
+        pNew->setNestedPriority(pOld->getNestedPriority());
+        pNew->setIndexOfRefraction(pOld->getIndexOfRefraction());
+
+        replaceMaterial(pOld, pNew);
+    }
+
+    void SceneBuilder::replaceMaterialWithLayeredTexture(const std::string& materialName, const std::filesystem::path& textureDirectory)
+    {
+        auto pOld = getMaterial(materialName);
+        if (!pOld)
+        {
+            const auto& materials = getMaterials();
+            FALCOR_CHECK(!materials.empty(), "Cannot replace material '{}': scene has no materials.", materialName);
+
+            std::string materialNames;
+            for (const auto& pMaterial : materials)
+            {
+                if (!materialNames.empty()) materialNames += ", ";
+                materialNames += pMaterial ? "'" + pMaterial->getName() + "'" : "<null>";
+            }
+
+            logWarning(
+                "Material '{}' not found while creating LayeredTextureMaterial. Replacing first material '{}' instead. Available materials: {}",
+                materialName,
+                materials.front()->getName(),
+                materialNames
+            );
+            pOld = materials.front();
+        }
+
+        auto resolvedPath = mAssetResolver.resolvePath(textureDirectory);
+        FALCOR_CHECK(!resolvedPath.empty(), "Layered texture directory '{}' could not be resolved.", textureDirectory.string());
+        FALCOR_CHECK(std::filesystem::is_directory(resolvedPath), "Layered texture path '{}' is not a directory.", resolvedPath.string());
+
+        logInfo("Creating LayeredTextureMaterial '{}' from texture directory '{}'.", pOld->getName(), resolvedPath.string());
+        auto pNew = LayeredTextureMaterial::create(mpDevice, pOld->getName(), resolvedPath);
         pNew->setDoubleSided(pOld->isDoubleSided());
         pNew->setThinSurface(pOld->isThinSurface());
         pNew->setNestedPriority(pOld->getNestedPriority());
@@ -3007,6 +3046,7 @@ namespace Falcor
         sceneBuilder.def_property_readonly("flags", &SceneBuilder::getFlags);
         sceneBuilder.def_property_readonly("materials", &SceneBuilder::getMaterials);
         sceneBuilder.def("replaceMaterialWithNeural", &SceneBuilder::replaceMaterialWithNeural, "materialName"_a, "basePath"_a);
+        sceneBuilder.def("replaceMaterialWithLayeredTexture", &SceneBuilder::replaceMaterialWithLayeredTexture, "materialName"_a, "textureDirectory"_a);
         sceneBuilder.def_property_readonly("gridVolumes", &SceneBuilder::getGridVolumes);
         sceneBuilder.def_property_readonly("volumes", &SceneBuilder::getGridVolumes); // PYTHONDEPRECATED
         sceneBuilder.def_property_readonly("lights", &SceneBuilder::getLights);
