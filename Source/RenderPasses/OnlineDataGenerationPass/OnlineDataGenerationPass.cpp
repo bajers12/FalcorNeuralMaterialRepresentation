@@ -144,10 +144,9 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     {
         pMtlx->bindGeneratedResources(var);
     }
-    else
-    {
-        logWarning("OnlineDataGenerationPass: Selected material is not a MaterialXGraphMaterial.");
-    }
+    // Non-MaterialX materials are evaluated through the generic Falcor material
+    // interface in the shader below. Only MaterialXGraphMaterial needs this
+    // extra generated-resource binding step.
 
     mpScene->bindShaderData(var["gScene"]);
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;

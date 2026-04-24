@@ -1,4 +1,4 @@
-#include "LayeredTextureMaterial.h"
+#include "ThreeLayeredGGXMaterial.h"
 
 #include "MaterialSystem.h"
 #include "Core/API/Device.h"
@@ -17,29 +17,29 @@ namespace Falcor
 {
     namespace
     {
-        const std::string kShaderFile = "Scene/Material/LayeredTextureMaterial.slang";
+        const std::string kShaderFile = "Scene/Material/ThreeLayeredGGXMaterial.slang";
 
-        MaterialType getLayeredTextureMaterialType()
+        MaterialType getThreeLayeredGGXMaterialType()
         {
-            static MaterialType sType = registerMaterialType("LayeredTextureMaterial");
+            static MaterialType sType = registerMaterialType("ThreeLayeredGGXMaterial");
             return sType;
         }
     }
 
-    LayeredTextureMaterial::LayeredTextureMaterial(ref<Device> pDevice, const std::string& name)
-        : Material(pDevice, name, getLayeredTextureMaterialType())
+    ThreeLayeredGGXMaterial::ThreeLayeredGGXMaterial(ref<Device> pDevice, const std::string& name)
+        : Material(pDevice, name, getThreeLayeredGGXMaterialType())
     {
         setupTextureSlots();
         markUpdates(UpdateFlags::DataChanged | UpdateFlags::ResourcesChanged | UpdateFlags::CodeChanged);
     }
 
-    LayeredTextureMaterial::LayeredTextureMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
-        : LayeredTextureMaterial(std::move(pDevice), name)
+    ThreeLayeredGGXMaterial::ThreeLayeredGGXMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
+        : ThreeLayeredGGXMaterial(std::move(pDevice), name)
     {
         loadTextureSet(textureDirectory);
     }
 
-    void LayeredTextureMaterial::setupTextureSlots()
+    void ThreeLayeredGGXMaterial::setupTextureSlots()
     {
         mTextureSlotInfo[(uint32_t)TextureSlot::BaseColor] = {"baseColor", TextureChannelFlags::RGB, true};
         mTextureSlotInfo[(uint32_t)TextureSlot::Specular] = {"roughness", TextureChannelFlags::Red, false};
@@ -49,7 +49,7 @@ namespace Falcor
         mTextureSlotInfo[(uint32_t)TextureSlot::Transmission] = {"layerWeights", TextureChannelFlags::RGB, false};
     }
 
-    void LayeredTextureMaterial::renderTextureInfo(Gui::Widgets& widget, const char* label, const ref<Texture>& pTexture)
+    void ThreeLayeredGGXMaterial::renderTextureInfo(Gui::Widgets& widget, const char* label, const ref<Texture>& pTexture)
     {
         if (!pTexture) return;
 
@@ -61,7 +61,7 @@ namespace Falcor
         widget.image(label, pTexture.get(), float2(100.f));
     }
 
-    ref<Texture> LayeredTextureMaterial::loadExrTexture(const std::filesystem::path& path, bool singleChannel) const
+    ref<Texture> ThreeLayeredGGXMaterial::loadExrTexture(const std::filesystem::path& path, bool singleChannel) const
     {
         try
         {
@@ -152,12 +152,12 @@ namespace Falcor
         }
         catch (const std::exception& e)
         {
-            logWarning("LayeredTextureMaterial: OpenEXR fallback failed for '{}': {}", path.string(), e.what());
+            logWarning("ThreeLayeredGGXMaterial: OpenEXR fallback failed for '{}': {}", path.string(), e.what());
             return nullptr;
         }
     }
 
-    bool LayeredTextureMaterial::renderUI(Gui::Widgets& widget)
+    bool ThreeLayeredGGXMaterial::renderUI(Gui::Widgets& widget)
     {
         bool dirty = Material::renderUI(widget);
 
@@ -217,12 +217,13 @@ namespace Falcor
         if (widget.var("Height scale", mData.heightScale, 0.f, 100.f, 0.1f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Thickness scale", mData.thicknessScale, 0.f, 100.f, 0.1f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Absorption color", mData.absorptionColor, 0.f, 10.f, 0.05f)) markUpdates(UpdateFlags::DataChanged);
+        if (widget.var("Microfacet samples", mData.microfacetSamples, 1u, 64u)) markUpdates(UpdateFlags::DataChanged);
 
         dirty |= mUpdates != UpdateFlags::None;
         return dirty;
     }
 
-    Material::UpdateFlags LayeredTextureMaterial::update(MaterialSystem* pOwner)
+    Material::UpdateFlags ThreeLayeredGGXMaterial::update(MaterialSystem* pOwner)
     {
         FALCOR_ASSERT(pOwner);
 
@@ -248,9 +249,9 @@ namespace Falcor
         return updates;
     }
 
-    bool LayeredTextureMaterial::isEqual(const ref<Material>& pOther) const
+    bool ThreeLayeredGGXMaterial::isEqual(const ref<Material>& pOther) const
     {
-        auto p = dynamic_ref_cast<LayeredTextureMaterial>(pOther);
+        auto p = dynamic_ref_cast<ThreeLayeredGGXMaterial>(pOther);
         if (!p) return false;
         return isBaseEqual(*p) &&
                mData.baseF0 == p->mData.baseF0 &&
@@ -272,6 +273,7 @@ namespace Falcor
                mData.enableCoatLayer == p->mData.enableCoatLayer &&
                mData.flipNormalY == p->mData.flipNormalY &&
                mData.showThickness == p->mData.showThickness &&
+               mData.microfacetSamples == p->mData.microfacetSamples &&
                getBaseColorTexture() == p->getBaseColorTexture() &&
                getRoughnessTexture() == p->getRoughnessTexture() &&
                getNormalTexture() == p->getNormalTexture() &&
@@ -281,16 +283,16 @@ namespace Falcor
                mpSampler == p->mpSampler;
     }
 
-    bool LayeredTextureMaterial::loadTextureSet(const std::filesystem::path& textureDirectory)
+    bool ThreeLayeredGGXMaterial::loadTextureSet(const std::filesystem::path& textureDirectory)
     {
         if (textureDirectory.empty()) return false;
 
         auto load = [&](TextureSlot slot, const char* label, const std::filesystem::path& path, bool srgb)
         {
-            logInfo("LayeredTextureMaterial: loading {} texture '{}'.", label, path.string());
+            logInfo("ThreeLayeredGGXMaterial: loading {} texture '{}'.", label, path.string());
             if (!std::filesystem::exists(path))
             {
-                logWarning("LayeredTextureMaterial: missing {} texture '{}'.", label, path.string());
+                logWarning("ThreeLayeredGGXMaterial: missing {} texture '{}'.", label, path.string());
                 return false;
             }
 
@@ -306,13 +308,13 @@ namespace Falcor
 
             if (!pTexture)
             {
-                logWarning("LayeredTextureMaterial: failed to load {} texture '{}'.", label, path.string());
+                logWarning("ThreeLayeredGGXMaterial: failed to load {} texture '{}'.", label, path.string());
                 return false;
             }
 
             setTexture(slot, pTexture);
             logInfo(
-                "LayeredTextureMaterial: loaded {} texture '{}' as {}x{} {}.",
+                "ThreeLayeredGGXMaterial: loaded {} texture '{}' as {}x{} {}.",
                 label,
                 path.filename().string(),
                 pTexture->getWidth(),
@@ -328,7 +330,7 @@ namespace Falcor
             {
                 if (std::filesystem::exists(candidate)) return load(slot, label, candidate, srgb);
             }
-            logWarning("LayeredTextureMaterial: no candidate file found for {}.", label);
+            logWarning("ThreeLayeredGGXMaterial: no candidate file found for {}.", label);
             return false;
         };
 
@@ -362,22 +364,22 @@ namespace Falcor
             false
         );
 
-        logInfo("LayeredTextureMaterial: texture set load {}.", loaded ? "completed" : "did not load any textures");
+        logInfo("ThreeLayeredGGXMaterial: texture set load {}.", loaded ? "completed" : "did not load any textures");
         return loaded;
     }
 
-    MaterialDataBlob LayeredTextureMaterial::getDataBlob() const
+    MaterialDataBlob ThreeLayeredGGXMaterial::getDataBlob() const
     {
         return prepareDataBlob(mData);
     }
 
-    ProgramDesc::ShaderModuleList LayeredTextureMaterial::getShaderModules() const
+    ProgramDesc::ShaderModuleList ThreeLayeredGGXMaterial::getShaderModules() const
     {
         return {ProgramDesc::ShaderModule::fromFile(kShaderFile)};
     }
 
-    TypeConformanceList LayeredTextureMaterial::getTypeConformances() const
+    TypeConformanceList ThreeLayeredGGXMaterial::getTypeConformances() const
     {
-        return {{{"LayeredTextureMaterial", "IMaterial"}, (uint32_t)getType()}};
+        return {{{"ThreeLayeredGGXMaterial", "IMaterial"}, (uint32_t)getType()}};
     }
 }

@@ -9,23 +9,23 @@
 
 namespace Falcor
 {
-    class LayeredTextureMaterial : public Material
+    class ThreeLayeredGGXMaterial : public Material
     {
-        FALCOR_OBJECT(LayeredTextureMaterial)
+        FALCOR_OBJECT(ThreeLayeredGGXMaterial)
 
     public:
-        static ref<LayeredTextureMaterial> create(ref<Device> pDevice, const std::string& name = "")
+        static ref<ThreeLayeredGGXMaterial> create(ref<Device> pDevice, const std::string& name = "")
         {
-            return make_ref<LayeredTextureMaterial>(std::move(pDevice), name);
+            return make_ref<ThreeLayeredGGXMaterial>(std::move(pDevice), name);
         }
 
-        static ref<LayeredTextureMaterial> create(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
+        static ref<ThreeLayeredGGXMaterial> create(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
         {
-            return make_ref<LayeredTextureMaterial>(std::move(pDevice), name, textureDirectory);
+            return make_ref<ThreeLayeredGGXMaterial>(std::move(pDevice), name, textureDirectory);
         }
 
-        LayeredTextureMaterial(ref<Device> pDevice, const std::string& name);
-        LayeredTextureMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory);
+        ThreeLayeredGGXMaterial(ref<Device> pDevice, const std::string& name);
+        ThreeLayeredGGXMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory);
 
         bool renderUI(Gui::Widgets& widget) override;
         UpdateFlags update(MaterialSystem* pOwner) override;
@@ -70,31 +70,32 @@ namespace Falcor
             TextureHandle texLayerRoughness;
             TextureHandle texLayerWeights;
 
-            float baseF0 = 0.04f;
-            float midF0 = 0.06f;
-            float coatF0 = 0.08f;
+            float baseF0 = 0.02f;
+            float midF0 = 0.2f;
+            float coatF0 = 0.3f;
 
             float roughnessScale = 1.f;
-            float roughnessBias = 0.f;
+            float roughnessBias = 0.02f;
             float thicknessScale = 1.f;
-            float heightScale = 1.f;
-            float3 absorptionColor = float3(0.35f, 0.25f, 0.15f);
+            float heightScale = 1.5f;
+            float3 absorptionColor = float3(0.25f, 0.2f, 0.15f);
 
-            float baseWeightScale = 1.f;
-            float midWeightScale = 1.f;
-            float coatWeightScale = 1.f;
+            float baseWeightScale = 0.9f;
+            float midWeightScale = 0.45f;
+            float coatWeightScale = 0.5f;
 
             float baseNormalFlatten = 0.f;
-            float midNormalFlatten = 0.35f;
-            float coatNormalFlatten = 0.7f;
+            float midNormalFlatten = 0.2f;
+            float coatNormalFlatten = 0.8f;
 
             uint32_t enableBaseLayer = 1;
             uint32_t enableMidLayer = 1;
             uint32_t enableCoatLayer = 1;
             uint32_t flipNormalY = 1;
             uint32_t showThickness = 0;
+            uint32_t microfacetSamples = 64;
         };
-        static_assert(sizeof(Data) <= sizeof(MaterialPayload), "LayeredTextureMaterial payload must fit in MaterialPayload");
+        static_assert(sizeof(Data) <= sizeof(MaterialPayload), "ThreeLayeredGGXMaterial payload must fit in MaterialPayload");
 
         void setupTextureSlots();
         ref<Texture> loadExrTexture(const std::filesystem::path& path, bool singleChannel) const;

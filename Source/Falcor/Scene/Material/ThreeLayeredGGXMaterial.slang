@@ -13,7 +13,7 @@ static const float kLayeredTexturePi = 3.14159265358979323846f;
 static const float kLayeredTextureInvPi = 0.31830988618379067154f;
 static const float kLayeredTextureHeightTexel = 1.f / 8192.f;
 
-struct LayeredTextureMaterialData
+struct ThreeLayeredGGXMaterialData
 {
     TextureHandle texBaseColor = {};
     TextureHandle texRoughness = {};
@@ -22,29 +22,30 @@ struct LayeredTextureMaterialData
     TextureHandle texLayerRoughness = {};
     TextureHandle texLayerWeights = {};
 
-    float baseF0 = 0.04f;
-    float midF0 = 0.06f;
-    float coatF0 = 0.08f;
+    float baseF0 = 0.02f;
+    float midF0 = 0.2f;
+    float coatF0 = 0.3f;
 
     float roughnessScale = 1.f;
-    float roughnessBias = 0.f;
+    float roughnessBias = 0.02f;
     float thicknessScale = 1.f;
-    float heightScale = 1.f;
-    float3 absorptionColor = float3(0.35f, 0.25f, 0.15f);
+    float heightScale = 1.5f;
+    float3 absorptionColor = float3(0.25f, 0.2f, 0.15f);
 
-    float baseWeightScale = 1.f;
-    float midWeightScale = 1.f;
-    float coatWeightScale = 1.f;
+    float baseWeightScale = 0.9f;
+    float midWeightScale = 0.45f;
+    float coatWeightScale = 0.5f;
 
     float baseNormalFlatten = 0.f;
-    float midNormalFlatten = 0.35f;
-    float coatNormalFlatten = 0.7f;
+    float midNormalFlatten = 0.2f;
+    float coatNormalFlatten = 0.8f;
 
     uint enableBaseLayer = 1;
     uint enableMidLayer = 1;
     uint enableCoatLayer = 1;
     uint flipNormalY = 1;
     uint showThickness = 0;
+    uint microfacetSamples = 64;
 };
 
 struct LayeredTextureInputs
@@ -67,28 +68,28 @@ struct LayeredTextureLayerParams
     float normalFlatten;
 };
 
-LayeredTextureInputs sampleLayeredTextureInputs(const LayeredTextureMaterialData data, const uint samplerID, const ShadingData sd)
+LayeredTextureInputs sampleLayeredTextureInputsAtUV(const ThreeLayeredGGXMaterialData data, const uint samplerID, const float2 uv)
 {
     SamplerState s = gScene.materials.getTextureSampler(samplerID);
     ExplicitLodTextureSampler lod = { 0.f };
 
     LayeredTextureInputs inputs;
-    inputs.baseColor = gScene.materials.sampleTexture(data.texBaseColor, s, sd.uv, float4(0.8f, 0.8f, 0.8f, 1.f), lod).rgb;
+    inputs.baseColor = gScene.materials.sampleTexture(data.texBaseColor, s, uv, float4(0.8f, 0.8f, 0.8f, 1.f), lod).rgb;
 
-    float baseRoughnessFallback = gScene.materials.sampleTexture(data.texRoughness, s, sd.uv, float4(0.5f), lod).r;
+    float baseRoughnessFallback = gScene.materials.sampleTexture(data.texRoughness, s, uv, float4(0.5f), lod).r;
     float3 packedRoughness = gScene.materials.sampleTexture(
         data.texLayerRoughness,
         s,
-        sd.uv,
+        uv,
         float4(baseRoughnessFallback, saturate(baseRoughnessFallback * 0.6f + 0.15f), saturate(baseRoughnessFallback * 0.25f + 0.03f), 1.f),
         lod
     ).rgb;
 
-    float cavity = saturate(gScene.materials.sampleTexture(data.texDisplacement, s, sd.uv, float4(0.f), lod).r);
+    float cavity = saturate(gScene.materials.sampleTexture(data.texDisplacement, s, uv, float4(0.f), lod).r);
     float3 packedWeights = gScene.materials.sampleTexture(
         data.texLayerWeights,
         s,
-        sd.uv,
+        uv,
         float4(1.f - 0.35f * cavity, 0.35f + 0.45f * cavity, 0.2f + 0.2f * (1.f - cavity), 1.f),
         lod
     ).rgb;
@@ -99,13 +100,18 @@ LayeredTextureInputs sampleLayeredTextureInputs(const LayeredTextureMaterialData
 
     inputs.layerWeights = max(0.f.xxx, packedWeights * float3(data.baseWeightScale, data.midWeightScale, data.coatWeightScale));
 
-    inputs.normalTS = gScene.materials.sampleTexture(data.texNormal, s, sd.uv, float4(0.5f, 0.5f, 1.f, 1.f), lod).xyz * 2.f - 1.f;
+    inputs.normalTS = gScene.materials.sampleTexture(data.texNormal, s, uv, float4(0.5f, 0.5f, 1.f, 1.f), lod).xyz * 2.f - 1.f;
     if (data.flipNormalY != 0) inputs.normalTS.y = -inputs.normalTS.y;
     inputs.displacement = cavity;
     return inputs;
 }
 
-float layeredTextureSampleDisplacement(const LayeredTextureMaterialData data, const uint samplerID, const float2 uv)
+LayeredTextureInputs sampleLayeredTextureInputs(const ThreeLayeredGGXMaterialData data, const uint samplerID, const ShadingData sd)
+{
+    return sampleLayeredTextureInputsAtUV(data, samplerID, sd.uv);
+}
+
+float layeredTextureSampleDisplacement(const ThreeLayeredGGXMaterialData data, const uint samplerID, const float2 uv)
 {
     SamplerState s = gScene.materials.getTextureSampler(samplerID);
     ExplicitLodTextureSampler lod = { 0.f };
@@ -118,19 +124,19 @@ float layeredTextureRoughnessToAlpha(float roughness)
     return max(r * r, 1e-3f);
 }
 
-float layeredTextureThickness(const LayeredTextureMaterialData data, const LayeredTextureInputs inputs)
+float layeredTextureThickness(const ThreeLayeredGGXMaterialData data, const LayeredTextureInputs inputs)
 {
     return max(0.f, inputs.displacement * max(0.f, data.thicknessScale));
 }
 
-float3 layeredTextureAttenuation(const LayeredTextureMaterialData data, const LayeredTextureInputs inputs)
+float3 layeredTextureAttenuation(const ThreeLayeredGGXMaterialData data, const LayeredTextureInputs inputs)
 {
     float thickness = layeredTextureThickness(data, inputs);
     float3 absorption = max(data.absorptionColor, 0.f.xxx);
     return exp(-absorption * thickness);
 }
 
-float3 layeredTextureNormalizedLayerWeights(const LayeredTextureMaterialData data, const LayeredTextureInputs inputs)
+float3 layeredTextureNormalizedLayerWeights(const ThreeLayeredGGXMaterialData data, const LayeredTextureInputs inputs)
 {
     float3 weights = inputs.layerWeights;
     if (data.enableBaseLayer == 0) weights.x = 0.f;
@@ -148,7 +154,7 @@ float3 layeredTextureNormalizedLayerWeights(const LayeredTextureMaterialData dat
     return weights / sum;
 }
 
-LayeredTextureLayerParams layeredTextureGetBaseLayer(const LayeredTextureMaterialData data, const LayeredTextureInputs inputs)
+LayeredTextureLayerParams layeredTextureGetBaseLayer(const ThreeLayeredGGXMaterialData data, const LayeredTextureInputs inputs)
 {
     LayeredTextureLayerParams p;
     p.roughness = clamp(inputs.baseRoughness, 0.02f, 1.f);
@@ -160,7 +166,7 @@ LayeredTextureLayerParams layeredTextureGetBaseLayer(const LayeredTextureMateria
     return p;
 }
 
-LayeredTextureLayerParams layeredTextureGetMidLayer(const LayeredTextureMaterialData data, const LayeredTextureInputs inputs)
+LayeredTextureLayerParams layeredTextureGetMidLayer(const ThreeLayeredGGXMaterialData data, const LayeredTextureInputs inputs)
 {
     LayeredTextureLayerParams p;
     p.roughness = clamp(inputs.midRoughness, 0.02f, 1.f);
@@ -171,7 +177,7 @@ LayeredTextureLayerParams layeredTextureGetMidLayer(const LayeredTextureMaterial
     return p;
 }
 
-LayeredTextureLayerParams layeredTextureGetCoatLayer(const LayeredTextureMaterialData data, const LayeredTextureInputs inputs)
+LayeredTextureLayerParams layeredTextureGetCoatLayer(const ThreeLayeredGGXMaterialData data, const LayeredTextureInputs inputs)
 {
     LayeredTextureLayerParams p;
     p.roughness = clamp(inputs.coatRoughness, 0.02f, 1.f);
@@ -195,16 +201,16 @@ float3 layeredTextureFlattenNormal(float3 n, float flatten)
     return normalize(n);
 }
 
-ShadingFrame layeredTextureShadingFrame(const LayeredTextureMaterialData data, const uint samplerID, const ShadingData sd, const LayeredTextureInputs inputs, const float normalFlatten)
+ShadingFrame layeredTextureShadingFrameAtUV(const ThreeLayeredGGXMaterialData data, const uint samplerID, const ShadingData sd, const LayeredTextureInputs inputs, const float normalFlatten, const float2 uv)
 {
     float3 mapN = layeredTextureFlattenNormal(inputs.normalTS, normalFlatten);
 
     float2 du = float2(kLayeredTextureHeightTexel, 0.f);
     float2 dv = float2(0.f, kLayeredTextureHeightTexel);
-    float hL = layeredTextureSampleDisplacement(data, samplerID, sd.uv - du);
-    float hR = layeredTextureSampleDisplacement(data, samplerID, sd.uv + du);
-    float hD = layeredTextureSampleDisplacement(data, samplerID, sd.uv - dv);
-    float hU = layeredTextureSampleDisplacement(data, samplerID, sd.uv + dv);
+    float hL = layeredTextureSampleDisplacement(data, samplerID, uv - du);
+    float hR = layeredTextureSampleDisplacement(data, samplerID, uv + du);
+    float hD = layeredTextureSampleDisplacement(data, samplerID, uv - dv);
+    float hU = layeredTextureSampleDisplacement(data, samplerID, uv + dv);
 
     float heightScale = max(0.f, data.heightScale) * 0.01f;
     float flattenScale = 1.f - normalFlatten;
@@ -217,6 +223,11 @@ ShadingFrame layeredTextureShadingFrame(const LayeredTextureMaterialData data, c
     ShadingFrame sf = ShadingFrame(sd.frame.fromLocal(normalize(mapN)), sd.tangentW);
     adjustShadingNormal(sd, sf);
     return sf;
+}
+
+ShadingFrame layeredTextureShadingFrame(const ThreeLayeredGGXMaterialData data, const uint samplerID, const ShadingData sd, const LayeredTextureInputs inputs, const float normalFlatten)
+{
+    return layeredTextureShadingFrameAtUV(data, samplerID, sd, inputs, normalFlatten, sd.uv);
 }
 
 float layeredTextureDiffusePdf(const float3 woLocal)
@@ -276,8 +287,8 @@ float layeredTextureEvalBasePdf(const LayeredTextureInputs inputs, const Layered
     return diffuseWeight * layeredTextureDiffusePdf(woLocal) + specularWeight * layeredTextureEvalSpecularPdf(layer, wiLocal, woLocal);
 }
 
-float3 layeredTextureEvalCombined(
-    const LayeredTextureMaterialData data,
+float3 layeredTextureEvalCombinedSingle(
+    const ThreeLayeredGGXMaterialData data,
     const LayeredTextureInputs inputs,
     const float3 wiBaseLocal,
     const float3 woBaseLocal,
@@ -295,8 +306,8 @@ float3 layeredTextureEvalCombined(
          + coatLayer.weight * layeredTextureEvalSpecular(coatLayer, wiCoatLocal, woCoatLocal);
 }
 
-float layeredTextureEvalCombinedPdf(
-    const LayeredTextureMaterialData data,
+float layeredTextureEvalCombinedPdfSingle(
+    const ThreeLayeredGGXMaterialData data,
     const LayeredTextureInputs inputs,
     const float3 wiBaseLocal,
     const float3 woBaseLocal,
@@ -314,13 +325,132 @@ float layeredTextureEvalCombinedPdf(
          + coatLayer.weight * layeredTextureEvalSpecularPdf(coatLayer, wiCoatLocal, woCoatLocal);
 }
 
+uint layeredTextureMicrofacetSampleCount(const ThreeLayeredGGXMaterialData data)
+{
+    uint sampleCount = data.microfacetSamples;
+    sampleCount = sampleCount < 1u ? 1u : sampleCount;
+    sampleCount = sampleCount > 64u ? 64u : sampleCount;
+    return sampleCount;
+}
+
+float layeredTextureMicrofacetVariant(const uint sampleIndex, const uint channel)
+{
+    float x = float(sampleIndex) * 12.9898f + float(channel) * 78.233f;
+    return frac(sin(x) * 43758.5453f);
+}
+
+LayeredTextureLayerParams layeredTextureMicrofacetLayerVariant(LayeredTextureLayerParams layer, const uint sampleIndex, const uint sampleCount, const uint layerIndex)
+{
+    if (sampleIndex == 0u) return layer;
+
+    float u = layeredTextureMicrofacetVariant(sampleIndex, layerIndex * 3u + 0u);
+    float f0Jitter = layeredTextureMicrofacetVariant(sampleIndex, layerIndex * 3u + 1u) * 2.f - 1.f;
+    float strength = saturate((float(sampleCount) - 1.f) / 15.f);
+    float tailWeight = pow(u, 2.5f);
+    float sharpRoughness = max(0.02f, layer.roughness * 0.35f);
+    float broadRoughness = min(1.f, sqrt(max(layer.roughness, 0.02f)));
+    float variantRoughness = lerp(sharpRoughness, broadRoughness, tailWeight);
+
+    layer.roughness = lerp(layer.roughness, variantRoughness, strength);
+    layer.F0 = saturate(layer.F0 * (1.f + strength * 0.25f * f0Jitter));
+    return layer;
+}
+
+float3 layeredTextureEvalCombined(
+    const ThreeLayeredGGXMaterialData data,
+    const uint samplerID,
+    const ShadingData sd,
+    const LayeredTextureInputs centerInputs,
+    const float3 wo)
+{
+    uint sampleCount = layeredTextureMicrofacetSampleCount(data);
+    float3 accum = 0.f.xxx;
+    float validCount = 0.f;
+
+    [loop]
+    for (uint i = 0u; i < sampleCount; ++i)
+    {
+        LayeredTextureInputs inputs = centerInputs;
+
+        LayeredTextureLayerParams baseLayer = layeredTextureMicrofacetLayerVariant(layeredTextureGetBaseLayer(data, inputs), i, sampleCount, 0u);
+        LayeredTextureLayerParams midLayer = layeredTextureMicrofacetLayerVariant(layeredTextureGetMidLayer(data, inputs), i, sampleCount, 1u);
+        LayeredTextureLayerParams coatLayer = layeredTextureMicrofacetLayerVariant(layeredTextureGetCoatLayer(data, inputs), i, sampleCount, 2u);
+
+        ShadingFrame baseSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, baseLayer.normalFlatten);
+        ShadingFrame midSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, midLayer.normalFlatten);
+        ShadingFrame coatSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, coatLayer.normalFlatten);
+
+        float3 wiBaseLocal = baseSf.toLocal(sd.V);
+        float3 woBaseLocal = baseSf.toLocal(wo);
+        float3 wiMidLocal = midSf.toLocal(sd.V);
+        float3 woMidLocal = midSf.toLocal(wo);
+        float3 wiCoatLocal = coatSf.toLocal(sd.V);
+        float3 woCoatLocal = coatSf.toLocal(wo);
+
+        if (!isValidHemisphereReflection(sd, baseSf, wiBaseLocal, woBaseLocal, wo)) continue;
+        if (!isValidHemisphereReflection(sd, midSf, wiMidLocal, woMidLocal, wo)) continue;
+        if (!isValidHemisphereReflection(sd, coatSf, wiCoatLocal, woCoatLocal, wo)) continue;
+
+        accum += baseLayer.weight * baseLayer.attenuation * layeredTextureEvalBase(inputs, baseLayer, wiBaseLocal, woBaseLocal)
+            + midLayer.weight * midLayer.attenuation * layeredTextureEvalSpecular(midLayer, wiMidLocal, woMidLocal)
+            + coatLayer.weight * layeredTextureEvalSpecular(coatLayer, wiCoatLocal, woCoatLocal);
+        validCount += 1.f;
+    }
+
+    return validCount > 0.f ? accum / validCount : 0.f.xxx;
+}
+
+float layeredTextureEvalCombinedPdf(
+    const ThreeLayeredGGXMaterialData data,
+    const uint samplerID,
+    const ShadingData sd,
+    const LayeredTextureInputs centerInputs,
+    const float3 wo)
+{
+    uint sampleCount = layeredTextureMicrofacetSampleCount(data);
+    float accum = 0.f;
+    float validCount = 0.f;
+
+    [loop]
+    for (uint i = 0u; i < sampleCount; ++i)
+    {
+        LayeredTextureInputs inputs = centerInputs;
+
+        LayeredTextureLayerParams baseLayer = layeredTextureMicrofacetLayerVariant(layeredTextureGetBaseLayer(data, inputs), i, sampleCount, 0u);
+        LayeredTextureLayerParams midLayer = layeredTextureMicrofacetLayerVariant(layeredTextureGetMidLayer(data, inputs), i, sampleCount, 1u);
+        LayeredTextureLayerParams coatLayer = layeredTextureMicrofacetLayerVariant(layeredTextureGetCoatLayer(data, inputs), i, sampleCount, 2u);
+
+        ShadingFrame baseSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, baseLayer.normalFlatten);
+        ShadingFrame midSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, midLayer.normalFlatten);
+        ShadingFrame coatSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, coatLayer.normalFlatten);
+
+        float3 wiBaseLocal = baseSf.toLocal(sd.V);
+        float3 woBaseLocal = baseSf.toLocal(wo);
+        float3 wiMidLocal = midSf.toLocal(sd.V);
+        float3 woMidLocal = midSf.toLocal(wo);
+        float3 wiCoatLocal = coatSf.toLocal(sd.V);
+        float3 woCoatLocal = coatSf.toLocal(wo);
+
+        if (!isValidHemisphereReflection(sd, baseSf, wiBaseLocal, woBaseLocal, wo)) continue;
+        if (!isValidHemisphereReflection(sd, midSf, wiMidLocal, woMidLocal, wo)) continue;
+        if (!isValidHemisphereReflection(sd, coatSf, wiCoatLocal, woCoatLocal, wo)) continue;
+
+        accum += baseLayer.weight * layeredTextureEvalBasePdf(inputs, baseLayer, wiBaseLocal, woBaseLocal)
+            + midLayer.weight * layeredTextureEvalSpecularPdf(midLayer, wiMidLocal, woMidLocal)
+            + coatLayer.weight * layeredTextureEvalSpecularPdf(coatLayer, wiCoatLocal, woCoatLocal);
+        validCount += 1.f;
+    }
+
+    return validCount > 0.f ? accum / validCount : 0.f;
+}
+
 __exported import Rendering.Materials.IMaterial;
 import Rendering.Materials.IMaterialInstance;
 import Scene.Material.MaterialSystem;
 
-struct LayeredTextureMaterialInstance : MaterialInstanceBase, IMaterialInstance
+struct ThreeLayeredGGXMaterialInstance : MaterialInstanceBase, IMaterialInstance
 {
-    LayeredTextureMaterialData data = {};
+    ThreeLayeredGGXMaterialData data = {};
     uint defaultSamplerID = 0;
 
     float3 eval<S : ISampleGenerator>(const ShadingData sd, const float3 wo, inout S sg)
@@ -332,26 +462,7 @@ struct LayeredTextureMaterialInstance : MaterialInstanceBase, IMaterialInstance
             return thickness.xxx * saturate(dot(sd.frame.N, wo));
         }
 
-        LayeredTextureLayerParams baseLayer = layeredTextureGetBaseLayer(data, inputs);
-        LayeredTextureLayerParams midLayer = layeredTextureGetMidLayer(data, inputs);
-        LayeredTextureLayerParams coatLayer = layeredTextureGetCoatLayer(data, inputs);
-
-        ShadingFrame baseSf = layeredTextureShadingFrame(data, defaultSamplerID, sd, inputs, baseLayer.normalFlatten);
-        ShadingFrame midSf = layeredTextureShadingFrame(data, defaultSamplerID, sd, inputs, midLayer.normalFlatten);
-        ShadingFrame coatSf = layeredTextureShadingFrame(data, defaultSamplerID, sd, inputs, coatLayer.normalFlatten);
-
-        float3 wiBaseLocal = baseSf.toLocal(sd.V);
-        float3 woBaseLocal = baseSf.toLocal(wo);
-        float3 wiMidLocal = midSf.toLocal(sd.V);
-        float3 woMidLocal = midSf.toLocal(wo);
-        float3 wiCoatLocal = coatSf.toLocal(sd.V);
-        float3 woCoatLocal = coatSf.toLocal(wo);
-
-        if (!isValidHemisphereReflection(sd, baseSf, wiBaseLocal, woBaseLocal, wo)) return 0.f.xxx;
-        if (!isValidHemisphereReflection(sd, midSf, wiMidLocal, woMidLocal, wo)) return 0.f.xxx;
-        if (!isValidHemisphereReflection(sd, coatSf, wiCoatLocal, woCoatLocal, wo)) return 0.f.xxx;
-
-        return layeredTextureEvalCombined(data, inputs, wiBaseLocal, woBaseLocal, wiMidLocal, woMidLocal, wiCoatLocal, woCoatLocal);
+        return layeredTextureEvalCombined(data, defaultSamplerID, sd, inputs, wo);
     }
 
     [Differentiable]
@@ -444,39 +555,27 @@ struct LayeredTextureMaterialInstance : MaterialInstanceBase, IMaterialInstance
         if (!isValidHemisphereReflection(sd, midSf, wiMidLocal, woMidLocal, woWorld)) return false;
         if (!isValidHemisphereReflection(sd, coatSf, wiCoatLocal, woCoatLocal, woWorld)) return false;
 
-        float pdf = layeredTextureEvalCombinedPdf(data, inputs, wiBaseLocal, woBaseLocal, wiMidLocal, woMidLocal, wiCoatLocal, woCoatLocal);
+        float pdf = layeredTextureEvalCombinedPdf(data, defaultSamplerID, sd, inputs, woWorld);
         if (pdf <= 0.f) return false;
 
         result.wo = woWorld;
         result.pdf = pdf;
-        result.weight = layeredTextureEvalCombined(data, inputs, wiBaseLocal, woBaseLocal, wiMidLocal, woMidLocal, wiCoatLocal, woCoatLocal) / pdf;
+        result.weight = layeredTextureEvalCombined(data, defaultSamplerID, sd, inputs, woWorld) / pdf;
         return true;
     }
 
     float evalPdf(const ShadingData sd, const float3 wo, bool useImportanceSampling = true)
     {
         LayeredTextureInputs inputs = sampleLayeredTextureInputs(data, defaultSamplerID, sd);
-        LayeredTextureLayerParams baseLayer = layeredTextureGetBaseLayer(data, inputs);
-        LayeredTextureLayerParams midLayer = layeredTextureGetMidLayer(data, inputs);
-        LayeredTextureLayerParams coatLayer = layeredTextureGetCoatLayer(data, inputs);
+        if (data.showThickness != 0)
+        {
+            LayeredTextureLayerParams baseLayer = layeredTextureGetBaseLayer(data, inputs);
+            ShadingFrame baseSf = layeredTextureShadingFrame(data, defaultSamplerID, sd, inputs, baseLayer.normalFlatten);
+            float3 woBaseLocal = baseSf.toLocal(wo);
+            return layeredTextureDiffusePdf(woBaseLocal);
+        }
 
-        ShadingFrame baseSf = layeredTextureShadingFrame(data, defaultSamplerID, sd, inputs, baseLayer.normalFlatten);
-        ShadingFrame midSf = layeredTextureShadingFrame(data, defaultSamplerID, sd, inputs, midLayer.normalFlatten);
-        ShadingFrame coatSf = layeredTextureShadingFrame(data, defaultSamplerID, sd, inputs, coatLayer.normalFlatten);
-
-        float3 wiBaseLocal = baseSf.toLocal(sd.V);
-        float3 woBaseLocal = baseSf.toLocal(wo);
-        float3 wiMidLocal = midSf.toLocal(sd.V);
-        float3 woMidLocal = midSf.toLocal(wo);
-        float3 wiCoatLocal = coatSf.toLocal(sd.V);
-        float3 woCoatLocal = coatSf.toLocal(wo);
-
-        if (!isValidHemisphereReflection(sd, baseSf, wiBaseLocal, woBaseLocal, wo)) return 0.f;
-        if (!isValidHemisphereReflection(sd, midSf, wiMidLocal, woMidLocal, wo)) return 0.f;
-        if (!isValidHemisphereReflection(sd, coatSf, wiCoatLocal, woCoatLocal, wo)) return 0.f;
-        if (data.showThickness != 0) return layeredTextureDiffusePdf(woBaseLocal);
-
-        return layeredTextureEvalCombinedPdf(data, inputs, wiBaseLocal, woBaseLocal, wiMidLocal, woMidLocal, wiCoatLocal, woCoatLocal);
+        return layeredTextureEvalCombinedPdf(data, defaultSamplerID, sd, inputs, wo);
     }
 
     BSDFProperties getProperties(const ShadingData sd)
@@ -513,22 +612,22 @@ struct LayeredTextureMaterialInstance : MaterialInstanceBase, IMaterialInstance
     }
 };
 
-struct LayeredTextureMaterial : MaterialBase, IMaterial
+struct ThreeLayeredGGXMaterial : MaterialBase, IMaterial
 {
-    LayeredTextureMaterialData data;
+    ThreeLayeredGGXMaterialData data;
 
-    typedef LayeredTextureMaterialInstance MaterialInstance;
+    typedef ThreeLayeredGGXMaterialInstance MaterialInstance;
 
-    LayeredTextureMaterialInstance setupMaterialInstance(const MaterialSystem ms, const ShadingData sd, const ITextureSampler lod, const uint hints)
+    ThreeLayeredGGXMaterialInstance setupMaterialInstance(const MaterialSystem ms, const ShadingData sd, const ITextureSampler lod, const uint hints)
     {
-        LayeredTextureMaterialInstance m = {};
+        ThreeLayeredGGXMaterialInstance m = {};
         m.data = data;
         m.defaultSamplerID = header.getDefaultTextureSamplerID();
         return m;
     }
 
     [Differentiable]
-    LayeredTextureMaterialInstance setupDiffMaterialInstance(
+    ThreeLayeredGGXMaterialInstance setupDiffMaterialInstance(
         out DiffMaterialData diffData,
         const MaterialSystem ms,
         const ShadingData sd,

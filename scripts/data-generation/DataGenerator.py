@@ -6,7 +6,7 @@ import pandas as pd
 import random
 
 class DataGenerator():
-    def __init__(self, materialId = 0, scene_path = 'MatXScenes/Preview/MatXScene.pyscene', sampleCount = 10000):
+    def __init__(self, materialId = 0, scene_path = 'media/LayeredMaterial/ThreeLayeredGGXPreview.pyscene', sampleCount = 10000):
         # Construct path relative to project root
         project_root = Path(__file__).parent.parent.parent
         full_scene_path = project_root / scene_path

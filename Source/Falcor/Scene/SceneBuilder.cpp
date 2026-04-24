@@ -46,7 +46,7 @@
 
 // Neural Implementation
 #include "Material/NeuralMaterial.h"
-#include "Material/LayeredTextureMaterial.h"
+#include "Material/ThreeLayeredGGXMaterial.h"
 
 namespace Falcor
 {
@@ -975,7 +975,7 @@ namespace Falcor
         replaceMaterial(pOld, pNew);
     }
 
-    void SceneBuilder::replaceMaterialWithLayeredTexture(const std::string& materialName, const std::filesystem::path& textureDirectory)
+    void SceneBuilder::replaceMaterialWithThreeLayeredGGX(const std::string& materialName, const std::filesystem::path& textureDirectory)
     {
         auto pOld = getMaterial(materialName);
         if (!pOld)
@@ -991,7 +991,7 @@ namespace Falcor
             }
 
             logWarning(
-                "Material '{}' not found while creating LayeredTextureMaterial. Replacing first material '{}' instead. Available materials: {}",
+                "Material '{}' not found while creating ThreeLayeredGGXMaterial. Replacing first material '{}' instead. Available materials: {}",
                 materialName,
                 materials.front()->getName(),
                 materialNames
@@ -1003,8 +1003,8 @@ namespace Falcor
         FALCOR_CHECK(!resolvedPath.empty(), "Layered texture directory '{}' could not be resolved.", textureDirectory.string());
         FALCOR_CHECK(std::filesystem::is_directory(resolvedPath), "Layered texture path '{}' is not a directory.", resolvedPath.string());
 
-        logInfo("Creating LayeredTextureMaterial '{}' from texture directory '{}'.", pOld->getName(), resolvedPath.string());
-        auto pNew = LayeredTextureMaterial::create(mpDevice, pOld->getName(), resolvedPath);
+        logInfo("Creating ThreeLayeredGGXMaterial '{}' from texture directory '{}'.", pOld->getName(), resolvedPath.string());
+        auto pNew = ThreeLayeredGGXMaterial::create(mpDevice, pOld->getName(), resolvedPath);
         pNew->setDoubleSided(pOld->isDoubleSided());
         pNew->setThinSurface(pOld->isThinSurface());
         pNew->setNestedPriority(pOld->getNestedPriority());
@@ -3046,7 +3046,7 @@ namespace Falcor
         sceneBuilder.def_property_readonly("flags", &SceneBuilder::getFlags);
         sceneBuilder.def_property_readonly("materials", &SceneBuilder::getMaterials);
         sceneBuilder.def("replaceMaterialWithNeural", &SceneBuilder::replaceMaterialWithNeural, "materialName"_a, "basePath"_a);
-        sceneBuilder.def("replaceMaterialWithLayeredTexture", &SceneBuilder::replaceMaterialWithLayeredTexture, "materialName"_a, "textureDirectory"_a);
+        sceneBuilder.def("replaceMaterialWithThreeLayeredGGX", &SceneBuilder::replaceMaterialWithThreeLayeredGGX, "materialName"_a, "textureDirectory"_a);
         sceneBuilder.def_property_readonly("gridVolumes", &SceneBuilder::getGridVolumes);
         sceneBuilder.def_property_readonly("volumes", &SceneBuilder::getGridVolumes); // PYTHONDEPRECATED
         sceneBuilder.def_property_readonly("lights", &SceneBuilder::getLights);

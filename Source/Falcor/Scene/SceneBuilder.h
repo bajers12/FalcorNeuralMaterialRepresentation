@@ -533,7 +533,7 @@ namespace Falcor
             \param[in] path Texture file path.
         */
         void replaceMaterialWithNeural(const std::string& materialName, const std::filesystem::path& basePath);
-        void replaceMaterialWithLayeredTexture(const std::string& materialName, const std::filesystem::path& textureDirectory);
+        void replaceMaterialWithThreeLayeredGGX(const std::string& materialName, const std::filesystem::path& textureDirectory);
 
         void loadMaterialTexture(const ref<Material>& pMaterial, Material::TextureSlot slot, const std::filesystem::path& path);
 
