@@ -115,6 +115,9 @@ class TrainConfig:
     use_roughness_feature: bool = True
     use_pdf_feature: bool = False
 
+    # Importance sampling decoder configuration
+    train_importance_sampler: bool = False
+
 # =============================================================================
 # Batch handling
 # =============================================================================
@@ -301,6 +304,151 @@ class Decoder(nn.Module):
         return torch.exp(raw - self.exp_offset)
 
 
+class ImportanceSamplingDecoder(nn.Module):
+    """
+    Importance sampling decoder that predicts a von Mises-Fisher distribution.
+    """
+
+    def __init__(
+        self,
+        latent_ch: int,
+        num_frames: int = 2,
+        mlp_width: int = 32,
+        mlp_depth: int = 2,
+        use_bias_in_mlp: bool = True,
+        frame_linear_bias: bool = False,
+        kappa_min: float = 0.1,
+        kappa_max: float = 100.0,
+    ):
+        super().__init__()
+        self.latent_ch = latent_ch
+        self.num_frames = num_frames
+        self.kappa_min = kappa_min
+        self.kappa_max = kappa_max
+
+        self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias)
+
+        mlp_in = latent_ch + 3 * num_frames
+        layers = []
+        prev = mlp_in
+        for _ in range(mlp_depth):
+            layers.append(nn.Linear(prev, mlp_width, bias=use_bias_in_mlp))
+            layers.append(nn.ReLU(inplace=True))
+            prev = mlp_width
+        layers.append(nn.Linear(prev, 4, bias=use_bias_in_mlp))
+        self.mlp = nn.Sequential(*layers)
+
+    @staticmethod
+    def _safe_normalize(v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+        return v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
+
+    def _predict_frames(
+        self, z: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        bsz = z.shape[0]
+        ft = self.frame_linear(z).view(bsz, self.num_frames, 6)
+
+        n = self._safe_normalize(ft[..., 0:3])
+        t_raw = ft[..., 3:6]
+        t_raw = t_raw - (t_raw * n).sum(dim=-1, keepdim=True) * n
+        t = self._safe_normalize(t_raw)
+        bv = torch.cross(n, t, dim=-1)
+        return t, bv, n
+
+    def forward_params(
+        self, z: torch.Tensor, wi: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        t, bv, n = self._predict_frames(z)
+
+        wi_f = torch.stack(
+            [
+                (wi.unsqueeze(1) * t).sum(dim=-1),
+                (wi.unsqueeze(1) * bv).sum(dim=-1),
+                (wi.unsqueeze(1) * n).sum(dim=-1),
+            ],
+            dim=-1,
+        )
+
+        dir_feats = wi_f.view(z.shape[0], 3 * self.num_frames)
+        params = self.mlp(torch.cat([z, dir_feats], dim=-1))
+
+        mean_dir = self._safe_normalize(params[..., :3])
+        kappa = params[..., 3:4]
+        kappa = self.kappa_min + (self.kappa_max - self.kappa_min) * torch.sigmoid(kappa)
+        return mean_dir, kappa
+
+    @staticmethod
+    def sample_von_mises_fisher(
+        mean_dir: torch.Tensor, kappa: torch.Tensor, samples_per_batch: int = 1
+    ) -> torch.Tensor:
+        device = mean_dir.device
+        dtype = mean_dir.dtype
+        batch_size = mean_dir.shape[0]
+
+        if kappa.dim() == 2:
+            kappa = kappa.squeeze(-1)
+        kappa = kappa.clamp(min=1e-6)
+
+        eps = 1e-7
+        rho = (1.0 - torch.exp(-2.0 * kappa)) / (1.0 - torch.exp(-2.0 * kappa) + eps)
+        u = torch.rand(batch_size * samples_per_batch, device=device, dtype=dtype)
+        v = torch.rand(batch_size * samples_per_batch, device=device, dtype=dtype)
+
+        log_arg = (rho + (1.0 - rho) * u).clamp_min(eps)
+        w = 1.0 + torch.log(log_arg) / kappa.repeat_interleave(samples_per_batch)
+        w = w.clamp(min=-1.0 + 1e-6, max=1.0 - 1e-6)
+
+        tangent_mag = torch.sqrt((1.0 - w**2).clamp_min(0.0))
+        phi = 2.0 * math.pi * v
+        tangent_x = tangent_mag * torch.cos(phi)
+        tangent_y = tangent_mag * torch.sin(phi)
+
+        mean_expanded = mean_dir.repeat_interleave(samples_per_batch, dim=0)
+        arbitrary = torch.zeros_like(mean_expanded)
+        z_small = (mean_expanded[..., 2].abs() < 0.9).float()
+        arbitrary[..., 0] = z_small
+        arbitrary[..., 2] = 1.0 - z_small
+
+        u_tangent = arbitrary - (arbitrary * mean_expanded).sum(dim=-1, keepdim=True) * mean_expanded
+        u_tangent = ImportanceSamplingDecoder._safe_normalize(u_tangent)
+        v_tangent = torch.cross(mean_expanded, u_tangent, dim=-1)
+
+        samples = (
+            w.unsqueeze(-1) * mean_expanded
+            + tangent_x.unsqueeze(-1) * u_tangent
+            + tangent_y.unsqueeze(-1) * v_tangent
+        )
+        return ImportanceSamplingDecoder._safe_normalize(samples)
+
+    def eval_von_mises_fisher_pdf(
+        self, direction: torch.Tensor, mean_dir: torch.Tensor, kappa: torch.Tensor
+    ) -> torch.Tensor:
+        if kappa.dim() == 2:
+            kappa = kappa.squeeze(-1)
+        kappa = kappa.clamp(min=1e-6, max=1e6)
+
+        cos_angle = (direction * mean_dir).sum(dim=-1).clamp(-1.0, 1.0)
+        log_normalization = torch.log(kappa + 1e-8) - math.log(4.0 * math.pi)
+        small_kappa_mask = kappa < 10.0
+        log_sinh = torch.where(
+            small_kappa_mask,
+            torch.log(torch.sinh(kappa) + 1e-8),
+            kappa - math.log(2.0),
+        )
+        log_pdf = log_normalization - log_sinh + kappa * cos_angle
+        return torch.exp(log_pdf.clamp(min=-100.0, max=20.0))
+
+    def sample(self, z: torch.Tensor, wi: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        mean_dir, kappa = self.forward_params(z, wi)
+        wo = self.sample_von_mises_fisher(mean_dir, kappa, samples_per_batch=1)
+        pdf = self.eval_von_mises_fisher_pdf(wo, mean_dir, kappa)
+        return wo, pdf
+
+    def eval_pdf(self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor) -> torch.Tensor:
+        mean_dir, kappa = self.forward_params(z, wi)
+        return self.eval_von_mises_fisher_pdf(wo, mean_dir, kappa)
+
+
 class MaterialEncoder(nn.Module):
     """
     Training-only encoder that maps sampled material parameters to latent codes.
@@ -326,7 +474,8 @@ class NeuralMaterialModel(nn.Module):
     """
     Wraps:
       - LatentTexture
-      - Decoder
+            - Decoder (BRDF evaluation)
+            - ImportanceSamplingDecoder (direction sampling)
     """
 
     def __init__(self, cfg: TrainConfig):
@@ -340,6 +489,14 @@ class NeuralMaterialModel(nn.Module):
             use_bias_in_mlp=cfg.use_bias_in_mlp,
             frame_linear_bias=cfg.frame_linear_bias,
             exp_offset=cfg.exp_offset,
+        )
+        self.importance_sampler = ImportanceSamplingDecoder(
+            latent_ch=cfg.latent_ch,
+            num_frames=cfg.num_frames,
+            mlp_width=cfg.mlp_width,
+            mlp_depth=cfg.mlp_depth,
+            use_bias_in_mlp=cfg.use_bias_in_mlp,
+            frame_linear_bias=cfg.frame_linear_bias,
         )
         self.encoder = MaterialEncoder(
             input_ch=get_encoder_input_dim(cfg),
@@ -366,6 +523,18 @@ class NeuralMaterialModel(nn.Module):
     ) -> torch.Tensor:
         y_hat, _raw = self.forward_with_raw(uv, wi, wo)
         return y_hat
+
+    def sample_directions(
+        self, uv: torch.Tensor, wi: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        z = self.latent.sample(uv)
+        return self.importance_sampler.sample(z, wi)
+
+    def eval_sampling_pdf(
+        self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> torch.Tensor:
+        z = self.latent.sample(uv)
+        return self.importance_sampler.eval_pdf(z, wi, wo)
 
 def to_local(
     v_world: torch.Tensor, t: torch.Tensor, b: torch.Tensor, n: torch.Tensor
@@ -428,6 +597,23 @@ def compute_raw_stats(raw: torch.Tensor) -> Dict[str, float]:
         "raw_min": raw.min().item(),
         "raw_max": raw.max().item(),
     }
+
+
+def importance_sampling_loss(
+    model: NeuralMaterialModel,
+    z: torch.Tensor,
+    wi: torch.Tensor,
+    wo: torch.Tensor,
+    y: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Trains sampler by maximizing probability of directions weighted by BRDF magnitude.
+    """
+    y_true = y.clamp_min(eps)
+    pdf_sampler = model.importance_sampler.eval_pdf(z, wi, wo).clamp_min(eps)
+    brdf_weights = y_true.sum(dim=-1) / (3.0 + eps)
+    return (-torch.log(pdf_sampler + eps) * brdf_weights).mean()
 
 
 def build_material_features(
@@ -560,6 +746,12 @@ def make_optimizer(
                 param_groups.append(
                     {"params": encoder_params, "lr": _decoder_lr(cfg), "name": "encoder"}
                 )
+    if cfg.train_importance_sampler:
+        sampler_params = [p for p in model.importance_sampler.parameters() if p.requires_grad]
+        if sampler_params:
+            param_groups.append(
+                {"params": sampler_params, "lr": _decoder_lr(cfg), "name": "sampler"}
+            )
     if not param_groups:
         raise ValueError(
             f"Nothing to train during {phase}: active parameter groups are empty"
@@ -575,16 +767,18 @@ def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
         "latent": _latent_lr(cfg),
         "decoder": _decoder_lr(cfg),
         "encoder": _decoder_lr(cfg),
+        "sampler": _decoder_lr(cfg),
     }
     min_by_name = {
         "latent": _latent_lr_min(cfg),
         "decoder": _decoder_lr_min(cfg),
         "encoder": _decoder_lr_min(cfg),
+        "sampler": _decoder_lr_min(cfg),
     }
 
     def lr_lambda_factory(group_name: str):
-        base = base_by_name[group_name]
-        min_lr = min_by_name[group_name]
+        base = base_by_name.get(group_name, base_by_name["decoder"])
+        min_lr = min_by_name.get(group_name, min_by_name["decoder"])
 
         def lr_lambda(epoch: int):
             if cfg.max_epochs <= 1:
@@ -642,6 +836,8 @@ def maybe_rebuild_optimizer_and_scheduler(
         and any(p.requires_grad for p in model.encoder.parameters())
     ):
         active_group_names.append("encoder")
+    if cfg.train_importance_sampler and any(p.requires_grad for p in model.importance_sampler.parameters()):
+        active_group_names.append("sampler")
 
     current_group_names = [pg.get("name") for pg in opt.param_groups]
     if active_group_names == current_group_names:
@@ -670,6 +866,16 @@ def maybe_rebuild_optimizer_and_scheduler(
     return new_opt, new_scheduler
 
 
+def _clear_param_group_grads_except(
+    opt: torch.optim.Optimizer, keep_group_names: set[str]
+) -> None:
+    for pg in opt.param_groups:
+        if pg.get("name") in keep_group_names:
+            continue
+        for p in pg["params"]:
+            p.grad = None
+
+
 def _maybe_transform_dirs_with_normals(
     batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -683,7 +889,8 @@ def _maybe_transform_dirs_with_normals(
 
 def train_one_epoch(
     model: NeuralMaterialModel,
-    batch: Dict[str, torch.Tensor],
+    batch_decoder: Dict[str, torch.Tensor],
+    batch_sampler: Optional[Dict[str, torch.Tensor]],
     opt: torch.optim.Optimizer,
     scheduler,
     cfg: TrainConfig,
@@ -710,49 +917,91 @@ def train_one_epoch(
         print(f"[train] freezing latent texture at epoch={epoch}")
         latent_frozen_logged = True
 
-    uv = batch["uv"].to(device, non_blocking=True)
-    y = batch["y"].to(device, non_blocking=True)
+    uv_dec = batch_decoder["uv"].to(device, non_blocking=True)
+    y_dec = batch_decoder["y"].to(device, non_blocking=True)
 
-    wi, wo = _maybe_transform_dirs_with_normals(batch, cfg, device)
+    wi_dec, wo_dec = _maybe_transform_dirs_with_normals(batch_decoder, cfg, device)
     if cfg.clamp_min_target > 0.0:
-        y = y.clamp_min(cfg.clamp_min_target)
+        y_dec = y_dec.clamp_min(cfg.clamp_min_target)
 
     if phase == "bootstrap":
-        material_features = build_material_features(batch, cfg, device)
-        z = model.encoder(material_features)
+        material_features_dec = build_material_features(batch_decoder, cfg, device)
+        z_dec = model.encoder(material_features_dec)
     else:
-        z = model.latent.sample(uv)
+        z_dec = model.latent.sample(uv_dec)
 
-    y_hat, raw = model.decode_with_raw(z, wi, wo)
-    bsdf_loss = log_l1_loss(y_hat, y, cfg.log_eps)
-    loss = bsdf_loss
+    y_hat_dec, raw_dec = model.decode_with_raw(z_dec, wi_dec, wo_dec)
+    bsdf_loss = log_l1_loss(y_hat_dec, y_dec, cfg.log_eps)
+
+    if not torch.isfinite(bsdf_loss):
+        raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
 
     opt.zero_grad(set_to_none=True)
-    loss.backward()
+    bsdf_loss.backward()
+    _clear_param_group_grads_except(opt, {"latent", "decoder", "encoder"})
 
     if cfg.grad_clip_norm is not None:
-        nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)
+        nn.utils.clip_grad_norm_(
+            [p for p in model.parameters() if p.grad is not None], cfg.grad_clip_norm
+        )
 
     opt.step()
 
-    with torch.no_grad():
-        stats = compute_basic_stats(y_hat, y)
-        raw_stats = compute_raw_stats(raw)
+    sampler_loss = None
+    total_loss_value = bsdf_loss.detach()
 
-    return (
-        {
-            "loss": loss.item(),
-            "bsdf_loss": bsdf_loss.item(),
-            "phase": phase,
-            "mae": stats["mae"],
-            "yhat_mean": stats["yhat_mean"],
-            "y_mean": stats["y_mean"],
-            "raw_mean": raw_stats["raw_mean"],
-            "raw_std": raw_stats["raw_std"],
-        },
-        opt,
-        scheduler,
-    )
+    if cfg.train_importance_sampler:
+        sampler_batch = batch_decoder if batch_sampler is None else batch_sampler
+
+        uv_sam = sampler_batch["uv"].to(device, non_blocking=True)
+        y_sam = sampler_batch["y"].to(device, non_blocking=True)
+        wi_sam, wo_sam = _maybe_transform_dirs_with_normals(sampler_batch, cfg, device)
+
+        if cfg.clamp_min_target > 0.0:
+            y_sam = y_sam.clamp_min(cfg.clamp_min_target)
+
+        if phase == "bootstrap":
+            material_features_sam = build_material_features(sampler_batch, cfg, device)
+            z_sam = model.encoder(material_features_sam).detach()
+        else:
+            z_sam = model.latent.sample(uv_sam).detach()
+
+        sampler_loss = importance_sampling_loss(model, z_sam, wi_sam, wo_sam, y_sam, cfg.log_eps)
+        if not torch.isfinite(sampler_loss):
+            raise RuntimeError(f"Non-finite sampler loss at epoch {epoch}: {sampler_loss.item()}")
+
+        opt.zero_grad(set_to_none=True)
+        sampler_loss.backward()
+        _clear_param_group_grads_except(opt, {"sampler"})
+
+        if cfg.grad_clip_norm is not None:
+            nn.utils.clip_grad_norm_(
+                [p for p in model.importance_sampler.parameters() if p.grad is not None],
+                cfg.grad_clip_norm,
+            )
+
+        opt.step()
+        total_loss_value = total_loss_value + sampler_loss.detach()
+
+    with torch.no_grad():
+        stats = compute_basic_stats(y_hat_dec, y_dec)
+        raw_stats = compute_raw_stats(raw_dec)
+
+    out = {
+        "brdf_loss": bsdf_loss.item(),
+        "phase": phase,
+        "mae": stats["mae"],
+        "yhat_mean": stats["yhat_mean"],
+        "y_mean": stats["y_mean"],
+        "raw_mean": raw_stats["raw_mean"],
+        "raw_std": raw_stats["raw_std"],
+    }
+    if sampler_loss is not None:
+        out["sampler_loss"] = sampler_loss.item()
+    if torch.is_tensor(total_loss_value):
+        out["total_loss"] = total_loss_value.item()
+
+    return (out, opt, scheduler)
 
 
 @torch.no_grad()
@@ -1109,6 +1358,11 @@ def parse_args() -> TrainConfig:
         action="store_true",
         help="Explicitly include BSDF pdf in the training-only material encoder.",
     )
+    p.add_argument(
+        "--train_importance_sampler",
+        action="store_true",
+        help="Enable training of the importance sampling decoder.",
+    )
 
     args = p.parse_args()
 
@@ -1168,6 +1422,8 @@ def parse_args() -> TrainConfig:
         cfg.use_pdf_feature = True
     if args.no_pdf_feature:
         cfg.use_pdf_feature = False
+
+    cfg.train_importance_sampler = args.train_importance_sampler
 
     return cfg
 
@@ -1257,6 +1513,10 @@ def main():
         print_first_sample(validation_tensor, "validation batch")
 
         data_generator = DataGenerator(sampleCount=cfg.training_n)
+        if cfg.train_importance_sampler:
+            print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
+        else:
+            print(f"[train] brdf-only mode: batch={cfg.training_n}")
         for epoch in range(cfg.max_epochs):
             phase = get_training_phase(cfg, epoch)
             phase_changed = phase != current_phase
@@ -1272,15 +1532,22 @@ def main():
 
             maybe_freeze_parts(model, cfg, epoch=epoch)
 
-            data_batch = data_generator.generate_data(random.randint(0, 1000000))
-            training_batch = data_batch
-            training_tensor = tensorize_batch(data_to_dict(training_batch))
+            data_batch_decoder = data_generator.generate_data(random.randint(0, 1000000))
+            training_tensor_decoder = tensorize_batch(data_to_dict(data_batch_decoder))
+
+            training_tensor_sampler = None
+            if cfg.train_importance_sampler:
+                training_tensor_sampler = training_tensor_decoder
+
             if epoch == 0:
-                print_first_sample(training_tensor, "training batch")
+                print_first_sample(training_tensor_decoder, "training batch (decoder)")
+                if training_tensor_sampler is not None:
+                    print_first_sample(training_tensor_sampler, "training batch (sampler/shared)")
 
             train_metrics, opt, scheduler = train_one_epoch(
                 model,
-                training_tensor,
+                training_tensor_decoder,
+                training_tensor_sampler,
                 opt,
                 scheduler,
                 cfg,
@@ -1300,9 +1567,15 @@ def main():
 
             if cfg.print_every_epochs > 0 and (epoch % cfg.print_every_epochs == 0):
                 elapsed = time.time() - run_start_time
+                sampler_log = (
+                    f" sampler_loss={metrics['sampler_loss']:.6f}"
+                    if "sampler_loss" in metrics
+                    else ""
+                )
                 print(
                     f"[train] epoch {epoch:03d} "
-                    f"phase={phase} train_loss={metrics['loss']:.6f} "
+                    f"phase={phase} brdf_loss={metrics['brdf_loss']:.6f}" \
+                    f"{sampler_log} "
                     f"val_loss={metrics['val_loss']:.6f} "
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
