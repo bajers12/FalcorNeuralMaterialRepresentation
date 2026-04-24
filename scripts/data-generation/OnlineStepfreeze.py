@@ -1029,18 +1029,18 @@ def parse_args() -> TrainConfig:
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=1337)
 
-    p.add_argument("--tex_h", type=int, default=1024)
-    p.add_argument("--tex_w", type=int, default=1024)
+    p.add_argument("--tex_h", type=int, default=4096)
+    p.add_argument("--tex_w", type=int, default=4096)
     p.add_argument("--latent_ch", type=int, default=8)
 
     p.add_argument("--num_frames", type=int, default=2)
-    p.add_argument("--mlp_width", type=int, default=32)
+    p.add_argument("--mlp_width", type=int, default=64)
     p.add_argument("--mlp_depth", type=int, default=2)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
     p.add_argument("--training_n", type=int, default=65536)
     p.add_argument("--validation_size", type=int, default=65536)
-    p.add_argument("--max_epochs", type=int, default=1000)
+    p.add_argument("--max_epochs", type=int, default=300000)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
     p.add_argument("--lr_latent", type=float, default=None)
