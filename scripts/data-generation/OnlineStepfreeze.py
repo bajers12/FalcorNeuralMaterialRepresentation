@@ -37,9 +37,13 @@ import time
 import argparse
 from dataclasses import dataclass, asdict
 from typing import Dict, Tuple, Optional
-from DataGenerator import DataGenerator
+from DataGenerator import (
+    DataGenerator,
+    SEED_DOMAIN_BOOTSTRAP,
+    SEED_DOMAIN_TRAIN,
+    SEED_DOMAIN_VALIDATION,
+)
 from training_run_logging import TrainingRunLogger
-import random
 
 import numpy as np
 import torch
@@ -467,7 +471,7 @@ def get_training_phase(cfg: TrainConfig, epoch: int) -> str:
 
 @torch.no_grad()
 def initialize_latent_texture_from_encoder(
-    model: NeuralMaterialModel, cfg: TrainConfig, random_seed: int
+    model: NeuralMaterialModel, cfg: TrainConfig, generation_index: int
 ) -> None:
     if get_encoder_input_dim(cfg) == 0:
         raise ValueError("Cannot initialize latent texture without encoder features.")
@@ -483,7 +487,11 @@ def initialize_latent_texture_from_encoder(
     grid_generator = DataGenerator(sampleCount=sample_count)
     try:
         grid_batch = grid_generator.generate_grid_data(
-            cfg.tex_w, cfg.tex_h, random_seed
+            cfg.tex_w,
+            cfg.tex_h,
+            cfg.seed,
+            SEED_DOMAIN_BOOTSTRAP,
+            generation_index,
         ).copy()
     finally:
         grid_generator.release_data()
@@ -1116,7 +1124,9 @@ def main():
                 "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
                 "Rebuild Falcor/plugin binaries so setUvGrid/clearUvGrid are available, or set --encoder_bootstrap_epochs 0."
             )
-        validation_batch = data_generator.generate_data(random.randint(0, 1000000)).copy()
+        validation_batch = data_generator.generate_data(
+            cfg.seed, SEED_DOMAIN_VALIDATION, 0
+        ).copy()
         data_generator.release_data()
         validation_tensor = tensorize_batch(data_to_dict(validation_batch))
         print_first_sample(validation_tensor, "validation batch")
@@ -1129,7 +1139,7 @@ def main():
                 print(f"[train] switching phase: {current_phase} -> {phase} at epoch {epoch:03d}")
                 if phase == "finetune":
                     initialize_latent_texture_from_encoder(
-                        model, cfg, random.randint(0, 1000000)
+                        model, cfg, epoch
                     )
                     for p in model.encoder.parameters():
                         p.requires_grad_(False)
@@ -1137,7 +1147,9 @@ def main():
 
             maybe_freeze_parts(model, cfg, epoch=epoch)
 
-            data_batch = data_generator.generate_data(random.randint(0, 1000000))
+            data_batch = data_generator.generate_data(
+                cfg.seed, SEED_DOMAIN_TRAIN, epoch
+            )
             training_batch = data_batch
             training_tensor = tensorize_batch(data_to_dict(training_batch))
             if epoch == 0:
@@ -1212,7 +1224,7 @@ def main():
         model.load_state_dict(best_model_state)
         if best_phase == "bootstrap":
             initialize_latent_texture_from_encoder(
-                model, cfg, random.randint(0, 1000000)
+                model, cfg, best_epoch
             )
         best_ckpt_path = save_checkpoint(
             model,

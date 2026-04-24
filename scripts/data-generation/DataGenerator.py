@@ -1,9 +1,9 @@
 import falcor
-import numpy as np
-import os
 from pathlib import Path
-import pandas as pd
-import random
+
+SEED_DOMAIN_TRAIN = 0
+SEED_DOMAIN_VALIDATION = 1
+SEED_DOMAIN_BOOTSTRAP = 2
 
 class DataGenerator():
     def __init__(self, materialId = 0, scene_path = 'media/LayeredMaterial/ThreeLayeredGGXPreview.pyscene', sampleCount = 10000):
@@ -25,16 +25,16 @@ class DataGenerator():
             self.generation_pass, "clearUvGrid"
         )
 
-    def generate_data(self, randomSeed: int):
+    def generate_data(self, run_seed: int, seed_domain: int, generation_index: int):
         # Execute the graph
-        self.generation_pass.setRandomSeedOffset(randomSeed)
+        self.generation_pass.setSeedState(run_seed, seed_domain, generation_index)
         self.generation_pass.generate()
         self.testbed.frame()
         np_data = self.generation_pass.getData()
 
         return np_data
 
-    def generate_grid_data(self, width: int, height: int, randomSeed: int = 0):
+    def generate_grid_data(self, width: int, height: int, run_seed: int, seed_domain: int, generation_index: int = 0):
         if not self.supports_uv_grid():
             raise RuntimeError(
                 "The loaded OnlineDataGenerationPass plugin does not expose setUvGrid/clearUvGrid. "
@@ -42,7 +42,7 @@ class DataGenerator():
             )
         self.generation_pass.setUvGrid(width, height)
         try:
-            self.generation_pass.setRandomSeedOffset(randomSeed)
+            self.generation_pass.setSeedState(run_seed, seed_domain, generation_index)
             self.generation_pass.generate()
             self.testbed.frame()
             np_data = self.generation_pass.getData()

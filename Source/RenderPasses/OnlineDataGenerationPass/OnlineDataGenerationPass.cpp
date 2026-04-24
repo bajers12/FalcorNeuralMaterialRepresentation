@@ -42,6 +42,7 @@ void OnlineDataGenerationPass::registerBindings(pybind11::module& m)
     pybind11::class_<OnlineDataGenerationPass, RenderPass, ref<OnlineDataGenerationPass>> pass(m, "OnlineDataGenerationPass");
     pass.def("generate", &OnlineDataGenerationPass::generate);
     pass.def("setRandomSeedOffset", &OnlineDataGenerationPass::setRandomSeedOffset);
+    pass.def("setSeedState", &OnlineDataGenerationPass::setSeedState);
     pass.def("setUvGrid", &OnlineDataGenerationPass::setUvGrid);
     pass.def("clearUvGrid", &OnlineDataGenerationPass::clearUvGrid);
     pass.def("getData", &OnlineDataGenerationPass::getData);
@@ -53,7 +54,9 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
     mpDevice = pDevice;
     mbShouldGenerate = false;
     mIsMapped = false;
-    mRandomSeedOffset = 0;
+    mRunSeed = 0;
+    mSeedDomain = 0;
+    mGenerationIndex = 0;
     mMaterialId = 0;
     mSampleCount = 0;
     mUvGridFullWidth = 0;
@@ -152,7 +155,9 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gSampleOutputBuffer"] = mpGpuSampleBuffer;
     var["gSampleCount"] = mSampleCount;
     var["gMaterialId"] = mMaterialId;
-    var["gRandomSeedOffset"] = mRandomSeedOffset;
+    var["gRunSeed"] = mRunSeed;
+    var["gSeedDomain"] = mSeedDomain;
+    var["gGenerationIndex"] = mGenerationIndex;
     var["gUseUvGrid"] = mUseUvGrid;
     var["gUvGridFullWidth"] = mUvGridFullWidth;
     var["gUvGridFullHeight"] = mUvGridFullHeight;
@@ -209,7 +214,16 @@ void OnlineDataGenerationPass::releaseData()
 }
 
 void OnlineDataGenerationPass::setRandomSeedOffset(uint32_t offset) {
-    mRandomSeedOffset = offset;
+    mRunSeed = offset;
+    mSeedDomain = 0;
+    mGenerationIndex = 0;
+}
+
+void OnlineDataGenerationPass::setSeedState(uint32_t runSeed, uint32_t seedDomain, uint32_t generationIndex)
+{
+    mRunSeed = runSeed;
+    mSeedDomain = seedDomain;
+    mGenerationIndex = generationIndex;
 }
 
 void OnlineDataGenerationPass::setUvGrid(uint32_t width, uint32_t height)
