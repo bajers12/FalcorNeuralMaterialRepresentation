@@ -120,7 +120,7 @@ class TrainConfig:
     use_pdf_feature: bool = False
 
     # Importance sampling decoder configuration
-    train_importance_sampler: bool = False
+    train_importance_sampler: bool = True
 
 # =============================================================================
 # Batch handling
@@ -1470,6 +1470,12 @@ def parse_args() -> TrainConfig:
         default=True,
         help="Enable or disable decoder training.",
     )
+    p.add_argument(
+        "--train_importance_sampler",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable training of the importance sampling decoder.",
+    )
 
     p.add_argument("--freeze_latent_after_epoch", type=int, default=None)
     p.add_argument("--freeze_decoder_after_epoch", type=int, default=None)
@@ -1522,11 +1528,6 @@ def parse_args() -> TrainConfig:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Enable or disable BSDF pdf in the training-only material encoder.",
-    )
-    p.add_argument(
-        "--train_importance_sampler",
-        action="store_true",
-        help="Enable training of the importance sampling decoder.",
     )
 
     args = p.parse_args()
