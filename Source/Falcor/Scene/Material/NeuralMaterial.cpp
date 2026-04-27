@@ -11,7 +11,7 @@ namespace Falcor
         constexpr const char kWeightMagic01[8] = { 'N','M','D','L','W','T','0','1' };
         constexpr const char kWeightMagic02[8] = { 'N','M','D','L','W','T','0','2' };
         const std::string kShaderFile = "Scene/Material/NeuralMaterial.slang";
-    }   
+    }
     namespace
     {
         MaterialType getNeuralMaterialType()
@@ -59,73 +59,13 @@ namespace Falcor
         const auto latent0Path = mBasePath / "latent0.exr";
         const auto latent1Path = mBasePath / "latent1.exr";
         const auto weightsPath = mBasePath / "decoder_weights.bin";
+        const auto samplerWeightsPath = mBasePath / "sampler_weights.bin";
 
         mpLatent0 = Texture::createFromFile(mpDevice, latent0Path.string(), false, false);
         mpLatent1 = Texture::createFromFile(mpDevice, latent1Path.string(), false, false);
 
         if (!mpLatent0) FALCOR_THROW("Failed to load latent texture: {}", latent0Path.string());
         if (!mpLatent1) FALCOR_THROW("Failed to load latent texture: {}", latent1Path.string());
-
-        std::ifstream f(weightsPath, std::ios::binary);
-        if (!f) FALCOR_THROW("Failed to open weight file: {}", weightsPath.string());
-
-        char magic[8];
-        f.read(magic, 8);
-        if (!f)
-            FALCOR_THROW("Invalid weight file magic in: {}", weightsPath.string());
-
-        const bool isLegacyLayout = std::memcmp(magic, kWeightMagic01, 8) == 0;
-        const bool isFamilyLayout = std::memcmp(magic, kWeightMagic02, 8) == 0;
-        if (!isLegacyLayout && !isFamilyLayout)
-            FALCOR_THROW("Invalid weight file magic in: {}", weightsPath.string());
-
-        int32_t latentCh = 0;
-        int32_t numFrames = 0;
-        int32_t applyExp = 0;
-        float expOffset = 0.f;
-        int32_t mlpWidth = 32;
-        int32_t mlpDepth = 2;
-
-        f.read(reinterpret_cast<char*>(&latentCh), sizeof(int32_t));
-        f.read(reinterpret_cast<char*>(&numFrames), sizeof(int32_t));
-        f.read(reinterpret_cast<char*>(&applyExp), sizeof(int32_t));
-        f.read(reinterpret_cast<char*>(&expOffset), sizeof(float));
-        if (isFamilyLayout)
-        {
-            f.read(reinterpret_cast<char*>(&mlpWidth), sizeof(int32_t));
-            f.read(reinterpret_cast<char*>(&mlpDepth), sizeof(int32_t));
-        }
-        if (!f) FALCOR_THROW("Failed reading weight file header: {}", weightsPath.string());
-
-        if (latentCh != 8) FALCOR_THROW("Expected latentCh == 8, got {} in {}", latentCh, weightsPath.string());
-        if (numFrames != 2) FALCOR_THROW("Expected numFrames == 2, got {} in {}", numFrames, weightsPath.string());
-        if (mlpWidth != 16 && mlpWidth != 32 && mlpWidth != 64)
-            FALCOR_THROW("Expected mlpWidth in {16, 32, 64}, got {} in {}", mlpWidth, weightsPath.string());
-        if (mlpDepth != 2 && mlpDepth != 3)
-            FALCOR_THROW("Expected mlpDepth in {2, 3}, got {} in {}", mlpDepth, weightsPath.string());
-
-        auto frameLinear = readFloatArray(f, 12 * 8);
-        auto w0 = readFloatArray(f, static_cast<size_t>(mlpWidth) * 20);
-        auto b0 = readFloatArray(f, static_cast<size_t>(mlpWidth));
-        auto w1 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
-        auto b1 = readFloatArray(f, static_cast<size_t>(mlpWidth));
-        std::vector<float> w2;
-        std::vector<float> b2;
-        std::vector<float> w3;
-        std::vector<float> b3;
-
-        if (mlpDepth == 2)
-        {
-            w2 = readFloatArray(f, static_cast<size_t>(3) * static_cast<size_t>(mlpWidth));
-            b2 = readFloatArray(f, 3);
-        }
-        else
-        {
-            w2 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
-            b2 = readFloatArray(f, static_cast<size_t>(mlpWidth));
-            w3 = readFloatArray(f, static_cast<size_t>(3) * static_cast<size_t>(mlpWidth));
-            b3 = readFloatArray(f, 3);
-        }
 
         auto makeStructured = [&](const std::vector<float>& data) -> ref<Buffer>
         {
@@ -140,15 +80,168 @@ namespace Falcor
             );
         };
 
-        mpFrameLinear = makeStructured(frameLinear);
-        mpW0 = makeStructured(w0);
-        mpB0 = makeStructured(b0);
-        mpW1 = makeStructured(w1);
-        mpB1 = makeStructured(b1);
-        mpW2 = makeStructured(w2);
-        mpB2 = makeStructured(b2);
-        mpW3 = w3.empty() ? makeStructured(std::vector<float>{ 0.f }) : makeStructured(w3);
-        mpB3 = b3.empty() ? makeStructured(std::vector<float>{ 0.f }) : makeStructured(b3);
+        auto loadDecoderWeights = [&](const std::filesystem::path& path, uint32_t expectedInputDim, uint32_t expectedOutputDim, bool allowLegacy)
+        {
+            std::ifstream f(path, std::ios::binary);
+            if (!f) FALCOR_THROW("Failed to open weight file: {}", path.string());
+
+            char magic[8];
+            f.read(magic, 8);
+            if (!f)
+                FALCOR_THROW("Invalid weight file magic in: {}", path.string());
+
+            const bool isLegacyLayout = std::memcmp(magic, kWeightMagic01, 8) == 0;
+            const bool isFamilyLayout = std::memcmp(magic, kWeightMagic02, 8) == 0;
+            if (!isLegacyLayout && !isFamilyLayout)
+                FALCOR_THROW("Invalid weight file magic in: {}", path.string());
+            if (isLegacyLayout && !allowLegacy)
+                FALCOR_THROW("Legacy NMDLWT01 is not supported for {}", path.string());
+
+            int32_t latentCh = 0;
+            int32_t numFrames = 0;
+            int32_t applyExp = 0;
+            float expOffset = 0.f;
+            int32_t mlpWidth = 32;
+            int32_t mlpDepth = 2;
+
+            f.read(reinterpret_cast<char*>(&latentCh), sizeof(int32_t));
+            f.read(reinterpret_cast<char*>(&numFrames), sizeof(int32_t));
+            f.read(reinterpret_cast<char*>(&applyExp), sizeof(int32_t));
+            f.read(reinterpret_cast<char*>(&expOffset), sizeof(float));
+            if (isFamilyLayout)
+            {
+                f.read(reinterpret_cast<char*>(&mlpWidth), sizeof(int32_t));
+                f.read(reinterpret_cast<char*>(&mlpDepth), sizeof(int32_t));
+            }
+            if (!f) FALCOR_THROW("Failed reading weight file header: {}", path.string());
+
+            if (latentCh != 8) FALCOR_THROW("Expected latentCh == 8, got {} in {}", latentCh, path.string());
+            if (numFrames != 2) FALCOR_THROW("Expected numFrames == 2, got {} in {}", numFrames, path.string());
+            if (mlpWidth != 16 && mlpWidth != 32 && mlpWidth != 64)
+                FALCOR_THROW("Expected mlpWidth in {16, 32, 64}, got {} in {}", mlpWidth, path.string());
+            if (mlpDepth != 2 && mlpDepth != 3)
+                FALCOR_THROW("Expected mlpDepth in {2, 3}, got {} in {}", mlpDepth, path.string());
+
+            auto frameLinear = readFloatArray(f, 12 * 8);
+            auto w0 = readFloatArray(f, static_cast<size_t>(mlpWidth) * expectedInputDim);
+            auto b0 = readFloatArray(f, static_cast<size_t>(mlpWidth));
+            auto w1 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
+            auto b1 = readFloatArray(f, static_cast<size_t>(mlpWidth));
+            std::vector<float> w2;
+            std::vector<float> b2;
+            std::vector<float> w3;
+            std::vector<float> b3;
+
+            if (mlpDepth == 2)
+            {
+                w2 = readFloatArray(f, static_cast<size_t>(expectedOutputDim) * static_cast<size_t>(mlpWidth));
+                b2 = readFloatArray(f, expectedOutputDim);
+            }
+            else
+            {
+                w2 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
+                b2 = readFloatArray(f, static_cast<size_t>(mlpWidth));
+                w3 = readFloatArray(f, static_cast<size_t>(expectedOutputDim) * static_cast<size_t>(mlpWidth));
+                b3 = readFloatArray(f, expectedOutputDim);
+            }
+
+            struct LoadedDecoder
+            {
+                int32_t applyExp = 0;
+                float expOffset = 0.f;
+                int32_t mlpWidth = 0;
+                int32_t mlpDepth = 0;
+                ref<Buffer> frameLinear;
+                ref<Buffer> w0;
+                ref<Buffer> b0;
+                ref<Buffer> w1;
+                ref<Buffer> b1;
+                ref<Buffer> w2;
+                ref<Buffer> b2;
+                ref<Buffer> w3;
+                ref<Buffer> b3;
+            };
+
+            LoadedDecoder loaded;
+            loaded.applyExp = applyExp;
+            loaded.expOffset = expOffset;
+            loaded.mlpWidth = mlpWidth;
+            loaded.mlpDepth = mlpDepth;
+            loaded.frameLinear = makeStructured(frameLinear);
+            loaded.w0 = makeStructured(w0);
+            loaded.b0 = makeStructured(b0);
+            loaded.w1 = makeStructured(w1);
+            loaded.b1 = makeStructured(b1);
+            loaded.w2 = makeStructured(w2);
+            loaded.b2 = makeStructured(b2);
+            loaded.w3 = w3.empty() ? makeStructured(std::vector<float>{ 0.f }) : makeStructured(w3);
+            loaded.b3 = b3.empty() ? makeStructured(std::vector<float>{ 0.f }) : makeStructured(b3);
+            return loaded;
+        };
+
+        auto brdf = loadDecoderWeights(weightsPath, 20, 3, true);
+        mpFrameLinear = brdf.frameLinear;
+        mpW0 = brdf.w0;
+        mpB0 = brdf.b0;
+        mpW1 = brdf.w1;
+        mpB1 = brdf.b1;
+        mpW2 = brdf.w2;
+        mpB2 = brdf.b2;
+        mpW3 = brdf.w3;
+        mpB3 = brdf.b3;
+
+        mData.applyExp = brdf.applyExp != 0 ? 1u : 0u;
+        mData.expOffset = brdf.expOffset;
+        mData.mlpWidth = static_cast<uint32_t>(brdf.mlpWidth);
+        mData.mlpDepth = static_cast<uint32_t>(brdf.mlpDepth);
+
+        if (std::filesystem::exists(samplerWeightsPath))
+        {
+            auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 4, false);
+            if (sampler.mlpWidth != brdf.mlpWidth || sampler.mlpDepth != brdf.mlpDepth)
+            {
+                FALCOR_THROW(
+                    "Sampler decoder architecture must match BRDF decoder architecture. BRDF={}x{}, sampler={}x{} in {}",
+                    brdf.mlpWidth,
+                    brdf.mlpDepth,
+                    sampler.mlpWidth,
+                    sampler.mlpDepth,
+                    samplerWeightsPath.string()
+                );
+            }
+            if (sampler.mlpDepth != 2)
+            {
+                FALCOR_THROW(
+                    "Sampler decoder currently supports only 2-layer MLPs in {}",
+                    samplerWeightsPath.string()
+                );
+            }
+            mpSamplerFrameLinear = sampler.frameLinear;
+            mpSamplerW0 = sampler.w0;
+            mpSamplerB0 = sampler.b0;
+            mpSamplerW1 = sampler.w1;
+            mpSamplerB1 = sampler.b1;
+            mpSamplerW2 = sampler.w2;
+            mpSamplerB2 = sampler.b2;
+        }
+        else
+        {
+            mpSamplerFrameLinear = nullptr;
+            mpSamplerW0 = nullptr;
+            mpSamplerB0 = nullptr;
+            mpSamplerW1 = nullptr;
+            mpSamplerB1 = nullptr;
+            mpSamplerW2 = nullptr;
+            mpSamplerB2 = nullptr;
+
+            mData.samplerFrameLinearBufferID = uint32_t(-1);
+            mData.samplerW0BufferID = uint32_t(-1);
+            mData.samplerB0BufferID = uint32_t(-1);
+            mData.samplerW1BufferID = uint32_t(-1);
+            mData.samplerB1BufferID = uint32_t(-1);
+            mData.samplerW2BufferID = uint32_t(-1);
+            mData.samplerB2BufferID = uint32_t(-1);
+        }
 
         if (!mpSampler)
         {
@@ -158,10 +251,6 @@ namespace Falcor
             mpSampler = mpDevice->createSampler(desc);
         }
 
-        mData.applyExp = applyExp != 0 ? 1u : 0u;
-        mData.expOffset = expOffset;
-        mData.mlpWidth = static_cast<uint32_t>(mlpWidth);
-        mData.mlpDepth = static_cast<uint32_t>(mlpDepth);
     }
 
     uint32_t NeuralMaterial::uploadBuffer(MaterialSystem* pOwner, const ref<Buffer>& pBuffer, uint32_t& id)
@@ -200,6 +289,17 @@ namespace Falcor
         uploadBuffer(pOwner, mpW3, mData.W3BufferID);
         uploadBuffer(pOwner, mpB3, mData.B3BufferID);
 
+        if (mpSamplerFrameLinear)
+        {
+            uploadBuffer(pOwner, mpSamplerFrameLinear, mData.samplerFrameLinearBufferID);
+            uploadBuffer(pOwner, mpSamplerW0, mData.samplerW0BufferID);
+            uploadBuffer(pOwner, mpSamplerB0, mData.samplerB0BufferID);
+            uploadBuffer(pOwner, mpSamplerW1, mData.samplerW1BufferID);
+            uploadBuffer(pOwner, mpSamplerB1, mData.samplerB1BufferID);
+            uploadBuffer(pOwner, mpSamplerW2, mData.samplerW2BufferID);
+            uploadBuffer(pOwner, mpSamplerB2, mData.samplerB2BufferID);
+        }
+
         return updates;
     }
 
@@ -216,7 +316,11 @@ namespace Falcor
                mpW0 == p->mpW0 && mpB0 == p->mpB0 &&
                mpW1 == p->mpW1 && mpB1 == p->mpB1 &&
                mpW2 == p->mpW2 && mpB2 == p->mpB2 &&
-               mpW3 == p->mpW3 && mpB3 == p->mpB3;
+               mpW3 == p->mpW3 && mpB3 == p->mpB3 &&
+               mpSamplerFrameLinear == p->mpSamplerFrameLinear &&
+               mpSamplerW0 == p->mpSamplerW0 && mpSamplerB0 == p->mpSamplerB0 &&
+               mpSamplerW1 == p->mpSamplerW1 && mpSamplerB1 == p->mpSamplerB1 &&
+               mpSamplerW2 == p->mpSamplerW2 && mpSamplerB2 == p->mpSamplerB2;
     }
 
     MaterialDataBlob NeuralMaterial::getDataBlob() const
@@ -236,5 +340,5 @@ namespace Falcor
         conformances.add("NeuralMaterial", "IMaterial");
         return conformances;
     }
-        
+
 }

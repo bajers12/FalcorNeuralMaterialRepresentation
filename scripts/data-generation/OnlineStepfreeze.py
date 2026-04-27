@@ -1166,41 +1166,95 @@ def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
 
 
 def save_weights_bin(path: Path, weights: dict) -> None:
-    latent_ch = int(np.asarray(weights["latent_ch"]).reshape(-1)[0])
-    num_frames = int(np.asarray(weights["num_frames"]).reshape(-1)[0])
-    exp_offset = float(np.asarray(weights["exp_offset"]).reshape(-1)[0])
-
-    ordered = [
-        ("frame_linear.weight", (12, 8)),
-        ("mlp.0.weight", (32, 20)),
-        ("mlp.0.bias", (32,)),
-        ("mlp.2.weight", (32, 32)),
-        ("mlp.2.bias", (32,)),
-        ("mlp.4.weight", (3, 32)),
-        ("mlp.4.bias", (3,)),
-    ]
-
-    with open(path, "wb") as f:
-        f.write(b"NMDLWT01")
-        f.write(struct.pack("<iiif", latent_ch, num_frames, 1, exp_offset))
-
-        for name, expected_shape in ordered:
-            arr = np.asarray(weights[name], dtype=np.float32)
-            if tuple(arr.shape) != expected_shape:
-                raise ValueError(f"{name} expected shape {expected_shape}, got {arr.shape}")
-            f.write(arr.astype(np.float32).ravel(order="C").tobytes())
+    return save_network_weights_bin(
+        path=path,
+        weights=weights,
+        input_dim=20,
+        output_dim=3,
+        allow_legacy=True,
+    )
 
 
-def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
-    _, h, w = latent.shape
-    metadata = {
-        "width": int(w),
-        "height": int(h),
-        "latent_dim": int(latent.shape[0]),
-        "num_frames": int(np.asarray(weights["num_frames"]).reshape(-1)[0]),
-        "exp_offset": float(np.asarray(weights["exp_offset"]).reshape(-1)[0]),
-        "apply_exp": True,
-        "decoder_layout": {
+def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> dict:
+    frame_weight = np.asarray(weights["frame_linear.weight"], dtype=np.float32)
+    if frame_weight.shape != (12, 8):
+        raise ValueError(f"frame_linear.weight expected shape (12, 8), got {frame_weight.shape}")
+
+    latent_ch = int(np.asarray(weights.get("latent_ch", np.array([8], dtype=np.int32))).reshape(-1)[0])
+    num_frames = int(np.asarray(weights.get("num_frames", np.array([2], dtype=np.int32))).reshape(-1)[0])
+    exp_offset = float(np.asarray(weights.get("exp_offset", np.array([0.0], dtype=np.float32))).reshape(-1)[0])
+
+    layer_indices = sorted(
+        int(k.split(".")[1]) for k in weights.keys() if k.startswith("mlp.") and k.endswith(".weight")
+    )
+    if not layer_indices:
+        raise ValueError("No MLP layers found in weights.")
+
+    linear_layers = ["frame_linear"] + [f"mlp.{idx}" for idx in layer_indices]
+    mlp_depth = len(layer_indices) - 1
+    if mlp_depth not in (2, 3):
+        raise ValueError(f"Unsupported MLP depth: {mlp_depth}. Expected 2 or 3.")
+
+    first_w = np.asarray(weights[f"mlp.{layer_indices[0]}.weight"], dtype=np.float32)
+    mlp_width = int(first_w.shape[0])
+
+    expected_prev = input_dim
+    decoder_layout = {"frame_linear.weight": [12, 8]}
+    for idx in layer_indices:
+        w_name = f"mlp.{idx}.weight"
+        b_name = f"mlp.{idx}.bias"
+        w = np.asarray(weights[w_name], dtype=np.float32)
+        b = np.asarray(weights[b_name], dtype=np.float32)
+
+        out_dim = output_dim if idx == layer_indices[-1] else mlp_width
+        if tuple(w.shape) != (out_dim, expected_prev):
+            raise ValueError(f"{w_name} expected shape {(out_dim, expected_prev)}, got {w.shape}")
+        if tuple(b.shape) != (out_dim,):
+            raise ValueError(f"{b_name} expected shape {(out_dim,)}, got {b.shape}")
+
+        decoder_layout[w_name] = [int(w.shape[0]), int(w.shape[1])]
+        decoder_layout[b_name] = [int(b.shape[0])]
+        expected_prev = mlp_width
+
+    if latent_ch != 8:
+        raise ValueError(f"Only latent_ch=8 is supported for runtime export, got {latent_ch}")
+    if num_frames != 2:
+        raise ValueError(f"Only num_frames=2 is supported for runtime export, got {num_frames}")
+    if mlp_width not in (16, 32, 64):
+        raise ValueError(f"Unsupported mlp_width={mlp_width}. Expected one of 16, 32, 64.")
+
+    return {
+        "latent_ch": latent_ch,
+        "num_frames": num_frames,
+        "exp_offset": exp_offset,
+        "mlp_width": mlp_width,
+        "mlp_depth": mlp_depth,
+        "linear_layers": linear_layers,
+        "decoder_layout": decoder_layout,
+    }
+
+
+def save_network_weights_bin(
+    path: Path,
+    weights: dict,
+    *,
+    input_dim: int,
+    output_dim: int,
+    allow_legacy: bool,
+) -> dict:
+    layout = _infer_network_layout(weights, input_dim=input_dim, output_dim=output_dim)
+    latent_ch = layout["latent_ch"]
+    num_frames = layout["num_frames"]
+    exp_offset = layout["exp_offset"]
+    mlp_width = layout["mlp_width"]
+    mlp_depth = layout["mlp_depth"]
+
+    is_legacy = (
+        allow_legacy
+        and input_dim == 20
+        and output_dim == 3
+        and layout["decoder_layout"]
+        == {
             "frame_linear.weight": [12, 8],
             "mlp.0.weight": [32, 20],
             "mlp.0.bias": [32],
@@ -1208,7 +1262,85 @@ def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
             "mlp.2.bias": [32],
             "mlp.4.weight": [3, 32],
             "mlp.4.bias": [3],
-        },
+        }
+    )
+
+    with open(path, "wb") as f:
+        if is_legacy:
+            f.write(b"NMDLWT01")
+            f.write(struct.pack("<iiif", latent_ch, num_frames, 1, exp_offset))
+            ordered = [
+                "frame_linear.weight",
+                "mlp.0.weight",
+                "mlp.0.bias",
+                "mlp.2.weight",
+                "mlp.2.bias",
+                "mlp.4.weight",
+                "mlp.4.bias",
+            ]
+            for name in ordered:
+                arr = np.asarray(weights[name], dtype=np.float32)
+                f.write(arr.ravel(order="C").tobytes())
+            layout["weight_file_format"] = "NMDLWT01"
+            return layout
+
+        f.write(b"NMDLWT02")
+        f.write(struct.pack("<iiifii", latent_ch, num_frames, 1, exp_offset, mlp_width, mlp_depth))
+
+        for layer_name in layout["linear_layers"]:
+            weight_name = f"{layer_name}.weight"
+            bias_name = f"{layer_name}.bias"
+            w = np.asarray(weights[weight_name], dtype=np.float32)
+            f.write(w.ravel(order="C").tobytes())
+            if bias_name in weights:
+                b = np.asarray(weights[bias_name], dtype=np.float32)
+                f.write(b.ravel(order="C").tobytes())
+
+    layout["weight_file_format"] = "NMDLWT02"
+    return layout
+
+
+def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
+    _, h, w = latent.shape
+    layout = _infer_network_layout(weights, input_dim=20, output_dim=3)
+    metadata = {
+        "width": int(w),
+        "height": int(h),
+        "latent_dim": int(latent.shape[0]),
+        "num_frames": layout["num_frames"],
+        "exp_offset": layout["exp_offset"],
+        "apply_exp": True,
+        "mlp_width": layout["mlp_width"],
+        "mlp_depth": layout["mlp_depth"],
+        "weight_file_format": "NMDLWT01"
+        if layout["decoder_layout"]
+        == {
+            "frame_linear.weight": [12, 8],
+            "mlp.0.weight": [32, 20],
+            "mlp.0.bias": [32],
+            "mlp.2.weight": [32, 32],
+            "mlp.2.bias": [32],
+            "mlp.4.weight": [3, 32],
+            "mlp.4.bias": [3],
+        }
+        else "NMDLWT02",
+        "decoder_layout": layout["decoder_layout"],
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+
+
+def save_sampler_metadata(path: Path, weights: dict) -> None:
+    layout = _infer_network_layout(weights, input_dim=14, output_dim=4)
+    metadata = {
+        "latent_dim": layout["latent_ch"],
+        "num_frames": layout["num_frames"],
+        "mlp_width": layout["mlp_width"],
+        "mlp_depth": layout["mlp_depth"],
+        "weight_file_format": "NMDLWT02",
+        "sampler_kappa_min": 0.1,
+        "sampler_kappa_max": 100.0,
+        "decoder_layout": layout["decoder_layout"],
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
@@ -1240,16 +1372,34 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
         "num_frames": np.array([cfg.num_frames], dtype=np.int32),
         "exp_offset": np.array([cfg.exp_offset], dtype=np.float32),
         "frame_linear.weight": sd["frame_linear.weight"].detach().cpu().numpy(),
-        "mlp.0.weight": sd["mlp.0.weight"].detach().cpu().numpy(),
-        "mlp.0.bias": sd["mlp.0.bias"].detach().cpu().numpy(),
-        "mlp.2.weight": sd["mlp.2.weight"].detach().cpu().numpy(),
-        "mlp.2.bias": sd["mlp.2.bias"].detach().cpu().numpy(),
-        "mlp.4.weight": sd["mlp.4.weight"].detach().cpu().numpy(),
-        "mlp.4.bias": sd["mlp.4.bias"].detach().cpu().numpy(),
     }
+    for key, value in sd.items():
+        if key.startswith("mlp."):
+            weights[key] = value.detach().cpu().numpy()
 
     save_weights_bin(preview_dir / "decoder_weights.bin", weights)
     save_metadata(preview_dir / "metadata.json", latent, weights)
+
+    if cfg.train_importance_sampler:
+        sampler_sd = model.importance_sampler.state_dict()
+        sampler_weights = {
+            "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
+            "num_frames": np.array([cfg.num_frames], dtype=np.int32),
+            "exp_offset": np.array([0.0], dtype=np.float32),
+            "frame_linear.weight": sampler_sd["frame_linear.weight"].detach().cpu().numpy(),
+        }
+        for key, value in sampler_sd.items():
+            if key.startswith("mlp."):
+                sampler_weights[key] = value.detach().cpu().numpy()
+
+        save_network_weights_bin(
+            preview_dir / "sampler_weights.bin",
+            sampler_weights,
+            input_dim=14,
+            output_dim=4,
+            allow_legacy=False,
+        )
+        save_sampler_metadata(preview_dir / "sampler_metadata.json", sampler_weights)
 
     print(f"[export] Renderer-ready assets written to: {preview_dir}")
 
