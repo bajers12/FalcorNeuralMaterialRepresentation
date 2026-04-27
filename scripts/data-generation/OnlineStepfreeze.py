@@ -904,7 +904,6 @@ def train_one_epoch(
     cfg: TrainConfig,
     epoch: int,
     phase: str,
-    run_start_time: float,
 ):
     model.train()
     device = torch.device(cfg.device)
@@ -1073,10 +1072,10 @@ def save_checkpoint(
     cfg: TrainConfig,
     epoch: int,
     metrics: Dict[str, float],
-    filename: Optional[str] = None,
+    filename: str = "checkpoint_epoch.pt",
 ) -> str:
     os.makedirs(cfg.out_dir, exist_ok=True)
-    ckpt_path = os.path.join(cfg.out_dir, f"checkpoint_epoch.pt")
+    ckpt_path = os.path.join(cfg.out_dir, filename)
     payload = {
         "epoch": epoch,
         "config": asdict(cfg),
@@ -1459,10 +1458,18 @@ def parse_args() -> TrainConfig:
     p.add_argument("--clamp_min_target", type=float, default=0.0)
 
     p.add_argument("--print_every_epochs", type=int, default=10000)
-    p.add_argument("--train_latent_texture", action="store_true")
-    p.add_argument("--no_train_latent_texture", action="store_true")
-    p.add_argument("--train_decoder", action="store_true")
-    p.add_argument("--no_train_decoder", action="store_true")
+    p.add_argument(
+        "--train_latent_texture",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable latent texture training.",
+    )
+    p.add_argument(
+        "--train_decoder",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable decoder training.",
+    )
 
     p.add_argument("--freeze_latent_after_epoch", type=int, default=None)
     p.add_argument("--freeze_decoder_after_epoch", type=int, default=None)
@@ -1487,34 +1494,34 @@ def parse_args() -> TrainConfig:
         help="Batch size used when initializing the latent texture from encoder outputs.",
     )
     p.add_argument(
-        "--no_albedo_feature",
-        action="store_true",
-        help="Exclude albedo from the training-only material encoder.",
+        "--albedo_feature",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable albedo in the training-only material encoder.",
     )
     p.add_argument(
-        "--no_spec_feature",
-        action="store_true",
-        help="Exclude specular from the training-only material encoder.",
+        "--spec_feature",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable specular in the training-only material encoder.",
     )
     p.add_argument(
-        "--no_normal_feature",
-        action="store_true",
-        help="Exclude guide normal from the training-only material encoder.",
+        "--normal_feature",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable guide normal in the training-only material encoder.",
     )
     p.add_argument(
-        "--no_roughness_feature",
-        action="store_true",
-        help="Exclude roughness from the training-only material encoder.",
+        "--roughness_feature",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable roughness in the training-only material encoder.",
     )
     p.add_argument(
-        "--no_pdf_feature",
-        action="store_true",
-        help="Exclude BSDF pdf from the training-only material encoder.",
-    )
-    p.add_argument(
-        "--use_pdf_feature",
-        action="store_true",
-        help="Explicitly include BSDF pdf in the training-only material encoder.",
+        "--pdf_feature",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable or disable BSDF pdf in the training-only material encoder.",
     )
     p.add_argument(
         "--train_importance_sampler",
@@ -1553,15 +1560,8 @@ def parse_args() -> TrainConfig:
     cfg.clamp_min_target = args.clamp_min_target
 
     cfg.print_every_epochs = max(0, args.print_every_epochs)
-    if args.no_train_latent_texture:
-        cfg.train_latent_texture = False
-    elif args.train_latent_texture:
-        cfg.train_latent_texture = True
-
-    if args.no_train_decoder:
-        cfg.train_decoder = False
-    elif args.train_decoder:
-        cfg.train_decoder = True
+    cfg.train_latent_texture = args.train_latent_texture
+    cfg.train_decoder = args.train_decoder
 
     cfg.freeze_latent_after_epoch = args.freeze_latent_after_epoch
     cfg.freeze_decoder_after_epoch = args.freeze_decoder_after_epoch
@@ -1571,15 +1571,11 @@ def parse_args() -> TrainConfig:
     cfg.encoder_depth = args.encoder_depth
     cfg.encoder_bootstrap_epochs = max(0, args.encoder_bootstrap_epochs)
     cfg.latent_init_batch_size = max(1, args.latent_init_batch_size)
-    cfg.use_albedo_features = not args.no_albedo_feature
-    cfg.use_spec_features = not args.no_spec_feature
-    cfg.use_normal_features = not args.no_normal_feature
-    cfg.use_roughness_feature = not args.no_roughness_feature
-    cfg.use_pdf_feature = cfg.use_pdf_feature
-    if args.use_pdf_feature:
-        cfg.use_pdf_feature = True
-    if args.no_pdf_feature:
-        cfg.use_pdf_feature = False
+    cfg.use_albedo_features = args.albedo_feature
+    cfg.use_spec_features = args.spec_feature
+    cfg.use_normal_features = args.normal_feature
+    cfg.use_roughness_feature = args.roughness_feature
+    cfg.use_pdf_feature = args.pdf_feature
 
     cfg.train_importance_sampler = args.train_importance_sampler
 
@@ -1715,7 +1711,6 @@ def main():
                 cfg,
                 epoch,
                 phase,
-                run_start_time,
             )
 
             scheduler.step()
