@@ -244,7 +244,8 @@ class Decoder(nn.Module):
 
     @staticmethod
     def _safe_normalize(v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-        return v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
+        out = v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
+        return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _predict_frames(
         self, z: torch.Tensor
@@ -310,8 +311,31 @@ class Decoder(nn.Module):
 
 class ImportanceSamplingDecoder(nn.Module):
     """
-    Importance sampling decoder that predicts a von Mises-Fisher distribution.
+    Importance sampling decoder matching the paper (Section 4.3 / Figure 4):
+      - The network predicts parameters of a two-lobe anisotropic GGX (Trowbridge-Reitz)
+        microfacet distribution, NOT a von Mises-Fisher distribution.
+      - Each lobe has: anisotropic roughness (alpha_x, alpha_y), lobe weight, and its own
+        learned shading frame (T, B, N) extracted from the latent code.
+      - Sampling follows the standard GGX visible-normal (VNDF) path:
+          1. Sample a microfacet normal m ~ GGX-NDF in the lobe's shading frame.
+          2. Reflect wi around m to get wo.
+          3. Evaluate the blended two-lobe PDF at wo.
+      - The MLP only sees wi (not wo), consistent with Fig. 4 ("ωi" feeds the sampler).
+
+    Network outputs (per forward pass, shape [B, 2*5]):
+        For each lobe i in {0, 1}:
+            raw_alpha_x_i, raw_alpha_y_i  -> alpha = alpha_min + (alpha_max-alpha_min)*sigmoid(·)
+            raw_weight_i                  -> lobe weight (softmax across lobes)
+            (frame comes from frame_linear, shared with BRDF decoder convention)
+
+    The frame_linear layer still outputs 6*num_frames values so that the weight layout
+    is identical to the BRDF Decoder and can share the same export path.
+    num_frames must equal 2 (one frame per lobe).
     """
+
+    # Roughness is clamped to [alpha_min, 1] to avoid singularities in the GGX NDF.
+    ALPHA_MIN: float = 0.01
+    ALPHA_MAX: float = 1.0
 
     def __init__(
         self,
@@ -321,34 +345,56 @@ class ImportanceSamplingDecoder(nn.Module):
         mlp_depth: int = 2,
         use_bias_in_mlp: bool = True,
         frame_linear_bias: bool = False,
-        kappa_min: float = 0.1,
-        kappa_max: float = 100.0,
     ):
         super().__init__()
+        if num_frames != 2:
+            raise ValueError(
+                "ImportanceSamplingDecoder requires num_frames=2 "
+                "(one GGX lobe per shading frame)."
+            )
         self.latent_ch = latent_ch
-        self.num_frames = num_frames
-        self.kappa_min = kappa_min
-        self.kappa_max = kappa_max
+        self.num_frames = num_frames  # == 2
 
+        # Frame extractor: same layout as Decoder — 6*num_frames outputs (N_i, T_i per frame).
         self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias)
 
+        # MLP inputs: latent z  +  wi projected into each frame (3 per frame)
+        # MLP outputs: 5 values per lobe × 2 lobes = 10 raw scalars
+        #   per lobe: [raw_alpha_x, raw_alpha_y, raw_weight] — 3 values × 2 lobes = 6
+        #   but we also output 2 extra values (one per lobe) reserved for future
+        #   anisotropy-axis control; set to zero for now so the output dim stays
+        #   at 2*5=10 to match the paper's Fig. 4 description of a "two-lobe distribution".
+        #
+        # Concretely the 10 outputs are laid out as:
+        #   [lobe0: raw_ax, raw_ay, raw_w, _, _,   lobe1: raw_ax, raw_ay, raw_w, _, _]
+        # The two unused slots (_) give the MLP room to express per-lobe properties
+        # without changing the export format when extended later.
         mlp_in = latent_ch + 3 * num_frames
-        layers = []
+        layers: list[nn.Module] = []
         prev = mlp_in
         for _ in range(mlp_depth):
             layers.append(nn.Linear(prev, mlp_width, bias=use_bias_in_mlp))
             layers.append(nn.ReLU(inplace=True))
             prev = mlp_width
-        layers.append(nn.Linear(prev, 4, bias=use_bias_in_mlp))
+        layers.append(nn.Linear(prev, 5 * num_frames, bias=use_bias_in_mlp))
         self.mlp = nn.Sequential(*layers)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _safe_normalize(v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-        return v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
+        out = v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
+        return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _predict_frames(
         self, z: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Identical Gram-Schmidt construction as Decoder._predict_frames.
+        z [B,C] -> T, Bv, N  each [B, num_frames, 3]
+        """
         bsz = z.shape[0]
         ft = self.frame_linear(z).view(bsz, self.num_frames, 6)
 
@@ -357,100 +403,333 @@ class ImportanceSamplingDecoder(nn.Module):
         t_raw = t_raw - (t_raw * n).sum(dim=-1, keepdim=True) * n
         t = self._safe_normalize(t_raw)
         bv = torch.cross(n, t, dim=-1)
-        return t, bv, n
+        return t, bv, n  # each [B, num_frames, 3]
+
+    @staticmethod
+    def _ggx_ndf(cos_theta_h: torch.Tensor,
+                 cos_phi_h: torch.Tensor,
+                 sin_phi_h: torch.Tensor,
+                 alpha_x: torch.Tensor,
+                 alpha_y: torch.Tensor) -> torch.Tensor:
+        """
+        Anisotropic GGX (Trowbridge-Reitz) NDF evaluated at a half-vector h.
+        All inputs are [B].
+        D(h) = 1 / (π α_x α_y  ((hx/αx)² + (hy/αy)² + hz²)²)
+        where hx = sin_theta_h * cos_phi_h, hy = sin_theta_h * sin_phi_h, hz = cos_theta_h.
+        """
+        sin_theta_h = (1.0 - cos_theta_h.clamp(-1, 1) ** 2).clamp_min(0.0).sqrt()
+        hx = sin_theta_h * cos_phi_h
+        hy = sin_theta_h * sin_phi_h
+        hz = cos_theta_h.clamp_min(0.0)
+
+        denom_sq = ((hx / alpha_x.clamp_min(1e-6)) ** 2
+                    + (hy / alpha_y.clamp_min(1e-6)) ** 2
+                    + hz ** 2) ** 2
+        return 1.0 / (math.pi * alpha_x * alpha_y * denom_sq.clamp_min(1e-10))
+
+    @staticmethod
+    def _ggx_smith_g1(cos_theta: torch.Tensor,
+                      cos_phi: torch.Tensor,
+                      sin_phi: torch.Tensor,
+                      alpha_x: torch.Tensor,
+                      alpha_y: torch.Tensor) -> torch.Tensor:
+        """
+        Anisotropic GGX Smith G1 masking term.
+        cos_theta, cos_phi, sin_phi are the direction's spherical coords in the lobe frame.
+        """
+        sin_theta = (1.0 - cos_theta.clamp(-1, 1) ** 2).clamp_min(0.0).sqrt()
+        # Effective alpha along the azimuth
+        alpha_eff = ((cos_phi * alpha_x) ** 2 + (sin_phi * alpha_y) ** 2).clamp_min(1e-12).sqrt()
+        tan_theta = sin_theta / cos_theta.clamp_min(1e-6)
+        denom = 1.0 + (alpha_eff * tan_theta).clamp_min(0.0)
+        return 2.0 / (1.0 + denom)
+
+    # ------------------------------------------------------------------
+    # Two-lobe GGX sampling (Heitz 2018 visible-normal sampling per lobe)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sample_ggx_vndf_single_lobe(
+        wi_local: torch.Tensor,   # [B, 3] in lobe's local frame (z == N)
+        alpha_x: torch.Tensor,    # [B]
+        alpha_y: torch.Tensor,    # [B]
+    ) -> torch.Tensor:
+        """
+        Sample a microfacet normal m from the GGX VNDF (Heitz 2018) in local
+        space where the lobe normal is the z-axis.
+        Returns m [B, 3] (unit, z >= 0 in the lobe frame).
+
+        Algorithm from: Sampling the GGX Distribution of Visible Normals,
+        Heitz 2018, JCGT.
+        """
+        device = wi_local.device
+        dtype = wi_local.dtype
+        B = wi_local.shape[0]
+
+        # Step 1 — stretch wi by roughness
+        wi_s = ImportanceSamplingDecoder._safe_normalize(
+            torch.stack([
+                wi_local[..., 0] * alpha_x,
+                wi_local[..., 1] * alpha_y,
+                wi_local[..., 2].clamp_min(1e-6),
+            ], dim=-1)
+        )
+
+        # Step 2 — build orthonormal basis (t1, t2) around wi_s
+        sign = torch.where(wi_s[..., 2] >= 0.0,
+                           torch.ones(B, device=device, dtype=dtype),
+                           -torch.ones(B, device=device, dtype=dtype))
+        a = -1.0 / (sign + wi_s[..., 2]).clamp_min(1e-6)
+        b_coeff = wi_s[..., 0] * wi_s[..., 1] * a
+        t1 = torch.stack([
+            1.0 + sign * wi_s[..., 0] ** 2 * a,
+            sign * b_coeff,
+            -sign * wi_s[..., 0],
+        ], dim=-1)
+        t2 = torch.stack([
+            b_coeff,
+            sign + wi_s[..., 1] ** 2 * a,
+            -wi_s[..., 1],
+        ], dim=-1)
+
+        # Step 3 — sample point on disk parameterization
+        u1 = torch.rand(B, device=device, dtype=dtype)
+        u2 = torch.rand(B, device=device, dtype=dtype)
+
+        r = u1.sqrt()
+        phi = 2.0 * math.pi * u2
+        t = r * torch.cos(phi)
+        s = r * torch.sin(phi)
+        t = t + s * (1.0 - t.abs()) * (
+            torch.where(wi_s[..., 2] >= 0.0,
+                        torch.zeros_like(s),
+                        (1.0 - t.abs()) / (1.0 - wi_s[..., 2].abs()).clamp_min(1e-6))
+        )
+
+        # Step 4 — reproject onto hemisphere
+        mh = (
+            t.unsqueeze(-1) * t1
+            + s.unsqueeze(-1) * t2
+            + (1.0 - t**2 - s**2).clamp_min(0.0).sqrt().unsqueeze(-1) * wi_s
+        )
+
+        # Step 5 — un-stretch
+        m = ImportanceSamplingDecoder._safe_normalize(
+            torch.stack([
+                mh[..., 0] * alpha_x,
+                mh[..., 1] * alpha_y,
+                mh[..., 2].clamp_min(0.0),
+            ], dim=-1)
+        )
+        return m
+
+    @staticmethod
+    def _ggx_vndf_pdf(
+        wi_local: torch.Tensor,   # [B, 3]
+        m_local: torch.Tensor,    # [B, 3]  microfacet normal in lobe frame
+        alpha_x: torch.Tensor,    # [B]
+        alpha_y: torch.Tensor,    # [B]
+    ) -> torch.Tensor:
+        """
+        PDF of the GGX VNDF: p(m) = G1(wi) D(m) |wi·m| / |wi·n|
+        where n is the macro-surface normal (z-axis in local frame).
+        Returns p(m) [B].  The reflection Jacobian |∂m/∂wo| = 1/(4|wo·m|)
+        is applied by the caller to get p(wo).
+        """
+        cos_theta_i = wi_local[..., 2].clamp_min(1e-6)
+
+        # phi of wi
+        sin_theta_i = (1.0 - cos_theta_i.clamp(-1, 1) ** 2).clamp_min(0.0).sqrt()
+        cos_phi_i = (wi_local[..., 0] / sin_theta_i.clamp_min(1e-6)).clamp(-1.0, 1.0)
+        sin_phi_i = (wi_local[..., 1] / sin_theta_i.clamp_min(1e-6)).clamp(-1.0, 1.0)
+
+        # phi of m
+        sin_theta_m = (1.0 - m_local[..., 2].clamp(-1, 1) ** 2).clamp_min(0.0).sqrt()
+        cos_phi_m = (m_local[..., 0] / sin_theta_m.clamp_min(1e-6)).clamp(-1.0, 1.0)
+        sin_phi_m = (m_local[..., 1] / sin_theta_m.clamp_min(1e-6)).clamp(-1.0, 1.0)
+
+        D = ImportanceSamplingDecoder._ggx_ndf(
+            m_local[..., 2], cos_phi_m, sin_phi_m, alpha_x, alpha_y
+        )
+        G1 = ImportanceSamplingDecoder._ggx_smith_g1(
+            cos_theta_i, cos_phi_i, sin_phi_i, alpha_x, alpha_y
+        )
+        wi_dot_m = (wi_local * m_local).sum(dim=-1).clamp_min(1e-6)
+        return G1 * D * wi_dot_m / cos_theta_i.clamp_min(1e-6)
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
     def forward_params(
         self, z: torch.Tensor, wi: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Predict per-lobe GGX parameters from latent code z and incident direction wi.
+
+        Returns:
+            t, bv, n     : each [B, 2, 3]  — learned shading frames (one per lobe)
+            alpha        : [B, 2, 2]       — (alpha_x, alpha_y) per lobe, in [ALPHA_MIN, 1]
+            lobe_weights : [B, 2]          — mixture weights (sum to 1 via softmax)
+        """
+        t, bv, n = self._predict_frames(z)  # each [B, 2, 3]
+
+        # Project wi into each lobe's frame
+        wi_f = torch.stack([
+            (wi.unsqueeze(1) * t).sum(dim=-1),
+            (wi.unsqueeze(1) * bv).sum(dim=-1),
+            (wi.unsqueeze(1) * n).sum(dim=-1),
+        ], dim=-1)  # [B, 2, 3]
+
+        dir_feats = wi_f.view(z.shape[0], 3 * self.num_frames)  # [B, 6]
+        raw = self.mlp(torch.cat([z, dir_feats], dim=-1))       # [B, 10]
+        raw = raw.view(z.shape[0], self.num_frames, 5)           # [B, 2, 5]
+
+        # Slots 0,1: raw roughness -> alpha in [ALPHA_MIN, ALPHA_MAX]
+        alpha = (
+            self.ALPHA_MIN
+            + (self.ALPHA_MAX - self.ALPHA_MIN) * torch.sigmoid(raw[..., 0:2])
+        )  # [B, 2, 2]
+        alpha = torch.nan_to_num(
+            alpha,
+            nan=0.5 * (self.ALPHA_MIN + self.ALPHA_MAX),
+            posinf=self.ALPHA_MAX,
+            neginf=self.ALPHA_MIN,
+        ).clamp(self.ALPHA_MIN, self.ALPHA_MAX)
+
+        # Slot 2: raw lobe weight -> softmax mixture
+        lobe_weights = torch.softmax(raw[..., 2], dim=-1)  # [B, 2]
+        lobe_weights = torch.nan_to_num(
+            lobe_weights,
+            nan=1.0 / float(self.num_frames),
+            posinf=1.0,
+            neginf=0.0,
+        ).clamp_min(0.0)
+        lobe_weights = lobe_weights / lobe_weights.sum(dim=-1, keepdim=True).clamp_min(
+            1e-8
+        )
+
+        return t, bv, n, alpha, lobe_weights
+
+    def sample(
+        self, z: torch.Tensor, wi: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        t, bv, n = self._predict_frames(z)
+        """
+        Draw one wo sample per batch element via the two-lobe GGX mixture.
+        Returns:
+            wo  : [B, 3]  sampled outgoing direction (world / shading space)
+            pdf : [B]     probability density of wo under the mixture
+        """
+        t, bv, n, alpha, lobe_weights = self.forward_params(z, wi)
+        B = z.shape[0]
 
-        wi_f = torch.stack(
-            [
-                (wi.unsqueeze(1) * t).sum(dim=-1),
-                (wi.unsqueeze(1) * bv).sum(dim=-1),
-                (wi.unsqueeze(1) * n).sum(dim=-1),
-            ],
-            dim=-1,
+        # --- Select which lobe to use for each sample (stratified by weight) ---
+        lobe_idx = torch.multinomial(lobe_weights, num_samples=1).squeeze(-1)  # [B]
+
+        # Gather the chosen lobe's frame and roughness
+        idx = lobe_idx.view(B, 1, 1)
+        t_sel  = t.gather(1,  idx.expand(B, 1, 3)).squeeze(1)   # [B, 3]
+        bv_sel = bv.gather(1, idx.expand(B, 1, 3)).squeeze(1)
+        n_sel  = n.gather(1,  idx.expand(B, 1, 3)).squeeze(1)
+        alpha_sel = alpha.gather(1, lobe_idx.view(B, 1, 1).expand(B, 1, 2)).squeeze(1)  # [B, 2]
+        ax = alpha_sel[..., 0]
+        ay = alpha_sel[..., 1]
+
+        # Transform wi into the selected lobe's local frame
+        wi_local = torch.stack([
+            (wi * t_sel).sum(-1),
+            (wi * bv_sel).sum(-1),
+            (wi * n_sel).sum(-1),
+        ], dim=-1)  # [B, 3]
+
+        # Flip wi below the hemisphere to the upper side (back-facing case)
+        wi_local = torch.where(
+            wi_local[..., 2:3] < 0.0,
+            wi_local * torch.tensor([1.0, 1.0, -1.0], device=wi.device, dtype=wi.dtype),
+            wi_local,
         )
 
-        dir_feats = wi_f.view(z.shape[0], 3 * self.num_frames)
-        params = self.mlp(torch.cat([z, dir_feats], dim=-1))
+        # Sample microfacet normal m in local frame, then reflect
+        m_local = self._sample_ggx_vndf_single_lobe(wi_local, ax, ay)      # [B, 3]
+        wo_local = 2.0 * (wi_local * m_local).sum(-1, keepdim=True) * m_local - wi_local
 
-        mean_dir = self._safe_normalize(params[..., :3])
-        kappa = params[..., 3:4]
-        kappa = self.kappa_min + (self.kappa_max - self.kappa_min) * torch.sigmoid(kappa)
-        return mean_dir, kappa
-
-    @staticmethod
-    def sample_von_mises_fisher(
-        mean_dir: torch.Tensor, kappa: torch.Tensor, samples_per_batch: int = 1
-    ) -> torch.Tensor:
-        device = mean_dir.device
-        dtype = mean_dir.dtype
-        batch_size = mean_dir.shape[0]
-
-        if kappa.dim() == 2:
-            kappa = kappa.squeeze(-1)
-        kappa = kappa.clamp(min=1e-6)
-
-        eps = 1e-7
-        rho = (1.0 - torch.exp(-2.0 * kappa)) / (1.0 - torch.exp(-2.0 * kappa) + eps)
-        u = torch.rand(batch_size * samples_per_batch, device=device, dtype=dtype)
-        v = torch.rand(batch_size * samples_per_batch, device=device, dtype=dtype)
-
-        log_arg = (rho + (1.0 - rho) * u).clamp_min(eps)
-        w = 1.0 + torch.log(log_arg) / kappa.repeat_interleave(samples_per_batch)
-        w = w.clamp(min=-1.0 + 1e-6, max=1.0 - 1e-6)
-
-        tangent_mag = torch.sqrt((1.0 - w**2).clamp_min(0.0))
-        phi = 2.0 * math.pi * v
-        tangent_x = tangent_mag * torch.cos(phi)
-        tangent_y = tangent_mag * torch.sin(phi)
-
-        mean_expanded = mean_dir.repeat_interleave(samples_per_batch, dim=0)
-        arbitrary = torch.zeros_like(mean_expanded)
-        z_small = (mean_expanded[..., 2].abs() < 0.9).float()
-        arbitrary[..., 0] = z_small
-        arbitrary[..., 2] = 1.0 - z_small
-
-        u_tangent = arbitrary - (arbitrary * mean_expanded).sum(dim=-1, keepdim=True) * mean_expanded
-        u_tangent = ImportanceSamplingDecoder._safe_normalize(u_tangent)
-        v_tangent = torch.cross(mean_expanded, u_tangent, dim=-1)
-
-        samples = (
-            w.unsqueeze(-1) * mean_expanded
-            + tangent_x.unsqueeze(-1) * u_tangent
-            + tangent_y.unsqueeze(-1) * v_tangent
+        # Transform wo back to world / shading space
+        wo = (
+            wo_local[..., 0:1] * t_sel
+            + wo_local[..., 1:2] * bv_sel
+            + wo_local[..., 2:3] * n_sel
         )
-        return ImportanceSamplingDecoder._safe_normalize(samples)
+        wo = self._safe_normalize(wo)
 
-    def eval_von_mises_fisher_pdf(
-        self, direction: torch.Tensor, mean_dir: torch.Tensor, kappa: torch.Tensor
-    ) -> torch.Tensor:
-        if kappa.dim() == 2:
-            kappa = kappa.squeeze(-1)
-        kappa = kappa.clamp(min=1e-6, max=1e6)
-
-        cos_angle = (direction * mean_dir).sum(dim=-1).clamp(-1.0, 1.0)
-        log_normalization = torch.log(kappa + 1e-8) - math.log(4.0 * math.pi)
-        small_kappa_mask = kappa < 10.0
-        log_sinh = torch.where(
-            small_kappa_mask,
-            torch.log(torch.sinh(kappa) + 1e-8),
-            kappa - math.log(2.0),
-        )
-        log_pdf = log_normalization - log_sinh + kappa * cos_angle
-        return torch.exp(log_pdf.clamp(min=-100.0, max=20.0))
-
-    def sample(self, z: torch.Tensor, wi: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        mean_dir, kappa = self.forward_params(z, wi)
-        wo = self.sample_von_mises_fisher(mean_dir, kappa, samples_per_batch=1)
-        pdf = self.eval_von_mises_fisher_pdf(wo, mean_dir, kappa)
+        # Evaluate the blended PDF at the sampled wo
+        pdf = self.eval_pdf(z, wi, wo, _frames=(t, bv, n, alpha, lobe_weights))
         return wo, pdf
 
-    def eval_pdf(self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor) -> torch.Tensor:
-        mean_dir, kappa = self.forward_params(z, wi)
-        return self.eval_von_mises_fisher_pdf(wo, mean_dir, kappa)
+    def eval_pdf(
+        self,
+        z: torch.Tensor,
+        wi: torch.Tensor,
+        wo: torch.Tensor,
+        _frames: Optional[Tuple] = None,
+    ) -> torch.Tensor:
+        """
+        Evaluate the blended two-lobe GGX PDF p(wo | wi, z).
+        p(wo) = sum_i  weight_i * p_i(wo)
+        where p_i(wo) = p_vndf_i(m_i) / (4 |wo · m_i|)  and  m_i = normalize(wi + wo).
+        """
+        if _frames is None:
+            t, bv, n, alpha, lobe_weights = self.forward_params(z, wi)
+        else:
+            t, bv, n, alpha, lobe_weights = _frames
+
+        B = z.shape[0]
+        pdf_total = torch.zeros(B, device=z.device, dtype=z.dtype)
+
+        for i in range(self.num_frames):
+            t_i  = t[:, i, :]   # [B, 3]
+            bv_i = bv[:, i, :]
+            n_i  = n[:, i, :]
+            ax_i = alpha[:, i, 0]
+            ay_i = alpha[:, i, 1]
+            w_i  = lobe_weights[:, i]  # [B]
+
+            # wi and wo in lobe i's local frame
+            wi_local = torch.stack([
+                (wi * t_i).sum(-1),
+                (wi * bv_i).sum(-1),
+                (wi * n_i).sum(-1),
+            ], dim=-1)
+            wo_local = torch.stack([
+                (wo * t_i).sum(-1),
+                (wo * bv_i).sum(-1),
+                (wo * n_i).sum(-1),
+            ], dim=-1)
+
+            # Flip below-hemisphere wi (same as in sample())
+            wi_local = torch.where(
+                wi_local[..., 2:3] < 0.0,
+                wi_local * torch.tensor([1.0, 1.0, -1.0], device=wi.device, dtype=wi.dtype),
+                wi_local,
+            )
+
+            # Half-vector m = normalize(wi + wo) in local frame
+            m_local = self._safe_normalize(wi_local + wo_local)
+            # Ensure m is on the upper hemisphere
+            m_local = torch.where(
+                m_local[..., 2:3] < 0.0, -m_local, m_local
+            )
+
+            wo_dot_m = (wo_local * m_local).sum(-1).abs().clamp_min(1e-6)
+
+            p_m = self._ggx_vndf_pdf(wi_local, m_local, ax_i, ay_i)  # p(m)
+            p_wo = p_m / (4.0 * wo_dot_m)                            # p(wo)
+
+            p_wo = torch.nan_to_num(p_wo, nan=0.0, posinf=0.0, neginf=0.0)
+            w_i = torch.nan_to_num(w_i, nan=0.0, posinf=1.0, neginf=0.0).clamp_min(0.0)
+
+            pdf_total = pdf_total + w_i * p_wo.clamp_min(0.0)
+
+        return torch.nan_to_num(pdf_total, nan=1e-10, posinf=1e10, neginf=1e-10).clamp_min(1e-10)
 
 
 class MaterialEncoder(nn.Module):
@@ -614,10 +893,21 @@ def importance_sampling_loss(
     """
     Trains sampler by maximizing probability of directions weighted by BRDF magnitude.
     """
-    y_true = y.clamp_min(eps)
-    pdf_sampler = model.importance_sampler.eval_pdf(z, wi, wo).clamp_min(eps)
-    brdf_weights = y_true.sum(dim=-1) / (3.0 + eps)
-    return (-torch.log(pdf_sampler + eps) * brdf_weights).mean()
+    y_true = torch.nan_to_num(y, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
+    pdf_sampler = model.importance_sampler.eval_pdf(z, wi, wo)
+    pdf_sampler = torch.nan_to_num(pdf_sampler, nan=eps, posinf=1e6, neginf=eps).clamp(
+        min=eps, max=1e6
+    )
+
+    brdf_weights = (y_true.sum(dim=-1) / (3.0 + eps)).clamp_min(0.0)
+    loss_terms = -torch.log(pdf_sampler) * brdf_weights
+    finite_mask = torch.isfinite(loss_terms)
+
+    if not finite_mask.any():
+        # Keep graph connected while avoiding a hard failure on a pathological batch.
+        return (pdf_sampler * 0.0).sum()
+
+    return loss_terms[finite_mask].mean()
 
 
 def build_material_features(
@@ -1338,15 +1628,14 @@ def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
 
 
 def save_sampler_metadata(path: Path, weights: dict) -> None:
-    layout = _infer_network_layout(weights, input_dim=14, output_dim=4)
+    # Sampler head outputs 5 values per lobe × 2 lobes = 10 channels.
+    layout = _infer_network_layout(weights, input_dim=14, output_dim=10)
     metadata = {
         "latent_dim": layout["latent_ch"],
         "num_frames": layout["num_frames"],
         "mlp_width": layout["mlp_width"],
         "mlp_depth": layout["mlp_depth"],
         "weight_file_format": "NMDLWT02",
-        "sampler_kappa_min": 0.1,
-        "sampler_kappa_max": 100.0,
         "decoder_layout": layout["decoder_layout"],
     }
     with open(path, "w", encoding="utf-8") as f:
@@ -1403,7 +1692,7 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
             preview_dir / "sampler_weights.bin",
             sampler_weights,
             input_dim=14,
-            output_dim=4,
+            output_dim=10,
             allow_legacy=False,
         )
         save_sampler_metadata(preview_dir / "sampler_metadata.json", sampler_weights)

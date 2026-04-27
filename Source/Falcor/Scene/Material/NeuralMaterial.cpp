@@ -197,7 +197,7 @@ namespace Falcor
 
         if (std::filesystem::exists(samplerWeightsPath))
         {
-            auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 4, false);
+            auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 10, false);
             if (sampler.mlpWidth != brdf.mlpWidth || sampler.mlpDepth != brdf.mlpDepth)
             {
                 FALCOR_THROW(
@@ -223,6 +223,7 @@ namespace Falcor
             mpSamplerB1 = sampler.b1;
             mpSamplerW2 = sampler.w2;
             mpSamplerB2 = sampler.b2;
+            mData.hasSamplerDecoder = 1u;
         }
         else
         {
@@ -241,6 +242,7 @@ namespace Falcor
             mData.samplerB1BufferID = uint32_t(-1);
             mData.samplerW2BufferID = uint32_t(-1);
             mData.samplerB2BufferID = uint32_t(-1);
+            mData.hasSamplerDecoder = 0u;
         }
 
         if (!mpSampler)

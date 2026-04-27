@@ -75,6 +75,7 @@ namespace Falcor
             float expOffset = 3.f;
             uint32_t mlpWidth = 32;
             uint32_t mlpDepth = 2;
+            uint32_t hasSamplerDecoder = 0;
         };
         static_assert(sizeof(Data) <= sizeof(MaterialPayload), "NeuralMaterial payload must fit in MaterialPayload");
 
