@@ -436,6 +436,9 @@ target_sources(Falcor PRIVATE
     Scene/Material/MaterialTypeRegistry.cpp
     Scene/Material/MaterialTypeRegistry.h
     Scene/Material/MaterialTypes.slang
+    Scene/Material/ThreeLayeredGGXMaterial.cpp
+    Scene/Material/ThreeLayeredGGXMaterial.h
+    Scene/Material/ThreeLayeredGGXMaterial.slang
     Scene/Material/MaterialXGraphMaterial.cpp
     Scene/Material/MaterialXGraphMaterial.h
     Scene/Material/MERLFile.cpp

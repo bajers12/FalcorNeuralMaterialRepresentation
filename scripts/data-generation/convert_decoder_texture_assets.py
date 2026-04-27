@@ -14,8 +14,10 @@ except ImportError:
     raise RuntimeError("This script needs PyTorch installed.")
 
 # EXR writing: tries OpenEXR first, then imageio as fallback.
+# Runtime latent textures are quantized to half-float here to reduce
+# shipped asset size without affecting the training/export pipeline.
 def write_exr(path: Path, rgba_hw4: np.ndarray):
-    rgba_hw4 = np.asarray(rgba_hw4, dtype=np.float32)
+    rgba_hw4 = np.asarray(rgba_hw4, dtype=np.float16)
     assert rgba_hw4.ndim == 3 and rgba_hw4.shape[2] == 4, f"Expected HxWx4, got {rgba_hw4.shape}"
 
     h, w, _ = rgba_hw4.shape
@@ -25,7 +27,7 @@ def write_exr(path: Path, rgba_hw4: np.ndarray):
         import Imath
 
         header = OpenEXR.Header(w, h)
-        pt = Imath.PixelType(Imath.PixelType.FLOAT)
+        pt = Imath.PixelType(Imath.PixelType.HALF)
         header["channels"] = {
             "R": Imath.Channel(pt),
             "G": Imath.Channel(pt),
@@ -35,10 +37,10 @@ def write_exr(path: Path, rgba_hw4: np.ndarray):
 
         exr = OpenEXR.OutputFile(str(path), header)
         exr.writePixels({
-            "R": rgba_hw4[:, :, 0].astype(np.float32).tobytes(),
-            "G": rgba_hw4[:, :, 1].astype(np.float32).tobytes(),
-            "B": rgba_hw4[:, :, 2].astype(np.float32).tobytes(),
-            "A": rgba_hw4[:, :, 3].astype(np.float32).tobytes(),
+            "R": rgba_hw4[:, :, 0].astype(np.float16).tobytes(),
+            "G": rgba_hw4[:, :, 1].astype(np.float16).tobytes(),
+            "B": rgba_hw4[:, :, 2].astype(np.float16).tobytes(),
+            "A": rgba_hw4[:, :, 3].astype(np.float16).tobytes(),
         })
         exr.close()
         return

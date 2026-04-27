@@ -22,7 +22,9 @@ struct BsdfSampleData
 RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
 uniform uint gSampleCount;
 uniform uint gMaterialId;
-uniform uint gRandomSeedOffset;
+uniform uint gRunSeed;
+uniform uint gSeedDomain;
+uniform uint gGenerationIndex;
 uniform bool gUseUvGrid;
 uniform uint gUvGridFullWidth;
 uniform uint gUvGridFullHeight;
@@ -45,26 +47,43 @@ float rand(inout uint seed)
     return float(seed) / 4294967296.0;
 }
 
+uint mixSeed(uint a, uint b)
+{
+    return hash(a ^ hash(b + 0x9e3779b9u));
+}
+
+uint makeSampleSeed(uint sampleIdx, uint streamId)
+{
+    uint seed = mixSeed(gRunSeed, gSeedDomain);
+    seed = mixSeed(seed, gGenerationIndex);
+    seed = mixSeed(seed, sampleIdx);
+    seed = mixSeed(seed, streamId);
+    return seed;
+}
+
 [numthreads(1, 1, 1)]
 void main(uint3 threadId : SV_DispatchThreadID)
 {
     uint idx = threadId.x;
 
-    // Sample UV and view direction uniformly
-    uint seed = idx * 9781 + 6271 + gRandomSeedOffset;
+    uint uvSeed = makeSampleSeed(idx, 0u);
+    uint woSeed = makeSampleSeed(idx, 1u);
+    uint wiSeed = makeSampleSeed(idx, 2u);
+    uint sgSeed = makeSampleSeed(idx, 3u);
 
-    float2 uv = float2(rand(seed), rand(seed));
+    float2 uv = float2(rand(uvSeed), rand(uvSeed));
     if (gUseUvGrid)
     {
         uint2 texel = uint2(idx % gUvGridFullWidth, idx / gUvGridFullWidth);
         uv = (float2(texel) + 0.5f) / float2(gUvGridFullWidth, gUvGridFullHeight);
     }
 
-    float3 wo = sample_hemisphere(float2(rand(seed), rand(seed)));
-    float3 wi = sample_hemisphere(float2(rand(seed), rand(seed)));
+    float3 wo = sample_hemisphere(float2(rand(woSeed), rand(woSeed)));
+    float3 wi = sample_hemisphere(float2(rand(wiSeed), rand(wiSeed)));
 
-    // Construct samplers
-    UniformSampleGenerator sg = UniformSampleGenerator(seed, 0);
+    // Keep independent sample streams for UVs, BSDF directions, and any
+    // additional material sampling performed through the Falcor interfaces.
+    UniformSampleGenerator sg = UniformSampleGenerator(sgSeed, 0);
     let lod = ExplicitLodTextureSampler(0.f);
 
     VertexData v = {};
