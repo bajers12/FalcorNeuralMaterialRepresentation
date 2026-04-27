@@ -74,6 +74,10 @@ class TrainConfig:
     use_bias_in_mlp: bool = True
     frame_linear_bias: bool = False
 
+    # Importance sampling decoder architecture
+    sampler_mlp_width: int = 32
+    sampler_mlp_depth: int = 3
+
     # Output parameterization
     exp_offset: float = 3.0
     clamp_min_target: float = 0.0  # safety clamp on y before log
@@ -776,8 +780,8 @@ class NeuralMaterialModel(nn.Module):
         self.importance_sampler = ImportanceSamplingDecoder(
             latent_ch=cfg.latent_ch,
             num_frames=cfg.num_frames,
-            mlp_width=cfg.mlp_width,
-            mlp_depth=cfg.mlp_depth,
+            mlp_width=cfg.sampler_mlp_width,
+            mlp_depth=cfg.sampler_mlp_depth,
             use_bias_in_mlp=cfg.use_bias_in_mlp,
             frame_linear_bias=cfg.frame_linear_bias,
         )
@@ -1731,6 +1735,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--num_frames", type=int, default=2)
     p.add_argument("--mlp_width", type=int, default=64)
     p.add_argument("--mlp_depth", type=int, default=2)
+    p.add_argument("--sampler_mlp_width", type=int, default=32)
+    p.add_argument("--sampler_mlp_depth", type=int, default=3)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
     p.add_argument("--training_n", type=int, default=65536)
@@ -1834,6 +1840,8 @@ def parse_args() -> TrainConfig:
     cfg.num_frames = args.num_frames
     cfg.mlp_width = args.mlp_width
     cfg.mlp_depth = args.mlp_depth
+    cfg.sampler_mlp_width = args.sampler_mlp_width
+    cfg.sampler_mlp_depth = args.sampler_mlp_depth
     cfg.exp_offset = args.exp_offset
 
     cfg.training_n = args.training_n
