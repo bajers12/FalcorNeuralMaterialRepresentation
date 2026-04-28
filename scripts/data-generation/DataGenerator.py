@@ -25,8 +25,29 @@ class DataGenerator():
             self.generation_pass, "clearUvGrid"
         )
 
-    def generate_data(self, run_seed: int, seed_domain: int, generation_index: int):
+    def supports_mollification(self):
+        return hasattr(self.generation_pass, "setMollification")
+
+    def _set_mollification(self, cone_angle_rad: float, sample_count: int):
+        active = cone_angle_rad > 0.0 and sample_count > 1
+        if active and not self.supports_mollification():
+            raise RuntimeError(
+                "The loaded OnlineDataGenerationPass plugin does not expose setMollification. "
+                "Rebuild Falcor so the updated render pass bindings are available, or disable mollification."
+            )
+        if self.supports_mollification():
+            self.generation_pass.setMollification(float(cone_angle_rad), int(sample_count))
+
+    def generate_data(
+        self,
+        run_seed: int,
+        seed_domain: int,
+        generation_index: int,
+        mollification_cone_angle_rad: float = 0.0,
+        mollification_sample_count: int = 1,
+    ):
         # Execute the graph
+        self._set_mollification(mollification_cone_angle_rad, mollification_sample_count)
         self.generation_pass.setSeedState(run_seed, seed_domain, generation_index)
         self.generation_pass.generate()
         self.testbed.frame()
@@ -34,7 +55,16 @@ class DataGenerator():
 
         return np_data
 
-    def generate_grid_data(self, width: int, height: int, run_seed: int, seed_domain: int, generation_index: int = 0):
+    def generate_grid_data(
+        self,
+        width: int,
+        height: int,
+        run_seed: int,
+        seed_domain: int,
+        generation_index: int = 0,
+        mollification_cone_angle_rad: float = 0.0,
+        mollification_sample_count: int = 1,
+    ):
         if not self.supports_uv_grid():
             raise RuntimeError(
                 "The loaded OnlineDataGenerationPass plugin does not expose setUvGrid/clearUvGrid. "
@@ -42,6 +72,7 @@ class DataGenerator():
             )
         self.generation_pass.setUvGrid(width, height)
         try:
+            self._set_mollification(mollification_cone_angle_rad, mollification_sample_count)
             self.generation_pass.setSeedState(run_seed, seed_domain, generation_index)
             self.generation_pass.generate()
             self.testbed.frame()

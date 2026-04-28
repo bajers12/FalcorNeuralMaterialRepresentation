@@ -99,6 +99,12 @@ class TrainConfig:
     freeze_latent_after_epoch: Optional[int] = None
     freeze_decoder_after_epoch: Optional[int] = None
 
+    # Paper-style target mollification for early BRDF decoder training.
+    enable_mollification: bool = False
+    mollification_start_angle_deg: float = 10.0
+    mollification_iterations: int = 20000
+    mollification_sample_count: int = 256
+
     # Legacy flag retained for CLI compatibility. Direction transforms are disabled;
     # sampled normals remain available only as training-side material features.
     use_normals: bool = False
@@ -467,6 +473,21 @@ def get_training_phase(cfg: TrainConfig, epoch: int) -> str:
     if epoch < cfg.encoder_bootstrap_epochs:
         return "bootstrap"
     return "finetune"
+
+
+def get_mollification_cone_angle_rad(cfg: TrainConfig, iteration: int) -> float:
+    if (
+        not cfg.enable_mollification
+        or cfg.mollification_sample_count <= 1
+        or cfg.mollification_start_angle_deg <= 0.0
+        or cfg.mollification_iterations <= 0
+        or iteration >= cfg.mollification_iterations
+    ):
+        return 0.0
+
+    t = max(0.0, min(float(iteration) / float(cfg.mollification_iterations), 1.0))
+    angle_deg = 0.5 * cfg.mollification_start_angle_deg * (1.0 + math.cos(math.pi * t))
+    return math.radians(angle_deg)
 
 
 @torch.no_grad()
@@ -935,6 +956,15 @@ def parse_args() -> TrainConfig:
     p.add_argument("--freeze_decoder_after_epoch", type=int, default=None)
 
     p.add_argument(
+        "--enable_mollification",
+        action="store_true",
+        help="Blur early BRDF targets by averaging outgoing directions in a shrinking cone around wo.",
+    )
+    p.add_argument("--mollification_start_angle_deg", type=float, default=10.0)
+    p.add_argument("--mollification_iterations", type=int, default=20000)
+    p.add_argument("--mollification_sample_count", type=int, default=256)
+
+    p.add_argument(
         "--use_normals",
         action="store_true",
         help="Legacy no-op kept for CLI compatibility. Sampled guide normals stay on the training/material side only.",
@@ -1026,6 +1056,10 @@ def parse_args() -> TrainConfig:
 
     cfg.freeze_latent_after_epoch = args.freeze_latent_after_epoch
     cfg.freeze_decoder_after_epoch = args.freeze_decoder_after_epoch
+    cfg.enable_mollification = args.enable_mollification
+    cfg.mollification_start_angle_deg = max(0.0, args.mollification_start_angle_deg)
+    cfg.mollification_iterations = max(0, args.mollification_iterations)
+    cfg.mollification_sample_count = max(1, args.mollification_sample_count)
 
     cfg.use_normals = args.use_normals
     cfg.encoder_width = args.encoder_width
@@ -1147,8 +1181,20 @@ def main():
 
             maybe_freeze_parts(model, cfg, epoch=epoch)
 
+            mollification_cone_angle_rad = get_mollification_cone_angle_rad(cfg, epoch)
+            if epoch == 0 and cfg.enable_mollification:
+                print(
+                    "[train] mollification enabled: "
+                    f"start_angle={cfg.mollification_start_angle_deg:.3f} deg, "
+                    f"iterations={cfg.mollification_iterations}, "
+                    f"samples={cfg.mollification_sample_count}"
+                )
             data_batch = data_generator.generate_data(
-                cfg.seed, SEED_DOMAIN_TRAIN, epoch
+                cfg.seed,
+                SEED_DOMAIN_TRAIN,
+                epoch,
+                mollification_cone_angle_rad,
+                cfg.mollification_sample_count,
             )
             training_batch = data_batch
             training_tensor = tensorize_batch(data_to_dict(training_batch))

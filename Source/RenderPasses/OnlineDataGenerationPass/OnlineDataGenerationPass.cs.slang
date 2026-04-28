@@ -28,6 +28,8 @@ uniform uint gGenerationIndex;
 uniform bool gUseUvGrid;
 uniform uint gUvGridFullWidth;
 uniform uint gUvGridFullHeight;
+uniform float gMollificationConeAngleRad;
+uniform uint gMollificationSampleCount;
 
 uint hash(uint x)
 {
@@ -61,6 +63,25 @@ uint makeSampleSeed(uint sampleIdx, uint streamId)
     return seed;
 }
 
+void makeBasis(float3 n, out float3 tangent, out float3 bitangent)
+{
+    float3 up = abs(n.z) < 0.999f ? float3(0.f, 0.f, 1.f) : float3(1.f, 0.f, 0.f);
+    tangent = normalize(cross(up, n));
+    bitangent = cross(n, tangent);
+}
+
+float3 sampleConeAround(float3 center, float2 u, float cosTheta)
+{
+    center = normalize(center);
+    float3 coneDir = sample_cone(u, cosTheta);
+
+    float3 tangent;
+    float3 bitangent;
+    makeBasis(center, tangent, bitangent);
+
+    return coneDir.x * tangent + coneDir.y * bitangent + coneDir.z * center;
+}
+
 [numthreads(1, 1, 1)]
 void main(uint3 threadId : SV_DispatchThreadID)
 {
@@ -70,6 +91,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     uint woSeed = makeSampleSeed(idx, 1u);
     uint wiSeed = makeSampleSeed(idx, 2u);
     uint sgSeed = makeSampleSeed(idx, 3u);
+    uint mollificationSeed = makeSampleSeed(idx, 4u);
 
     float2 uv = float2(rand(uvSeed), rand(uvSeed));
     if (gUseUvGrid)
@@ -100,7 +122,28 @@ void main(uint3 threadId : SV_DispatchThreadID)
     BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
-    float3 f = mi.eval(sd, wo, sg);
+    float3 f = float3(0.f);
+    if (gMollificationConeAngleRad > 0.f && gMollificationSampleCount > 1u)
+    {
+        float cosTheta = cos(min(gMollificationConeAngleRad, M_PI));
+        uint validSampleCount = 0u;
+
+        for (uint i = 0u; i < gMollificationSampleCount; ++i)
+        {
+            float3 mollifiedWo = sampleConeAround(wo, float2(rand(mollificationSeed), rand(mollificationSeed)), cosTheta);
+            if (mollifiedWo.z > 0.f)
+            {
+                f += mi.eval(sd, mollifiedWo, sg);
+                validSampleCount++;
+            }
+        }
+
+        f = validSampleCount > 0u ? f / float(validSampleCount) : mi.eval(sd, wo, sg);
+    }
+    else
+    {
+        f = mi.eval(sd, wo, sg);
+    }
     float pdf = 0.0f;
 
     // Save results
