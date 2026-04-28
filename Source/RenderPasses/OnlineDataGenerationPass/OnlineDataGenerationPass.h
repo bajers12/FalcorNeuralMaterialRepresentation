@@ -80,7 +80,6 @@ public:
 
 private:
     void OnlineDataGenerationPass::parseProperties(const Properties& props);
-    void OnlineDataGenerationPass::setupProgram();
 
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;

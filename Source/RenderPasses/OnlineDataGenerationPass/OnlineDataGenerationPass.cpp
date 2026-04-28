@@ -30,8 +30,6 @@
 
 const char kShaderFile[] = "RenderPasses/OnlineDataGenerationPass/OnlineDataGenerationPass.cs.slang";
 
-const uint32_t kThreadGroupSize = 64;
-
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
     registry.registerClass<RenderPass, OnlineDataGenerationPass>();
@@ -85,9 +83,6 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
         ResourceBindFlags::None,
         MemoryType::ReadBack
     );
-
-    //Initialize structured buffer for writing sample data from GPU to CPU
-
 }
 
 void OnlineDataGenerationPass::parseProperties(const Properties& props)
@@ -168,8 +163,6 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gMollificationConeAngleRad"] = mMollificationConeAngleRad;
     var["gMollificationSampleCount"] = mMollificationSampleCount;
 
-    //Threadsgroups and execute, threadgroups should probably be improved
-    uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
     mpPass->execute(pRenderContext, mSampleCount, 1, 1);
     pRenderContext->uavBarrier(mpGpuSampleBuffer.get());
 
@@ -250,10 +243,6 @@ void OnlineDataGenerationPass::setMollification(float coneAngleRadians, uint32_t
 {
     mMollificationConeAngleRad = std::max(0.f, coneAngleRadians);
     mMollificationSampleCount = std::max(1u, sampleCount);
-}
-
-void OnlineDataGenerationPass::setupProgram() {
-
 }
 
 void OnlineDataGenerationPass::generate() {

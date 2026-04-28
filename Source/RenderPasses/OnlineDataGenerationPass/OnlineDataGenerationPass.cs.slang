@@ -82,10 +82,11 @@ float3 sampleConeAround(float3 center, float2 u, float cosTheta)
     return coneDir.x * tangent + coneDir.y * bitangent + coneDir.z * center;
 }
 
-[numthreads(1, 1, 1)]
+[numthreads(64, 1, 1)]
 void main(uint3 threadId : SV_DispatchThreadID)
 {
     uint idx = threadId.x;
+    if (idx >= gSampleCount) return;
 
     uint uvSeed = makeSampleSeed(idx, 0u);
     uint woSeed = makeSampleSeed(idx, 1u);
