@@ -71,11 +71,8 @@ namespace Falcor
             uint32_t samplerW2BufferID = uint32_t(-1);
             uint32_t samplerB2BufferID = uint32_t(-1);
 
-            uint32_t applyExp = 1;
-            float expOffset = 3.f;
             uint32_t mlpWidth = 32;
             uint32_t mlpDepth = 2;
-            uint32_t hasSamplerDecoder = 0;
         };
         static_assert(sizeof(Data) <= sizeof(MaterialPayload), "NeuralMaterial payload must fit in MaterialPayload");
 

@@ -6,6 +6,7 @@ import Utils.Math.ShadingFrame;
 
 static const float kPi = 3.14159265358979323846f;
 static const float kInvPi = 0.31830988618379067154f;
+static const float expOffset = 3.0f;
 
 struct NeuralMaterialData
 {
@@ -30,12 +31,9 @@ struct NeuralMaterialData
     uint samplerW2BufferID = 0;
     uint samplerB2BufferID = 0;
 
-    uint applyExp = 1;
-    float expOffset = 3.f;
     uint mlpWidth = 32;
     uint mlpDepth = 2;
 
-    uint hasSamplerDecoder = 0;
 };
 
 float neuralBufferLoad(ByteAddressBuffer buf, uint index)
@@ -422,7 +420,7 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
     else
         return 0.f.xxx;
 
-    float3 outValue = md.applyExp != 0 ? exp(y - md.expOffset) : y;
+    float3 outValue = exp(y - expOffset);
     if (any(isnan(outValue)) || any(isinf(outValue))) return 0.f.xxx;
     return max(outValue, 0.f.xxx);
 }
@@ -542,7 +540,6 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     p.weight1 = 0.5f;
     p.valid = 0;
 
-    if (md.hasSamplerDecoder == 0) return p;
     if (wiLocal.z <= 0.f) return p;
 
     ByteAddressBuffer frameLinear = materials.getBuffer(md.samplerFrameLinearBufferID);
@@ -637,7 +634,6 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
 float evalNeuralPdf(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], const float3 wiLocal, const float3 woLocal)
 {
     if (woLocal.z <= 0.f) return 0.f;
-    if (md.hasSamplerDecoder == 0) return evalCosinePdf(woLocal);
 
     NeuralSamplerParams p = evalNeuralSamplerParams(materials, md, z, wiLocal);
     if (p.valid == 0) return evalCosinePdf(woLocal);
@@ -667,7 +663,7 @@ float evalNeuralPdf(const MaterialSystem materials, const NeuralMaterialData md,
 float evalNeuralPdfFromParams(const NeuralMaterialData md, const NeuralSamplerParams p, const float3 wiLocal, const float3 woLocal)
 {
     if (woLocal.z <= 0.f) return 0.f;
-    if (md.hasSamplerDecoder == 0 || p.valid == 0) return evalCosinePdf(woLocal);
+    if (p.valid == 0) return evalCosinePdf(woLocal);
 
     float3 wi0 = toLobeLocal(wiLocal, p.T0, p.B0, p.N0);
     float3 wo0 = toLobeLocal(woLocal, p.T0, p.B0, p.N0);
@@ -693,7 +689,6 @@ float evalNeuralPdfFromParams(const NeuralMaterialData md, const NeuralSamplerPa
 
 float3 sampleNeuralDirection(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], const float3 wiLocal, float2 u)
 {
-    if (md.hasSamplerDecoder == 0) return sampleCosineHemisphere(u);
 
     NeuralSamplerParams p = evalNeuralSamplerParams(materials, md, z, wiLocal);
     if (p.valid == 0) return sampleCosineHemisphere(u);
@@ -726,7 +721,7 @@ float3 sampleNeuralDirection(const MaterialSystem materials, const NeuralMateria
 
 float3 sampleNeuralDirectionFromParams(const NeuralMaterialData md, const NeuralSamplerParams p, const float3 wiLocal, float2 u)
 {
-    if (md.hasSamplerDecoder == 0 || p.valid == 0) return sampleCosineHemisphere(u);
+    if (p.valid == 0) return sampleCosineHemisphere(u);
 
     bool choose0 = u.x < p.weight0;
     float selectDenom = choose0 ? max(p.weight0, 1e-6f) : max(p.weight1, 1e-6f);

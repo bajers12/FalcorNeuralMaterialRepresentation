@@ -190,8 +190,6 @@ namespace Falcor
         mpW3 = brdf.w3;
         mpB3 = brdf.b3;
 
-        mData.applyExp = brdf.applyExp != 0 ? 1u : 0u;
-        mData.expOffset = brdf.expOffset;
         mData.mlpWidth = static_cast<uint32_t>(brdf.mlpWidth);
         mData.mlpDepth = static_cast<uint32_t>(brdf.mlpDepth);
 
@@ -223,26 +221,6 @@ namespace Falcor
             mpSamplerB1 = sampler.b1;
             mpSamplerW2 = sampler.w2;
             mpSamplerB2 = sampler.b2;
-            mData.hasSamplerDecoder = 1u;
-        }
-        else
-        {
-            mpSamplerFrameLinear = nullptr;
-            mpSamplerW0 = nullptr;
-            mpSamplerB0 = nullptr;
-            mpSamplerW1 = nullptr;
-            mpSamplerB1 = nullptr;
-            mpSamplerW2 = nullptr;
-            mpSamplerB2 = nullptr;
-
-            mData.samplerFrameLinearBufferID = uint32_t(-1);
-            mData.samplerW0BufferID = uint32_t(-1);
-            mData.samplerB0BufferID = uint32_t(-1);
-            mData.samplerW1BufferID = uint32_t(-1);
-            mData.samplerB1BufferID = uint32_t(-1);
-            mData.samplerW2BufferID = uint32_t(-1);
-            mData.samplerB2BufferID = uint32_t(-1);
-            mData.hasSamplerDecoder = 0u;
         }
 
         if (!mpSampler)
