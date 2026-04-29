@@ -76,7 +76,7 @@ class TrainConfig:
 
     # Importance sampling decoder architecture
     sampler_mlp_width: int = 32
-    sampler_mlp_depth: int = 3
+    sampler_mlp_depth: int = 2
 
     # Output parameterization
     exp_offset: float = 3.0
@@ -1733,10 +1733,10 @@ def parse_args() -> TrainConfig:
     p.add_argument("--latent_ch", type=int, default=8)
 
     p.add_argument("--num_frames", type=int, default=2)
-    p.add_argument("--mlp_width", type=int, default=64)
+    p.add_argument("--mlp_width", type=int, default=32)
     p.add_argument("--mlp_depth", type=int, default=2)
     p.add_argument("--sampler_mlp_width", type=int, default=32)
-    p.add_argument("--sampler_mlp_depth", type=int, default=3)
+    p.add_argument("--sampler_mlp_depth", type=int, default=2)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
     p.add_argument("--training_n", type=int, default=65536)
