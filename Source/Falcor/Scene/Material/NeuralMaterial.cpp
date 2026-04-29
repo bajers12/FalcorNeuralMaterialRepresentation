@@ -8,7 +8,6 @@ namespace Falcor
 {
     namespace
     {
-        constexpr const char kWeightMagic01[8] = { 'N','M','D','L','W','T','0','1' };
         constexpr const char kWeightMagic02[8] = { 'N','M','D','L','W','T','0','2' };
         const std::string kShaderFile = "Scene/Material/NeuralMaterial.slang";
     }
@@ -80,7 +79,7 @@ namespace Falcor
             );
         };
 
-        auto loadDecoderWeights = [&](const std::filesystem::path& path, uint32_t expectedInputDim, uint32_t expectedOutputDim, bool allowLegacy)
+        auto loadDecoderWeights = [&](const std::filesystem::path& path, uint32_t expectedInputDim, uint32_t expectedOutputDim)
         {
             std::ifstream f(path, std::ios::binary);
             if (!f) FALCOR_THROW("Failed to open weight file: {}", path.string());
@@ -90,29 +89,18 @@ namespace Falcor
             if (!f)
                 FALCOR_THROW("Invalid weight file magic in: {}", path.string());
 
-            const bool isLegacyLayout = std::memcmp(magic, kWeightMagic01, 8) == 0;
-            const bool isFamilyLayout = std::memcmp(magic, kWeightMagic02, 8) == 0;
-            if (!isLegacyLayout && !isFamilyLayout)
+            if (std::memcmp(magic, kWeightMagic02, 8) != 0)
                 FALCOR_THROW("Invalid weight file magic in: {}", path.string());
-            if (isLegacyLayout && !allowLegacy)
-                FALCOR_THROW("Legacy NMDLWT01 is not supported for {}", path.string());
 
-            int32_t latentCh = 0;
-            int32_t numFrames = 0;
-            int32_t applyExp = 0;
-            float expOffset = 0.f;
+            int32_t latentCh = 8;
+            int32_t numFrames = 2;
             int32_t mlpWidth = 32;
             int32_t mlpDepth = 2;
 
             f.read(reinterpret_cast<char*>(&latentCh), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&numFrames), sizeof(int32_t));
-            f.read(reinterpret_cast<char*>(&applyExp), sizeof(int32_t));
-            f.read(reinterpret_cast<char*>(&expOffset), sizeof(float));
-            if (isFamilyLayout)
-            {
-                f.read(reinterpret_cast<char*>(&mlpWidth), sizeof(int32_t));
-                f.read(reinterpret_cast<char*>(&mlpDepth), sizeof(int32_t));
-            }
+            f.read(reinterpret_cast<char*>(&mlpWidth), sizeof(int32_t));
+            f.read(reinterpret_cast<char*>(&mlpDepth), sizeof(int32_t));
             if (!f) FALCOR_THROW("Failed reading weight file header: {}", path.string());
 
             if (latentCh != 8) FALCOR_THROW("Expected latentCh == 8, got {} in {}", latentCh, path.string());
@@ -147,8 +135,6 @@ namespace Falcor
 
             struct LoadedDecoder
             {
-                int32_t applyExp = 0;
-                float expOffset = 0.f;
                 int32_t mlpWidth = 0;
                 int32_t mlpDepth = 0;
                 ref<Buffer> frameLinear;
@@ -163,8 +149,6 @@ namespace Falcor
             };
 
             LoadedDecoder loaded;
-            loaded.applyExp = applyExp;
-            loaded.expOffset = expOffset;
             loaded.mlpWidth = mlpWidth;
             loaded.mlpDepth = mlpDepth;
             loaded.frameLinear = makeStructured(frameLinear);
@@ -179,7 +163,7 @@ namespace Falcor
             return loaded;
         };
 
-        auto brdf = loadDecoderWeights(weightsPath, 20, 3, true);
+        auto brdf = loadDecoderWeights(weightsPath, 20, 3);
         mpFrameLinear = brdf.frameLinear;
         mpW0 = brdf.w0;
         mpB0 = brdf.b0;
@@ -195,7 +179,7 @@ namespace Falcor
 
         if (std::filesystem::exists(samplerWeightsPath))
         {
-            auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 10, false);
+            auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 10);
             if (sampler.mlpWidth != brdf.mlpWidth || sampler.mlpDepth != brdf.mlpDepth)
             {
                 FALCOR_THROW(

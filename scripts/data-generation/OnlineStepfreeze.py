@@ -1412,7 +1412,6 @@ def export_decoder_weights(model: NeuralMaterialModel, cfg: TrainConfig) -> None
     out = {
         "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
         "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-        "exp_offset": np.array([cfg.exp_offset], dtype=np.float32),
     }
 
     out["frame_linear.weight"] = sd["frame_linear.weight"].detach().cpu().numpy()
@@ -1466,7 +1465,6 @@ def save_weights_bin(path: Path, weights: dict) -> None:
         weights=weights,
         input_dim=20,
         output_dim=3,
-        allow_legacy=True,
     )
 
 
@@ -1477,7 +1475,6 @@ def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> 
 
     latent_ch = int(np.asarray(weights.get("latent_ch", np.array([8], dtype=np.int32))).reshape(-1)[0])
     num_frames = int(np.asarray(weights.get("num_frames", np.array([2], dtype=np.int32))).reshape(-1)[0])
-    exp_offset = float(np.asarray(weights.get("exp_offset", np.array([0.0], dtype=np.float32))).reshape(-1)[0])
 
     layer_indices = sorted(
         int(k.split(".")[1]) for k in weights.keys() if k.startswith("mlp.") and k.endswith(".weight")
@@ -1521,7 +1518,6 @@ def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> 
     return {
         "latent_ch": latent_ch,
         "num_frames": num_frames,
-        "exp_offset": exp_offset,
         "mlp_width": mlp_width,
         "mlp_depth": mlp_depth,
         "linear_layers": linear_layers,
@@ -1535,52 +1531,16 @@ def save_network_weights_bin(
     *,
     input_dim: int,
     output_dim: int,
-    allow_legacy: bool,
 ) -> dict:
     layout = _infer_network_layout(weights, input_dim=input_dim, output_dim=output_dim)
     latent_ch = layout["latent_ch"]
     num_frames = layout["num_frames"]
-    exp_offset = layout["exp_offset"]
     mlp_width = layout["mlp_width"]
     mlp_depth = layout["mlp_depth"]
 
-    is_legacy = (
-        allow_legacy
-        and input_dim == 20
-        and output_dim == 3
-        and layout["decoder_layout"]
-        == {
-            "frame_linear.weight": [12, 8],
-            "mlp.0.weight": [32, 20],
-            "mlp.0.bias": [32],
-            "mlp.2.weight": [32, 32],
-            "mlp.2.bias": [32],
-            "mlp.4.weight": [3, 32],
-            "mlp.4.bias": [3],
-        }
-    )
-
     with open(path, "wb") as f:
-        if is_legacy:
-            f.write(b"NMDLWT01")
-            f.write(struct.pack("<iiif", latent_ch, num_frames, 1, exp_offset))
-            ordered = [
-                "frame_linear.weight",
-                "mlp.0.weight",
-                "mlp.0.bias",
-                "mlp.2.weight",
-                "mlp.2.bias",
-                "mlp.4.weight",
-                "mlp.4.bias",
-            ]
-            for name in ordered:
-                arr = np.asarray(weights[name], dtype=np.float32)
-                f.write(arr.ravel(order="C").tobytes())
-            layout["weight_file_format"] = "NMDLWT01"
-            return layout
-
         f.write(b"NMDLWT02")
-        f.write(struct.pack("<iiifii", latent_ch, num_frames, 1, exp_offset, mlp_width, mlp_depth))
+        f.write(struct.pack("<iiii", latent_ch, num_frames, mlp_width, mlp_depth))
 
         for layer_name in layout["linear_layers"]:
             weight_name = f"{layer_name}.weight"
@@ -1603,22 +1563,10 @@ def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
         "height": int(h),
         "latent_dim": int(latent.shape[0]),
         "num_frames": layout["num_frames"],
-        "exp_offset": layout["exp_offset"],
         "apply_exp": True,
         "mlp_width": layout["mlp_width"],
         "mlp_depth": layout["mlp_depth"],
-        "weight_file_format": "NMDLWT01"
-        if layout["decoder_layout"]
-        == {
-            "frame_linear.weight": [12, 8],
-            "mlp.0.weight": [32, 20],
-            "mlp.0.bias": [32],
-            "mlp.2.weight": [32, 32],
-            "mlp.2.bias": [32],
-            "mlp.4.weight": [3, 32],
-            "mlp.4.bias": [3],
-        }
-        else "NMDLWT02",
+        "weight_file_format": "NMDLWT02",
         "decoder_layout": layout["decoder_layout"],
     }
     with open(path, "w", encoding="utf-8") as f:
@@ -1664,7 +1612,6 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
     weights = {
         "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
         "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-        "exp_offset": np.array([cfg.exp_offset], dtype=np.float32),
         "frame_linear.weight": sd["frame_linear.weight"].detach().cpu().numpy(),
     }
     for key, value in sd.items():
@@ -1679,7 +1626,6 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
         sampler_weights = {
             "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
             "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-            "exp_offset": np.array([0.0], dtype=np.float32),
             "frame_linear.weight": sampler_sd["frame_linear.weight"].detach().cpu().numpy(),
         }
         for key, value in sampler_sd.items():
@@ -1691,7 +1637,6 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
             sampler_weights,
             input_dim=14,
             output_dim=10,
-            allow_legacy=False,
         )
         save_sampler_metadata(preview_dir / "sampler_metadata.json", sampler_weights)
 
