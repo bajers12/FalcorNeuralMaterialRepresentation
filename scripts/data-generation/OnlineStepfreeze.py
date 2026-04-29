@@ -1249,7 +1249,6 @@ def train_one_epoch(
     opt.step()
 
     sampler_loss = None
-    total_loss_value = bsdf_loss.detach()
 
     if cfg.train_importance_sampler:
         sampler_batch = batch_decoder if batch_sampler is None else batch_sampler
@@ -1282,7 +1281,6 @@ def train_one_epoch(
             )
 
         opt.step()
-        total_loss_value = total_loss_value + sampler_loss.detach()
 
     with torch.no_grad():
         stats = compute_basic_stats(y_hat_dec, y_dec)
@@ -1299,8 +1297,6 @@ def train_one_epoch(
     }
     if sampler_loss is not None:
         out["sampler_loss"] = sampler_loss.item()
-    if torch.is_tensor(total_loss_value):
-        out["total_loss"] = total_loss_value.item()
 
     return (out, opt, scheduler)
 
@@ -1330,15 +1326,13 @@ def validate(
         z = model.latent.sample(uv)
 
     y_hat, raw = model.decode_with_raw(z, wi, wo)
-    bsdf_loss = log_l1_loss(y_hat, y, cfg.log_eps)
-    loss = bsdf_loss
+    loss = log_l1_loss(y_hat, y, cfg.log_eps)
     stats = compute_basic_stats(y_hat, y)
     raw_stats = compute_raw_stats(raw)
 
     out = {
         "phase": phase,
         "val_loss": loss.item(),
-        "val_bsdf_loss": bsdf_loss.item(),
         "val_mae": stats["mae"],
         "val_yhat_mean": stats["yhat_mean"],
         "val_y_mean": stats["y_mean"],
