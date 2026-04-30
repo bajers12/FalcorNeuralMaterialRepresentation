@@ -410,43 +410,43 @@ class ImportanceSamplingDecoder(nn.Module):
         return t, bv, n  # each [B, num_frames, 3]
 
     @staticmethod
-    def _ggx_ndf(cos_theta_h: torch.Tensor,
-                 cos_phi_h: torch.Tensor,
-                 sin_phi_h: torch.Tensor,
+    def _ggx_ndf(m_local: torch.Tensor,
                  alpha_x: torch.Tensor,
                  alpha_y: torch.Tensor) -> torch.Tensor:
         """
         Anisotropic GGX (Trowbridge-Reitz) NDF evaluated at a half-vector h.
-        All inputs are [B].
         D(h) = 1 / (π α_x α_y  ((hx/αx)² + (hy/αy)² + hz²)²)
-        where hx = sin_theta_h * cos_phi_h, hy = sin_theta_h * sin_phi_h, hz = cos_theta_h.
+        The half-vector is already available in the lobe-local frame, so use
+        its components directly instead of reconstructing hx/hy through
+        sqrt(1 - cos(theta)^2). The direct form is equivalent and has a much
+        better behaved gradient at normal incidence.
         """
-        sin_theta_h = (1.0 - cos_theta_h.clamp(-1, 1) ** 2).clamp_min(0.0).sqrt()
-        hx = sin_theta_h * cos_phi_h
-        hy = sin_theta_h * sin_phi_h
-        hz = cos_theta_h.clamp_min(0.0)
+        ax = alpha_x.clamp_min(1e-6)
+        ay = alpha_y.clamp_min(1e-6)
+        hx = m_local[..., 0]
+        hy = m_local[..., 1]
+        hz = m_local[..., 2].clamp_min(0.0)
 
-        denom_sq = ((hx / alpha_x.clamp_min(1e-6)) ** 2
-                    + (hy / alpha_y.clamp_min(1e-6)) ** 2
-                    + hz ** 2) ** 2
-        return 1.0 / (math.pi * alpha_x * alpha_y * denom_sq.clamp_min(1e-10))
+        denom_sq = ((hx / ax) ** 2 + (hy / ay) ** 2 + hz ** 2) ** 2
+        return 1.0 / (math.pi * ax * ay * denom_sq.clamp_min(1e-10))
 
     @staticmethod
-    def _ggx_smith_g1(cos_theta: torch.Tensor,
-                      cos_phi: torch.Tensor,
-                      sin_phi: torch.Tensor,
+    def _ggx_smith_g1(v_local: torch.Tensor,
                       alpha_x: torch.Tensor,
                       alpha_y: torch.Tensor) -> torch.Tensor:
         """
         Anisotropic GGX Smith G1 masking term.
-        cos_theta, cos_phi, sin_phi are the direction's spherical coords in the lobe frame.
+        Uses the local direction components directly:
+        G1(v) = 2 / (1 + sqrt(1 + ((alpha_x vx)^2 + (alpha_y vy)^2) / vz^2)).
         """
-        sin_theta = (1.0 - cos_theta.clamp(-1, 1) ** 2).clamp_min(0.0).sqrt()
-        # Effective alpha along the azimuth
-        alpha_eff = ((cos_phi * alpha_x) ** 2 + (sin_phi * alpha_y) ** 2).clamp_min(1e-12).sqrt()
-        tan_theta = sin_theta / cos_theta.clamp_min(1e-6)
-        denom = 1.0 + (alpha_eff * tan_theta).clamp_min(0.0)
-        return 2.0 / (1.0 + denom)
+        ax = alpha_x.clamp_min(1e-6)
+        ay = alpha_y.clamp_min(1e-6)
+        vx = v_local[..., 0]
+        vy = v_local[..., 1]
+        vz = v_local[..., 2].clamp_min(1e-6)
+
+        tan2_alpha2 = ((ax * vx) ** 2 + (ay * vy) ** 2) / (vz ** 2)
+        return 2.0 / (1.0 + (1.0 + tan2_alpha2.clamp_min(0.0)).sqrt())
 
     # ------------------------------------------------------------------
     # Two-lobe GGX sampling (Heitz 2018 visible-normal sampling per lobe)
@@ -542,22 +542,8 @@ class ImportanceSamplingDecoder(nn.Module):
         """
         cos_theta_i = wi_local[..., 2].clamp_min(1e-6)
 
-        # phi of wi
-        sin_theta_i = (1.0 - cos_theta_i.clamp(-1, 1) ** 2).clamp_min(0.0).sqrt()
-        cos_phi_i = (wi_local[..., 0] / sin_theta_i.clamp_min(1e-6)).clamp(-1.0, 1.0)
-        sin_phi_i = (wi_local[..., 1] / sin_theta_i.clamp_min(1e-6)).clamp(-1.0, 1.0)
-
-        # phi of m
-        sin_theta_m = (1.0 - m_local[..., 2].clamp(-1, 1) ** 2).clamp_min(0.0).sqrt()
-        cos_phi_m = (m_local[..., 0] / sin_theta_m.clamp_min(1e-6)).clamp(-1.0, 1.0)
-        sin_phi_m = (m_local[..., 1] / sin_theta_m.clamp_min(1e-6)).clamp(-1.0, 1.0)
-
-        D = ImportanceSamplingDecoder._ggx_ndf(
-            m_local[..., 2], cos_phi_m, sin_phi_m, alpha_x, alpha_y
-        )
-        G1 = ImportanceSamplingDecoder._ggx_smith_g1(
-            cos_theta_i, cos_phi_i, sin_phi_i, alpha_x, alpha_y
-        )
+        D = ImportanceSamplingDecoder._ggx_ndf(m_local, alpha_x, alpha_y)
+        G1 = ImportanceSamplingDecoder._ggx_smith_g1(wi_local, alpha_x, alpha_y)
         wi_dot_m = (wi_local * m_local).sum(dim=-1).clamp_min(1e-6)
         return G1 * D * wi_dot_m / cos_theta_i.clamp_min(1e-6)
 
