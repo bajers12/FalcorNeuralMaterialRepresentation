@@ -33,7 +33,6 @@ struct NeuralMaterialData
 
     uint mlpWidth = 32;
     uint mlpDepth = 2;
-
 };
 
 float neuralBufferLoad(ByteAddressBuffer buf, uint index)
@@ -51,7 +50,15 @@ float3 neuralSafeNormalize(float3 v)
     return v * rsqrt(max(dot(v, v), 1e-16f));
 }
 
-float3 evalMLP16x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, const float x[20])
+float3 evalMLP16x2(
+    ByteAddressBuffer W0,
+    ByteAddressBuffer B0,
+    ByteAddressBuffer W1,
+    ByteAddressBuffer B1,
+    ByteAddressBuffer W2,
+    ByteAddressBuffer B2,
+    const float x[20]
+)
 {
     float4 x4[5];
     [unroll]
@@ -99,14 +106,25 @@ float3 evalMLP16x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer
             float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
             s += dot(neuralBufferLoad4(W2, r * 16 + base), h);
         }
-        if (r == 0) y.x = s;
-        else if (r == 1) y.y = s;
-        else y.z = s;
+        if (r == 0)
+            y.x = s;
+        else if (r == 1)
+            y.y = s;
+        else
+            y.z = s;
     }
     return y;
 }
 
-float3 evalMLP32x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, const float x[20])
+float3 evalMLP32x2(
+    ByteAddressBuffer W0,
+    ByteAddressBuffer B0,
+    ByteAddressBuffer W1,
+    ByteAddressBuffer B1,
+    ByteAddressBuffer W2,
+    ByteAddressBuffer B2,
+    const float x[20]
+)
 {
     float4 x4[5];
     [unroll]
@@ -154,14 +172,25 @@ float3 evalMLP32x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer
             float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
             s += dot(neuralBufferLoad4(W2, r * 32 + base), h);
         }
-        if (r == 0) y.x = s;
-        else if (r == 1) y.y = s;
-        else y.z = s;
+        if (r == 0)
+            y.x = s;
+        else if (r == 1)
+            y.y = s;
+        else
+            y.z = s;
     }
     return y;
 }
 
-float3 evalMLP64x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, const float x[20])
+float3 evalMLP64x2(
+    ByteAddressBuffer W0,
+    ByteAddressBuffer B0,
+    ByteAddressBuffer W1,
+    ByteAddressBuffer B1,
+    ByteAddressBuffer W2,
+    ByteAddressBuffer B2,
+    const float x[20]
+)
 {
     float4 x4[5];
     [unroll]
@@ -209,14 +238,27 @@ float3 evalMLP64x2(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer
             float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
             s += dot(neuralBufferLoad4(W2, r * 64 + base), h);
         }
-        if (r == 0) y.x = s;
-        else if (r == 1) y.y = s;
-        else y.z = s;
+        if (r == 0)
+            y.x = s;
+        else if (r == 1)
+            y.y = s;
+        else
+            y.z = s;
     }
     return y;
 }
 
-float3 evalMLP64x3(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, ByteAddressBuffer W3, ByteAddressBuffer B3, const float x[20])
+float3 evalMLP64x3(
+    ByteAddressBuffer W0,
+    ByteAddressBuffer B0,
+    ByteAddressBuffer W1,
+    ByteAddressBuffer B1,
+    ByteAddressBuffer W2,
+    ByteAddressBuffer B2,
+    ByteAddressBuffer W3,
+    ByteAddressBuffer B3,
+    const float x[20]
+)
 {
     float4 x4[5];
     [unroll]
@@ -279,18 +321,33 @@ float3 evalMLP64x3(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer
             float4 h = float4(h2[base + 0], h2[base + 1], h2[base + 2], h2[base + 3]);
             s += dot(neuralBufferLoad4(W3, r * 64 + base), h);
         }
-        if (r == 0) y.x = s;
-        else if (r == 1) y.y = s;
-        else y.z = s;
+        if (r == 0)
+            y.x = s;
+        else if (r == 1)
+            y.y = s;
+        else
+            y.z = s;
     }
     return y;
 }
 
-void evalSamplerMLP(ByteAddressBuffer W0, ByteAddressBuffer B0, ByteAddressBuffer W1, ByteAddressBuffer B1, ByteAddressBuffer W2, ByteAddressBuffer B2, uint width, const float x[14], out float y[10])
+void evalSamplerMLP(
+    ByteAddressBuffer W0,
+    ByteAddressBuffer B0,
+    ByteAddressBuffer W1,
+    ByteAddressBuffer B1,
+    ByteAddressBuffer W2,
+    ByteAddressBuffer B2,
+    uint width,
+    const float x[14],
+    out float y[10]
+)
 {
     [unroll]
-    for (uint i = 0; i < 10; ++i) y[i] = 0.f;
-    if (width == 0 || width > 64) return;
+    for (uint i = 0; i < 10; ++i)
+        y[i] = 0.f;
+    if (width == 0 || width > 64)
+        return;
 
     float h0[64];
     [loop]
@@ -337,11 +394,23 @@ void fetchNeuralLatents(const MaterialSystem materials, const NeuralMaterialData
     float4 z0 = materials.sampleTexture(md.texLatent0, s, uv, 0.f);
     float4 z1 = materials.sampleTexture(md.texLatent1, s, uv, 0.f);
 
-    z[0] = z0.x; z[1] = z0.y; z[2] = z0.z; z[3] = z0.w;
-    z[4] = z1.x; z[5] = z1.y; z[6] = z1.z; z[7] = z1.w;
+    z[0] = z0.x;
+    z[1] = z0.y;
+    z[2] = z0.z;
+    z[3] = z0.w;
+    z[4] = z1.x;
+    z[5] = z1.y;
+    z[6] = z1.z;
+    z[7] = z1.w;
 }
 
-float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], float3 wiLocal, float3 woLocal)
+float3 evalNeuralBRDFFromLatents(
+    const MaterialSystem materials,
+    const NeuralMaterialData md,
+    const float z[8],
+    float3 wiLocal,
+    float3 woLocal
+)
 {
     // Match the current training/data-generation convention:
     // both wi and wo are local directions pointing away from the surface.
@@ -384,7 +453,8 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
     //   - MLP input is [z, dir_feats]
     //   - dir_feats flatten as [frame0(wi_TBN, wo_TBN), frame1(...)]
     [unroll]
-    for (uint i = 0; i < 8; ++i) x[i] = z[i];
+    for (uint i = 0; i < 8; ++i)
+        x[i] = z[i];
 
     [unroll]
     for (uint f = 0; f < 2; ++f)
@@ -421,7 +491,8 @@ float3 evalNeuralBRDFFromLatents(const MaterialSystem materials, const NeuralMat
         return 0.f.xxx;
 
     float3 outValue = exp(y - expOffset);
-    if (any(isnan(outValue)) || any(isinf(outValue))) return 0.f.xxx;
+    if (any(isnan(outValue)) || any(isinf(outValue)))
+        return 0.f.xxx;
     return max(outValue, 0.f.xxx);
 }
 
@@ -465,7 +536,8 @@ float3 fromLobeLocal(const float3 vLocal, const float3 T, const float3 B, const 
 float ggxNdfAniso(const float3 hLocal, float alphaX, float alphaY)
 {
     float hz = max(hLocal.z, 0.f);
-    if (hz <= 0.f) return 0.f;
+    if (hz <= 0.f)
+        return 0.f;
 
     float ax = max(alphaX, 1e-6f);
     float ay = max(alphaY, 1e-6f);
@@ -540,7 +612,8 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     p.weight1 = 0.5f;
     p.valid = 0;
 
-    if (wiLocal.z <= 0.f) return p;
+    if (wiLocal.z <= 0.f)
+        return p;
 
     ByteAddressBuffer frameLinear = materials.getBuffer(md.samplerFrameLinearBufferID);
     ByteAddressBuffer W0 = materials.getBuffer(md.samplerW0BufferID);
@@ -565,7 +638,8 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
 
     float x[14];
     [unroll]
-    for (uint i = 0; i < 8; ++i) x[i] = z[i];
+    for (uint i = 0; i < 8; ++i)
+        x[i] = z[i];
 
     [unroll]
     for (uint f = 0; f < 2; ++f)
@@ -585,17 +659,7 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     }
 
     float raw[10];
-    evalSamplerMLP(
-        W0,
-        B0,
-        W1,
-        B1,
-        W2,
-        B2,
-        md.mlpWidth,
-        x,
-        raw
-    );
+    evalSamplerMLP(W0, B0, W1, B1, W2, B2, md.mlpWidth, x, raw);
 
     float3 N0 = neuralSafeNormalize(float3(sf[0], sf[1], sf[2]));
     float3 T0raw = float3(sf[3], sf[4], sf[5]);
@@ -631,27 +695,39 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     return p;
 }
 
-float evalNeuralPdf(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], const float3 wiLocal, const float3 woLocal)
+float evalNeuralPdf(
+    const MaterialSystem materials,
+    const NeuralMaterialData md,
+    const float z[8],
+    const float3 wiLocal,
+    const float3 woLocal
+)
 {
-    if (woLocal.z <= 0.f) return 0.f;
+    if (woLocal.z <= 0.f)
+        return 0.f;
 
     NeuralSamplerParams p = evalNeuralSamplerParams(materials, md, z, wiLocal);
-    if (p.valid == 0) return evalCosinePdf(woLocal);
+    if (p.valid == 0)
+        return evalCosinePdf(woLocal);
 
     float3 wi0 = toLobeLocal(wiLocal, p.T0, p.B0, p.N0);
     float3 wo0 = toLobeLocal(woLocal, p.T0, p.B0, p.N0);
-    if (wi0.z < 0.f) wi0 = float3(wi0.x, wi0.y, -wi0.z);
+    if (wi0.z < 0.f)
+        wi0 = float3(wi0.x, wi0.y, -wi0.z);
     float3 m0 = neuralSafeNormalize(wi0 + wo0);
-    if (m0.z < 0.f) m0 = -m0;
+    if (m0.z < 0.f)
+        m0 = -m0;
     float woDotM0 = max(abs(dot(wo0, m0)), 1e-6f);
     float pM0 = ggxVndfPdf(wi0, m0, p.alphaX0, p.alphaY0);
     float pWo0 = pM0 / max(4.f * woDotM0, 1e-6f);
 
     float3 wi1 = toLobeLocal(wiLocal, p.T1, p.B1, p.N1);
     float3 wo1 = toLobeLocal(woLocal, p.T1, p.B1, p.N1);
-    if (wi1.z < 0.f) wi1 = float3(wi1.x, wi1.y, -wi1.z);
+    if (wi1.z < 0.f)
+        wi1 = float3(wi1.x, wi1.y, -wi1.z);
     float3 m1 = neuralSafeNormalize(wi1 + wo1);
-    if (m1.z < 0.f) m1 = -m1;
+    if (m1.z < 0.f)
+        m1 = -m1;
     float woDotM1 = max(abs(dot(wo1, m1)), 1e-6f);
     float pM1 = ggxVndfPdf(wi1, m1, p.alphaX1, p.alphaY1);
     float pWo1 = pM1 / max(4.f * woDotM1, 1e-6f);
@@ -662,23 +738,29 @@ float evalNeuralPdf(const MaterialSystem materials, const NeuralMaterialData md,
 
 float evalNeuralPdfFromParams(const NeuralMaterialData md, const NeuralSamplerParams p, const float3 wiLocal, const float3 woLocal)
 {
-    if (woLocal.z <= 0.f) return 0.f;
-    if (p.valid == 0) return evalCosinePdf(woLocal);
+    if (woLocal.z <= 0.f)
+        return 0.f;
+    if (p.valid == 0)
+        return evalCosinePdf(woLocal);
 
     float3 wi0 = toLobeLocal(wiLocal, p.T0, p.B0, p.N0);
     float3 wo0 = toLobeLocal(woLocal, p.T0, p.B0, p.N0);
-    if (wi0.z < 0.f) wi0 = float3(wi0.x, wi0.y, -wi0.z);
+    if (wi0.z < 0.f)
+        wi0 = float3(wi0.x, wi0.y, -wi0.z);
     float3 m0 = neuralSafeNormalize(wi0 + wo0);
-    if (m0.z < 0.f) m0 = -m0;
+    if (m0.z < 0.f)
+        m0 = -m0;
     float woDotM0 = max(abs(dot(wo0, m0)), 1e-6f);
     float pM0 = ggxVndfPdf(wi0, m0, p.alphaX0, p.alphaY0);
     float pWo0 = pM0 / max(4.f * woDotM0, 1e-6f);
 
     float3 wi1 = toLobeLocal(wiLocal, p.T1, p.B1, p.N1);
     float3 wo1 = toLobeLocal(woLocal, p.T1, p.B1, p.N1);
-    if (wi1.z < 0.f) wi1 = float3(wi1.x, wi1.y, -wi1.z);
+    if (wi1.z < 0.f)
+        wi1 = float3(wi1.x, wi1.y, -wi1.z);
     float3 m1 = neuralSafeNormalize(wi1 + wo1);
-    if (m1.z < 0.f) m1 = -m1;
+    if (m1.z < 0.f)
+        m1 = -m1;
     float woDotM1 = max(abs(dot(wo1, m1)), 1e-6f);
     float pM1 = ggxVndfPdf(wi1, m1, p.alphaX1, p.alphaY1);
     float pWo1 = pM1 / max(4.f * woDotM1, 1e-6f);
@@ -689,9 +771,9 @@ float evalNeuralPdfFromParams(const NeuralMaterialData md, const NeuralSamplerPa
 
 float3 sampleNeuralDirection(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], const float3 wiLocal, float2 u)
 {
-
     NeuralSamplerParams p = evalNeuralSamplerParams(materials, md, z, wiLocal);
-    if (p.valid == 0) return sampleCosineHemisphere(u);
+    if (p.valid == 0)
+        return sampleCosineHemisphere(u);
 
     bool choose0 = u.x < p.weight0;
     float selectDenom = choose0 ? max(p.weight0, 1e-6f) : max(p.weight1, 1e-6f);
@@ -706,7 +788,8 @@ float3 sampleNeuralDirection(const MaterialSystem materials, const NeuralMateria
     float alphaY = choose0 ? p.alphaY0 : p.alphaY1;
 
     float3 wiLobe = toLobeLocal(wiLocal, T, B, N);
-    if (wiLobe.z < 0.f) wiLobe = float3(wiLobe.x, wiLobe.y, -wiLobe.z);
+    if (wiLobe.z < 0.f)
+        wiLobe = float3(wiLobe.x, wiLobe.y, -wiLobe.z);
 
     float3 mLobe = sampleGgxVndfSingleLobe(wiLobe, alphaX, alphaY, uSelect, uAux);
     float3 woLobe = 2.f * dot(wiLobe, mLobe) * mLobe - wiLobe;
@@ -721,7 +804,8 @@ float3 sampleNeuralDirection(const MaterialSystem materials, const NeuralMateria
 
 float3 sampleNeuralDirectionFromParams(const NeuralMaterialData md, const NeuralSamplerParams p, const float3 wiLocal, float2 u)
 {
-    if (p.valid == 0) return sampleCosineHemisphere(u);
+    if (p.valid == 0)
+        return sampleCosineHemisphere(u);
 
     bool choose0 = u.x < p.weight0;
     float selectDenom = choose0 ? max(p.weight0, 1e-6f) : max(p.weight1, 1e-6f);
@@ -736,7 +820,8 @@ float3 sampleNeuralDirectionFromParams(const NeuralMaterialData md, const Neural
     float alphaY = choose0 ? p.alphaY0 : p.alphaY1;
 
     float3 wiLobe = toLobeLocal(wiLocal, T, B, N);
-    if (wiLobe.z < 0.f) wiLobe = float3(wiLobe.x, wiLobe.y, -wiLobe.z);
+    if (wiLobe.z < 0.f)
+        wiLobe = float3(wiLobe.x, wiLobe.y, -wiLobe.z);
 
     float3 mLobe = sampleGgxVndfSingleLobe(wiLobe, alphaX, alphaY, uSelect, uAux);
     float3 woLobe = 2.f * dot(wiLobe, mLobe) * mLobe - wiLobe;
@@ -775,8 +860,14 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         float4 z0 = gScene.materials.sampleTexture(data.texLatent0, s, sd.uv, 0.f);
         float4 z1 = gScene.materials.sampleTexture(data.texLatent1, s, sd.uv, 0.f);
 
-        z[0] = z0.x; z[1] = z0.y; z[2] = z0.z; z[3] = z0.w;
-        z[4] = z1.x; z[5] = z1.y; z[6] = z1.z; z[7] = z1.w;
+        z[0] = z0.x;
+        z[1] = z0.y;
+        z[2] = z0.z;
+        z[3] = z0.w;
+        z[4] = z1.x;
+        z[5] = z1.y;
+        z[6] = z1.z;
+        z[7] = z1.w;
 
         float3 wiLocal = sd.frame.toLocal(sd.V);
         float3 woLocal = sd.frame.toLocal(wo);
@@ -798,8 +889,14 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         float4 z1 = gScene.materials.sampleTexture(data.texLatent1, s, sd.uv, 0.f);
 
         float z[8];
-        z[0] = z0.x; z[1] = z0.y; z[2] = z0.z; z[3] = z0.w;
-        z[4] = z1.x; z[5] = z1.y; z[6] = z1.z; z[7] = z1.w;
+        z[0] = z0.x;
+        z[1] = z0.y;
+        z[2] = z0.z;
+        z[3] = z0.w;
+        z[4] = z1.x;
+        z[5] = z1.y;
+        z[6] = z1.z;
+        z[7] = z1.w;
 
         float3 wiLocal = sd.frame.toLocal(sd.V);
         float2 u = sampleNext2D(sg);
@@ -818,7 +915,8 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
             pdf = evalCosinePdf(woLocal);
         }
 
-        if (pdf <= 0.f) return false;
+        if (pdf <= 0.f)
+            return false;
 
         float3 fcos = evalNeuralBRDFFromLatents(gScene.materials, data, z, wiLocal, woLocal);
 
@@ -840,8 +938,14 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         float4 z1 = gScene.materials.sampleTexture(data.texLatent1, s, sd.uv, 0.f);
 
         float z[8];
-        z[0] = z0.x; z[1] = z0.y; z[2] = z0.z; z[3] = z0.w;
-        z[4] = z1.x; z[5] = z1.y; z[6] = z1.z; z[7] = z1.w;
+        z[0] = z0.x;
+        z[1] = z0.y;
+        z[2] = z0.z;
+        z[3] = z0.w;
+        z[4] = z1.x;
+        z[5] = z1.y;
+        z[6] = z1.z;
+        z[7] = z1.w;
 
         float3 wiLocal = sd.frame.toLocal(sd.V);
         return evalNeuralPdf(gScene.materials, data, z, wiLocal, woLocal);
@@ -862,10 +966,7 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         return p;
     }
 
-    uint getLobeTypes(const ShadingData sd)
-    {
-        return uint(LobeType::DiffuseReflection);
-    }
+    uint getLobeTypes(const ShadingData sd) { return uint(LobeType::DiffuseReflection); }
 };
 
 struct NeuralMaterial : MaterialBase, IMaterial
@@ -883,10 +984,15 @@ struct NeuralMaterial : MaterialBase, IMaterial
     }
 
     [Differentiable]
-    NeuralMaterialInstance setupDiffMaterialInstance( out DiffMaterialData diffData, const MaterialSystem ms, const ShadingData sd, const ITextureSampler lod, const uint hints )
+    NeuralMaterialInstance setupDiffMaterialInstance(
+        out DiffMaterialData diffData,
+        const MaterialSystem ms,
+        const ShadingData sd,
+        const ITextureSampler lod,
+        const uint hints
+    )
     {
         diffData = {};
         return setupMaterialInstance(ms, sd, lod, hints);
-
     }
 };
