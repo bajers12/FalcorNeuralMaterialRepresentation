@@ -757,8 +757,8 @@ class NeuralMaterialModel(nn.Module):
         self.decoder = Decoder(
             latent_ch=cfg.latent_ch,
             num_frames=cfg.num_frames,
-            mlp_width=cfg.mlp_width,
-            mlp_depth=cfg.mlp_depth,
+            mlp_width=cfg.brdf_mlp_width,
+            mlp_depth=cfg.brdf_mlp_depth,
             use_bias_in_mlp=cfg.use_bias_in_mlp,
             frame_linear_bias=cfg.frame_linear_bias,
             exp_offset=cfg.exp_offset,
@@ -1658,8 +1658,8 @@ def parse_args() -> TrainConfig:
     p.add_argument("--latent_ch", type=int, default=8)
 
     p.add_argument("--num_frames", type=int, default=2)
-    p.add_argument("--mlp_width", type=int, default=32)
-    p.add_argument("--mlp_depth", type=int, default=2)
+    p.add_argument("--brdf_mlp_width", type=int, default=32)
+    p.add_argument("--brdf_mlp_depth", type=int, default=2)
     p.add_argument("--sampler_mlp_width", type=int, default=32)
     p.add_argument("--sampler_mlp_depth", type=int, default=2)
     p.add_argument("--exp_offset", type=float, default=3.0)
@@ -1763,8 +1763,8 @@ def parse_args() -> TrainConfig:
     cfg.latent_ch = args.latent_ch
 
     cfg.num_frames = args.num_frames
-    cfg.mlp_width = args.mlp_width
-    cfg.mlp_depth = args.mlp_depth
+    cfg.brdf_mlp_width = args.brdf_mlp_width
+    cfg.brdf_mlp_depth = args.brdf_mlp_depth
     cfg.sampler_mlp_width = args.sampler_mlp_width
     cfg.sampler_mlp_depth = args.sampler_mlp_depth
     cfg.exp_offset = args.exp_offset

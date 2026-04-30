@@ -31,8 +31,11 @@ struct NeuralMaterialData
     uint samplerW2BufferID = 0;
     uint samplerB2BufferID = 0;
 
-    uint mlpWidth = 32;
-    uint mlpDepth = 2;
+    uint brdfMlpWidth = 32;
+    uint brdfMlpDepth = 2;
+
+    //uint samplerMlpWidth = 32;
+    //uint samplerMlpDepth = 2;
 };
 
 float neuralBufferLoad(ByteAddressBuffer buf, uint index)
@@ -427,9 +430,9 @@ float3 evalNeuralBRDFFromLatents(
     ByteAddressBuffer W3 = materials.getBuffer(md.W3BufferID);
     ByteAddressBuffer B3 = materials.getBuffer(md.B3BufferID);
 
-    if (md.mlpWidth == 0 || md.mlpWidth > 64)
+    if (md.brdfMlpWidth == 0 || md.brdfMlpWidth > 64)
         return 0.f.xxx;
-    if (md.mlpDepth != 2 && md.mlpDepth != 3)
+    if (md.brdfMlpDepth != 2 && md.brdfMlpDepth != 3)
         return 0.f.xxx;
 
     float4 z4a = float4(z[0], z[1], z[2], z[3]);
@@ -479,13 +482,13 @@ float3 evalNeuralBRDFFromLatents(
     }
 
     float3 y = 0.f.xxx;
-    if (md.mlpWidth == 16 && md.mlpDepth == 2)
+    if (md.brdfMlpWidth == 16 && md.brdfMlpDepth == 2)
         y = evalMLP16x2(W0, B0, W1, B1, W2, B2, x);
-    else if (md.mlpWidth == 32 && md.mlpDepth == 2)
+    else if (md.brdfMlpWidth == 32 && md.brdfMlpDepth == 2)
         y = evalMLP32x2(W0, B0, W1, B1, W2, B2, x);
-    else if (md.mlpWidth == 64 && md.mlpDepth == 2)
+    else if (md.brdfMlpWidth == 64 && md.brdfMlpDepth == 2)
         y = evalMLP64x2(W0, B0, W1, B1, W2, B2, x);
-    else if (md.mlpWidth == 64 && md.mlpDepth == 3)
+    else if (md.brdfMlpWidth == 64 && md.brdfMlpDepth == 3)
         y = evalMLP64x3(W0, B0, W1, B1, W2, B2, W3, B3, x);
     else
         return 0.f.xxx;
@@ -659,7 +662,7 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     }
 
     float raw[10];
-    evalSamplerMLP(W0, B0, W1, B1, W2, B2, md.mlpWidth, x, raw);
+    evalSamplerMLP(W0, B0, W1, B1, W2, B2, md.brdfMlpWidth, x, raw);
 
     float3 N0 = neuralSafeNormalize(float3(sf[0], sf[1], sf[2]));
     float3 T0raw = float3(sf[3], sf[4], sf[5]);

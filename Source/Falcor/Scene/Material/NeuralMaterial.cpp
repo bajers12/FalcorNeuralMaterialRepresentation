@@ -180,24 +180,7 @@ namespace Falcor
         if (std::filesystem::exists(samplerWeightsPath))
         {
             auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 10);
-            if (sampler.mlpWidth != brdf.mlpWidth || sampler.mlpDepth != brdf.mlpDepth)
-            {
-                FALCOR_THROW(
-                    "Sampler decoder architecture must match BRDF decoder architecture. BRDF={}x{}, sampler={}x{} in {}",
-                    brdf.mlpWidth,
-                    brdf.mlpDepth,
-                    sampler.mlpWidth,
-                    sampler.mlpDepth,
-                    samplerWeightsPath.string()
-                );
-            }
-            if (sampler.mlpDepth != 2)
-            {
-                FALCOR_THROW(
-                    "Sampler decoder currently supports only 2-layer MLPs in {}",
-                    samplerWeightsPath.string()
-                );
-            }
+
             mpSamplerFrameLinear = sampler.frameLinear;
             mpSamplerW0 = sampler.w0;
             mpSamplerB0 = sampler.b0;
