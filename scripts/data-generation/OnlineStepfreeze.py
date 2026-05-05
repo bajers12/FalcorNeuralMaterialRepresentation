@@ -69,8 +69,8 @@ class TrainConfig:
 
     # Decoder architecture
     num_frames: int = 2
-    mlp_width: int = 32
-    mlp_depth: int = 2  # number of hidden layers
+    brdf_mlp_width: int = 32
+    brdf_mlp_depth: int = 2  # number of hidden layers
     use_bias_in_mlp: bool = True
     frame_linear_bias: bool = False
 
