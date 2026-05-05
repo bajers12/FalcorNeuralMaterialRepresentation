@@ -26,10 +26,9 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 #include "OnlineDataGenerationPass.h"
+#include <algorithm>
 
 const char kShaderFile[] = "RenderPasses/OnlineDataGenerationPass/OnlineDataGenerationPass.cs.slang";
-
-const uint32_t kThreadGroupSize = 64;
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
@@ -45,6 +44,7 @@ void OnlineDataGenerationPass::registerBindings(pybind11::module& m)
     pass.def("setSeedState", &OnlineDataGenerationPass::setSeedState);
     pass.def("setUvGrid", &OnlineDataGenerationPass::setUvGrid);
     pass.def("clearUvGrid", &OnlineDataGenerationPass::clearUvGrid);
+    pass.def("setMollification", &OnlineDataGenerationPass::setMollification);
     pass.def("getData", &OnlineDataGenerationPass::getData);
     pass.def("releaseData", &OnlineDataGenerationPass::releaseData);
 }
@@ -61,6 +61,8 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
     mSampleCount = 0;
     mUvGridFullWidth = 0;
     mUvGridFullHeight = 0;
+    mMollificationConeAngleRad = 0.f;
+    mMollificationSampleCount = 1;
     mpMappedData = nullptr;
 
     parseProperties(props);
@@ -81,9 +83,6 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
         ResourceBindFlags::None,
         MemoryType::ReadBack
     );
-
-    //Initialize structured buffer for writing sample data from GPU to CPU
-
 }
 
 void OnlineDataGenerationPass::parseProperties(const Properties& props)
@@ -161,9 +160,9 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gUseUvGrid"] = mUseUvGrid;
     var["gUvGridFullWidth"] = mUvGridFullWidth;
     var["gUvGridFullHeight"] = mUvGridFullHeight;
+    var["gMollificationConeAngleRad"] = mMollificationConeAngleRad;
+    var["gMollificationSampleCount"] = mMollificationSampleCount;
 
-    //Threadsgroups and execute, threadgroups should probably be improved
-    uint32_t groups = (mSampleCount + (kThreadGroupSize - 1)) / kThreadGroupSize;
     mpPass->execute(pRenderContext, mSampleCount, 1, 1);
     pRenderContext->uavBarrier(mpGpuSampleBuffer.get());
 
@@ -240,8 +239,10 @@ void OnlineDataGenerationPass::clearUvGrid()
     mUvGridFullHeight = 0;
 }
 
-void OnlineDataGenerationPass::setupProgram() {
-
+void OnlineDataGenerationPass::setMollification(float coneAngleRadians, uint32_t sampleCount)
+{
+    mMollificationConeAngleRad = std::max(0.f, coneAngleRadians);
+    mMollificationSampleCount = std::max(1u, sampleCount);
 }
 
 void OnlineDataGenerationPass::generate() {

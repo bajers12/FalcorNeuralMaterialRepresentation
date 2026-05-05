@@ -75,11 +75,11 @@ public:
     void setSeedState(uint32_t runSeed, uint32_t seedDomain, uint32_t generationIndex);
     void setUvGrid(uint32_t width, uint32_t height);
     void clearUvGrid();
+    void setMollification(float coneAngleRadians, uint32_t sampleCount);
     static void registerBindings(pybind11::module& m);
 
 private:
     void OnlineDataGenerationPass::parseProperties(const Properties& props);
-    void OnlineDataGenerationPass::setupProgram();
 
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;
@@ -96,5 +96,7 @@ private:
     uint32_t mSampleCount;
     uint32_t mUvGridFullWidth = 0;
     uint32_t mUvGridFullHeight = 0;
+    float mMollificationConeAngleRad = 0.f;
+    uint32_t mMollificationSampleCount = 1;
     BsdfSampleData* mpMappedData;
 };
