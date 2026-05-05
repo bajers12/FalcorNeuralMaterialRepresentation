@@ -6,7 +6,13 @@ SEED_DOMAIN_VALIDATION = 1
 SEED_DOMAIN_BOOTSTRAP = 2
 
 class DataGenerator():
-    def __init__(self, materialId = 0, scene_path = 'media/LayeredMaterial/ThreeLayeredGGXPreview.pyscene', sampleCount = 10000):
+    def __init__(
+        self,
+        materialId = 0,
+        scene_path = 'media/LayeredMaterial/ThreeLayeredGGXPreview.pyscene',
+        sampleCount = 10000,
+        bootstrap_feature_layout = "auto",
+    ):
         # Construct path relative to project root
         project_root = Path(__file__).parent.parent.parent
         full_scene_path = project_root / scene_path
@@ -14,7 +20,15 @@ class DataGenerator():
         self.testbed = falcor.Testbed(create_window=False)
         self.device = device = self.testbed.device
         self.graph = self.testbed.create_render_graph("OnlineDataGeneration")
-        self.generation_pass = self.graph.create_pass("OnlineDataGenerationPass", "OnlineDataGenerationPass", {"materialId": materialId, "sampleCount": sampleCount})
+        self.generation_pass = self.graph.create_pass(
+            "OnlineDataGenerationPass",
+            "OnlineDataGenerationPass",
+            {
+                "materialId": materialId,
+                "sampleCount": sampleCount,
+                "bootstrapFeatureLayout": bootstrap_feature_layout,
+            },
+        )
         self.graph.mark_output("OnlineDataGenerationPass.output")
         self.testbed.render_graph = self.graph;
 
@@ -27,6 +41,16 @@ class DataGenerator():
 
     def supports_mollification(self):
         return hasattr(self.generation_pass, "setMollification")
+
+    def get_bootstrap_feature_names(self):
+        if not hasattr(self.generation_pass, "getBootstrapFeatureNames"):
+            return []
+        return list(self.generation_pass.getBootstrapFeatureNames())
+
+    def get_bootstrap_feature_dim(self):
+        if not hasattr(self.generation_pass, "getBootstrapFeatureDim"):
+            return 0
+        return int(self.generation_pass.getBootstrapFeatureDim())
 
     def _set_mollification(self, cone_angle_rad: float, sample_count: int):
         active = cone_angle_rad > 0.0 and sample_count > 1

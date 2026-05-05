@@ -32,6 +32,7 @@
 #include <filesystem>
 #include "Scene/Material/MaterialXGraphMaterial.h"
 #include <pybind11/numpy.h>
+#include <pybind11/stl.h>
 
 using namespace Falcor;
 
@@ -46,6 +47,12 @@ struct BsdfSampleData
     float3 normal;
     float1 roughness;
     float1 pdf;
+    float4 bootstrapFeature0;
+    float4 bootstrapFeature1;
+    float4 bootstrapFeature2;
+    float4 bootstrapFeature3;
+    float4 bootstrapFeature4;
+    float4 bootstrapFeature5;
 };
 
 class OnlineDataGenerationPass : public RenderPass
@@ -76,10 +83,22 @@ public:
     void setUvGrid(uint32_t width, uint32_t height);
     void clearUvGrid();
     void setMollification(float coneAngleRadians, uint32_t sampleCount);
+    uint32_t getBootstrapFeatureDim() const;
+    std::vector<std::string> getBootstrapFeatureNames() const;
     static void registerBindings(pybind11::module& m);
 
 private:
+    enum class BootstrapFeatureLayout
+    {
+        Auto,
+        Legacy,
+        Material,
+    };
+
     void OnlineDataGenerationPass::parseProperties(const Properties& props);
+    void resolveBootstrapFeatureLayout();
+    static BootstrapFeatureLayout parseBootstrapFeatureLayout(const std::string& value);
+    static std::string bootstrapFeatureLayoutToString(BootstrapFeatureLayout layout);
 
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;
@@ -98,5 +117,7 @@ private:
     uint32_t mUvGridFullHeight = 0;
     float mMollificationConeAngleRad = 0.f;
     uint32_t mMollificationSampleCount = 1;
+    BootstrapFeatureLayout mRequestedBootstrapFeatureLayout = BootstrapFeatureLayout::Auto;
+    std::vector<std::string> mBootstrapFeatureNames;
     BsdfSampleData* mpMappedData;
 };

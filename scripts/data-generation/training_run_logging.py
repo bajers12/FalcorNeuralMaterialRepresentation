@@ -65,6 +65,9 @@ class TrainingRunLogger:
             "use_normal_features": bool(self.cfg.use_normal_features),
             "use_roughness_feature": bool(self.cfg.use_roughness_feature),
             "use_pdf_feature": bool(self.cfg.use_pdf_feature),
+            "bootstrap_feature_layout": str(getattr(self.cfg, "bootstrap_feature_layout", "legacy")),
+            "material_feature_dim": int(getattr(self.cfg, "material_feature_dim", 0)),
+            "material_feature_names": list(getattr(self.cfg, "material_feature_names", ())),
         }
 
     def _sparse_progress_entry(

@@ -29,6 +29,8 @@
 #include <algorithm>
 
 const char kShaderFile[] = "RenderPasses/OnlineDataGenerationPass/OnlineDataGenerationPass.cs.slang";
+const char kBootstrapFeatureLayout[] = "bootstrapFeatureLayout";
+const uint32_t kBootstrapFeatureCapacity = 24;
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
@@ -45,6 +47,8 @@ void OnlineDataGenerationPass::registerBindings(pybind11::module& m)
     pass.def("setUvGrid", &OnlineDataGenerationPass::setUvGrid);
     pass.def("clearUvGrid", &OnlineDataGenerationPass::clearUvGrid);
     pass.def("setMollification", &OnlineDataGenerationPass::setMollification);
+    pass.def("getBootstrapFeatureDim", &OnlineDataGenerationPass::getBootstrapFeatureDim);
+    pass.def("getBootstrapFeatureNames", &OnlineDataGenerationPass::getBootstrapFeatureNames);
     pass.def("getData", &OnlineDataGenerationPass::getData);
     pass.def("releaseData", &OnlineDataGenerationPass::releaseData);
 }
@@ -91,6 +95,7 @@ void OnlineDataGenerationPass::parseProperties(const Properties& props)
     {
         if (key == "materialId") mMaterialId = value;
         else if (key == "sampleCount") mSampleCount = value;
+        else if (key == kBootstrapFeatureLayout) mRequestedBootstrapFeatureLayout = parseBootstrapFeatureLayout(value);
     }
 }
 
@@ -99,6 +104,7 @@ Properties OnlineDataGenerationPass::getProperties() const
     Properties props;
     props["materialId"] = mMaterialId;
     props["sampleCount"] = mSampleCount;
+    props[kBootstrapFeatureLayout] = bootstrapFeatureLayoutToString(mRequestedBootstrapFeatureLayout);
 
     return props;
 }
@@ -245,8 +251,76 @@ void OnlineDataGenerationPass::setMollification(float coneAngleRadians, uint32_t
     mMollificationSampleCount = std::max(1u, sampleCount);
 }
 
+uint32_t OnlineDataGenerationPass::getBootstrapFeatureDim() const
+{
+    return (uint32_t)mBootstrapFeatureNames.size();
+}
+
+std::vector<std::string> OnlineDataGenerationPass::getBootstrapFeatureNames() const
+{
+    return mBootstrapFeatureNames;
+}
+
 void OnlineDataGenerationPass::generate() {
     mbShouldGenerate = true;
+}
+
+OnlineDataGenerationPass::BootstrapFeatureLayout OnlineDataGenerationPass::parseBootstrapFeatureLayout(const std::string& value)
+{
+    if (value == "auto") return BootstrapFeatureLayout::Auto;
+    if (value == "legacy") return BootstrapFeatureLayout::Legacy;
+    if (value == "material" || value == "features" || value == "three_layered_ggx" || value == "ThreeLayeredGGXMaterial")
+        return BootstrapFeatureLayout::Material;
+
+    logWarning("OnlineDataGenerationPass: Unknown bootstrap feature layout '{}'. Falling back to auto.", value);
+    return BootstrapFeatureLayout::Auto;
+}
+
+std::string OnlineDataGenerationPass::bootstrapFeatureLayoutToString(BootstrapFeatureLayout layout)
+{
+    switch (layout)
+    {
+    case BootstrapFeatureLayout::Auto:
+        return "auto";
+    case BootstrapFeatureLayout::Legacy:
+        return "legacy";
+    case BootstrapFeatureLayout::Material:
+        return "material";
+    default:
+        return "legacy";
+    }
+}
+
+void OnlineDataGenerationPass::resolveBootstrapFeatureLayout()
+{
+    mBootstrapFeatureNames.clear();
+
+    if (
+        mRequestedBootstrapFeatureLayout == BootstrapFeatureLayout::Legacy ||
+        mpScene == nullptr ||
+        mpScene->getMaterialCount() == 0 ||
+        mMaterialId >= mpScene->getMaterialCount()
+    )
+        return;
+
+    const auto& pMat = mpScene->getMaterials()[mMaterialId];
+    if (!pMat) return;
+
+    mBootstrapFeatureNames = pMat->getBootstrapFeatureNames();
+    if (mBootstrapFeatureNames.size() > kBootstrapFeatureCapacity)
+    {
+        FALCOR_THROW(
+            "OnlineDataGenerationPass: Material '{}' exposes {} bootstrap features, but the sample payload only has room for {}.",
+            pMat->getName(),
+            mBootstrapFeatureNames.size(),
+            kBootstrapFeatureCapacity
+        );
+    }
+
+    if (mRequestedBootstrapFeatureLayout == BootstrapFeatureLayout::Material && mBootstrapFeatureNames.empty())
+    {
+        logWarning("OnlineDataGenerationPass: Material '{}' does not expose bootstrap features.", pMat->getName());
+    }
 }
 
 void OnlineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -254,6 +328,8 @@ void OnlineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref
     mpScene = pScene;
 
     if(mpScene == nullptr) return;
+
+    resolveBootstrapFeatureLayout();
 
     //Setup program with defines in execute, as the slang files cannot compile if no scene is available at compile time for gScene acess
     ProgramDesc desc;
@@ -264,6 +340,7 @@ void OnlineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref
 
     DefineList defines;
     defines = mpScene->getSceneDefines();
+    defines.add("BOOTSTRAP_FEATURES_ENABLED", mBootstrapFeatureNames.empty() ? "0" : "1");
 
 
     mpPass = ComputePass::create(mpDevice, desc, defines);

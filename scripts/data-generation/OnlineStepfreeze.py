@@ -35,7 +35,7 @@ import math
 import json
 import time
 import argparse
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Dict, Tuple, Optional
 from DataGenerator import (
     DataGenerator,
@@ -114,6 +114,9 @@ class TrainConfig:
     encoder_depth: int = 2
     encoder_bootstrap_epochs: int = 200
     latent_init_batch_size: int = 65536
+    bootstrap_feature_layout: str = "auto"
+    material_feature_dim: int = 0
+    material_feature_names: Tuple[str, ...] = field(default_factory=tuple)
     use_albedo_features: bool = True
     use_spec_features: bool = True
     use_normal_features: bool = True
@@ -134,7 +137,7 @@ def tensorize_batch(data_dict: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]
 
 def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
     print(f"[debug] first sample from {label}:")
-    ordered_keys = ["uv", "wi", "wo", "y", "spec", "albedo", "normal", "roughness", "pdf"]
+    ordered_keys = ["uv", "wi", "wo", "y", "spec", "albedo", "normal", "roughness", "pdf", "material_features"]
     for key in ordered_keys:
         if key not in batch:
             continue
@@ -148,6 +151,9 @@ def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
 
 
 def get_encoder_input_dim(cfg: TrainConfig) -> int:
+    if cfg.material_feature_dim > 0:
+        return cfg.material_feature_dim
+
     dim = 0
     if cfg.use_albedo_features:
         dim += 3
@@ -438,6 +444,11 @@ def compute_raw_stats(raw: torch.Tensor) -> Dict[str, float]:
 def build_material_features(
     batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
 ) -> torch.Tensor:
+    if cfg.material_feature_dim > 0:
+        if "material_features" not in batch:
+            raise ValueError("Configured material features are missing from the generated batch.")
+        return batch["material_features"].to(device, non_blocking=True)
+
     features = []
 
     if cfg.use_albedo_features:
@@ -505,7 +516,10 @@ def initialize_latent_texture_from_encoder(
         f"{cfg.tex_w}x{cfg.tex_h} UV grid in a single batch"
     )
     sample_count = cfg.tex_w * cfg.tex_h
-    grid_generator = DataGenerator(sampleCount=sample_count)
+    grid_generator = DataGenerator(
+        sampleCount=sample_count,
+        bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+    )
     try:
         grid_batch = grid_generator.generate_grid_data(
             cfg.tex_w,
@@ -517,7 +531,7 @@ def initialize_latent_texture_from_encoder(
     finally:
         grid_generator.release_data()
 
-    grid_tensor = tensorize_batch(data_to_dict(grid_batch))
+    grid_tensor = tensorize_batch(data_to_dict(grid_batch, cfg.material_feature_dim))
     latent_chunks = []
 
     for start in range(0, sample_count, cfg.latent_init_batch_size):
@@ -991,6 +1005,13 @@ def parse_args() -> TrainConfig:
         help="Batch size used when initializing the latent texture from encoder outputs.",
     )
     p.add_argument(
+        "--bootstrap_feature_layout",
+        type=str,
+        default="auto",
+        choices=("auto", "legacy", "material", "three_layered_ggx"),
+        help="Training-only material feature layout for encoder bootstrap. 'three_layered_ggx' is kept as an alias for 'material'.",
+    )
+    p.add_argument(
         "--albedo_feature",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1066,6 +1087,7 @@ def parse_args() -> TrainConfig:
     cfg.encoder_depth = args.encoder_depth
     cfg.encoder_bootstrap_epochs = max(0, args.encoder_bootstrap_epochs)
     cfg.latent_init_batch_size = max(1, args.latent_init_batch_size)
+    cfg.bootstrap_feature_layout = args.bootstrap_feature_layout
     cfg.use_albedo_features = args.albedo_feature
     cfg.use_spec_features = args.spec_feature
     cfg.use_normal_features = args.normal_feature
@@ -1075,7 +1097,7 @@ def parse_args() -> TrainConfig:
     return cfg
 
 
-def data_to_dict(data: np.ndarray):
+def data_to_dict(data: np.ndarray, material_feature_dim: int = 0):
     uv = data[:, 0:2]
     wo = data[:, 2:5]
     wi = data[:, 5:8]
@@ -1086,7 +1108,7 @@ def data_to_dict(data: np.ndarray):
     roughness = data[:, 20]
     pdf = data[:, 21]
 
-    return {
+    batch = {
         "uv": uv,
         "wo": wo,
         "wi": wi,
@@ -1097,7 +1119,17 @@ def data_to_dict(data: np.ndarray):
         "roughness": roughness,
         "pdf": pdf,
     }
+    if material_feature_dim > 0:
+        feature_start = 22
+        feature_end = feature_start + material_feature_dim
+        if data.shape[1] < feature_end:
+            raise ValueError(
+                f"Generated data has {data.shape[1]} columns, but material feature dim "
+                f"{material_feature_dim} requires at least {feature_end}."
+            )
+        batch["material_features"] = data[:, feature_start:feature_end]
 
+    return batch
 
 # =============================================================================
 # Main
@@ -1120,6 +1152,23 @@ def main():
         cfg.device = "cpu"
 
     device = torch.device(cfg.device)
+
+    validation_generator = DataGenerator(
+        sampleCount=cfg.validation_n,
+        bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+    )
+    cfg.material_feature_names = tuple(validation_generator.get_bootstrap_feature_names())
+    cfg.material_feature_dim = validation_generator.get_bootstrap_feature_dim()
+    if cfg.material_feature_dim != len(cfg.material_feature_names):
+        raise RuntimeError(
+            "OnlineDataGenerationPass reported inconsistent bootstrap feature metadata: "
+            f"dim={cfg.material_feature_dim}, names={len(cfg.material_feature_names)}."
+        )
+    if cfg.material_feature_dim > 0:
+        print(
+            "[bootstrap] using material-provided encoder features: "
+            f"layout={cfg.bootstrap_feature_layout}, dim={cfg.material_feature_dim}"
+        )
 
     os.makedirs(cfg.out_dir, exist_ok=True)
     save_config(cfg)
@@ -1148,7 +1197,7 @@ def main():
 
     try:
         # Gene validation data only once, and keep as single holdout set for all epochs
-        data_generator = DataGenerator(sampleCount=cfg.validation_n)
+        data_generator = validation_generator
         if cfg.encoder_bootstrap_epochs > 0 and not data_generator.supports_uv_grid():
             raise RuntimeError(
                 "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
@@ -1158,10 +1207,13 @@ def main():
             cfg.seed, SEED_DOMAIN_VALIDATION, 0
         ).copy()
         data_generator.release_data()
-        validation_tensor = tensorize_batch(data_to_dict(validation_batch))
+        validation_tensor = tensorize_batch(data_to_dict(validation_batch, cfg.material_feature_dim))
         print_first_sample(validation_tensor, "validation batch")
 
-        data_generator = DataGenerator(sampleCount=cfg.training_n)
+        data_generator = DataGenerator(
+            sampleCount=cfg.training_n,
+            bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+        )
         for epoch in range(cfg.max_epochs):
             phase = get_training_phase(cfg, epoch)
             phase_changed = phase != current_phase
@@ -1193,7 +1245,7 @@ def main():
                 cfg.mollification_sample_count,
             )
             training_batch = data_batch
-            training_tensor = tensorize_batch(data_to_dict(training_batch))
+            training_tensor = tensorize_batch(data_to_dict(training_batch, cfg.material_feature_dim))
             if epoch == 0:
                 print_first_sample(training_tensor, "training batch")
 

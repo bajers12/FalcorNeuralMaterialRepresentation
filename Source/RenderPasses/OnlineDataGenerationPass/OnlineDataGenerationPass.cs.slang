@@ -2,9 +2,14 @@
 
 import Scene.Scene;
 import Scene.Shading;
+import Scene.Material.BootstrapFeatureMaterial;
 import Scene.Material.MaterialFactory;
 import Utils.Math.MathHelpers;
 import Utils.Sampling.UniformSampleGenerator;
+
+#ifndef BOOTSTRAP_FEATURES_ENABLED
+#define BOOTSTRAP_FEATURES_ENABLED 0
+#endif
 
 struct BsdfSampleData
 {
@@ -17,6 +22,12 @@ struct BsdfSampleData
     float3 normal;
     float roughness;
     float pdf;
+    float4 bootstrapFeature0;
+    float4 bootstrapFeature1;
+    float4 bootstrapFeature2;
+    float4 bootstrapFeature3;
+    float4 bootstrapFeature4;
+    float4 bootstrapFeature5;
 };
 
 RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
@@ -81,6 +92,30 @@ float3 sampleConeAround(float3 center, float2 u, float cosTheta)
 
     return coneDir.x * tangent + coneDir.y * bitangent + coneDir.z * center;
 }
+
+void clearBootstrapFeatures(inout BsdfSampleData data)
+{
+    data.bootstrapFeature0 = 0.f.xxxx;
+    data.bootstrapFeature1 = 0.f.xxxx;
+    data.bootstrapFeature2 = 0.f.xxxx;
+    data.bootstrapFeature3 = 0.f.xxxx;
+    data.bootstrapFeature4 = 0.f.xxxx;
+    data.bootstrapFeature5 = 0.f.xxxx;
+}
+
+#if BOOTSTRAP_FEATURES_ENABLED
+void writeMaterialBootstrapFeatures(const ShadingData sd, inout BsdfSampleData data)
+{
+    let material = gScene.materials.getBootstrapFeatureMaterial(gMaterialId);
+    BootstrapFeatureData features = material.getBootstrapFeatures(gScene.materials, sd);
+    data.bootstrapFeature0 = features.feature0;
+    data.bootstrapFeature1 = features.feature1;
+    data.bootstrapFeature2 = features.feature2;
+    data.bootstrapFeature3 = features.feature3;
+    data.bootstrapFeature4 = features.feature4;
+    data.bootstrapFeature5 = features.feature5;
+}
+#endif
 
 [numthreads(64, 1, 1)]
 void main(uint3 threadId : SV_DispatchThreadID)
@@ -158,6 +193,11 @@ void main(uint3 threadId : SV_DispatchThreadID)
     data.normal = props.guideNormal;
     data.roughness = props.roughness;
     data.pdf = pdf;
+    clearBootstrapFeatures(data);
+
+#if BOOTSTRAP_FEATURES_ENABLED
+    writeMaterialBootstrapFeatures(sd, data);
+#endif
 
     gSampleOutputBuffer[idx] = data;
 }
