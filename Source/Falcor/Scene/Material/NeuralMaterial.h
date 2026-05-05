@@ -12,10 +12,9 @@ namespace Falcor
     /**
      * Minimal neural material for Falcor's material system.
      *
-     * Notes:
-     * - This version intentionally supports only the eval decoder.
-     * - No latent MIP levels are used; the shader samples mip 0 explicitly.
-     * - Importance sampling falls back to cosine hemisphere sampling.
+        * Notes:
+        * - No latent MIP levels are used; the shader samples mip 0 explicitly.
+        * - Importance sampling uses a dedicated decoder when sampler_weights.bin is available.
      * - It reuses MaterialType::RGL as a temporary material type slot. If your branch already uses RGL,
      *   add a dedicated MaterialType::Neural in your registry/enum files and replace the type below.
      */
@@ -42,7 +41,7 @@ namespace Falcor
         TypeConformanceList getTypeConformances() const override;
 
         size_t getMaxTextureCount() const override { return 2; }
-        size_t getMaxBufferCount() const override { return 9; }
+        size_t getMaxBufferCount() const override { return 16; }
         size_t getMaterialInstanceByteSize() const override { return 128; }
 
         void setDefaultTextureSampler(const ref<Sampler>& pSampler) override { mpSampler = pSampler; }
@@ -64,8 +63,14 @@ namespace Falcor
             uint32_t W3BufferID = uint32_t(-1);
             uint32_t B3BufferID = uint32_t(-1);
 
-            uint32_t applyExp = 1;
-            float expOffset = 3.f;
+            uint32_t samplerFrameLinearBufferID = uint32_t(-1);
+            uint32_t samplerW0BufferID = uint32_t(-1);
+            uint32_t samplerB0BufferID = uint32_t(-1);
+            uint32_t samplerW1BufferID = uint32_t(-1);
+            uint32_t samplerB1BufferID = uint32_t(-1);
+            uint32_t samplerW2BufferID = uint32_t(-1);
+            uint32_t samplerB2BufferID = uint32_t(-1);
+
             uint32_t mlpWidth = 32;
             uint32_t mlpDepth = 2;
         };
@@ -89,6 +94,14 @@ namespace Falcor
         ref<Buffer> mpB2;
         ref<Buffer> mpW3;
         ref<Buffer> mpB3;
+
+        ref<Buffer> mpSamplerFrameLinear;
+        ref<Buffer> mpSamplerW0;
+        ref<Buffer> mpSamplerB0;
+        ref<Buffer> mpSamplerW1;
+        ref<Buffer> mpSamplerB1;
+        ref<Buffer> mpSamplerW2;
+        ref<Buffer> mpSamplerB2;
 
         Data mData = {};
     };

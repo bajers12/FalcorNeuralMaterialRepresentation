@@ -40,3 +40,6 @@ MatXScenes/Preview/latent0.npy
 MatXScenes/Preview/latent1.exr
 MatXScenes/Preview/latent1.npy
 MatXScenes/Preview/metadata.json
+MatXScenes/Preview/metadata.json
+MatXScenes/Preview/sampler_metadata.json
+MatXScenes/Preview/sampler_weights.bin
