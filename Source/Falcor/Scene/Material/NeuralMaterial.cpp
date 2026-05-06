@@ -134,64 +134,82 @@ namespace Falcor
                 b3 = readFloatArray(f, expectedOutputDim);
             }
 
+            // Pack all weights into a single buffer
+            std::vector<float> packedData;
+            Data::DecoderWeightOffsets offsets{};
+
+            // Frame linear weights
+            offsets.frameLinearOffset = static_cast<uint32_t>(packedData.size());
+            packedData.insert(packedData.end(), frameLinear.begin(), frameLinear.end());
+
+            // Layer 0 weights and bias
+            offsets.w0Offset = static_cast<uint32_t>(packedData.size());
+            packedData.insert(packedData.end(), w0.begin(), w0.end());
+
+            offsets.b0Offset = static_cast<uint32_t>(packedData.size());
+            packedData.insert(packedData.end(), b0.begin(), b0.end());
+
+            // Layer 1 weights and bias
+            offsets.w1Offset = static_cast<uint32_t>(packedData.size());
+            packedData.insert(packedData.end(), w1.begin(), w1.end());
+
+            offsets.b1Offset = static_cast<uint32_t>(packedData.size());
+            packedData.insert(packedData.end(), b1.begin(), b1.end());
+
+            // Layer 2 weights and bias
+            offsets.w2Offset = static_cast<uint32_t>(packedData.size());
+            packedData.insert(packedData.end(), w2.begin(), w2.end());
+
+            offsets.b2Offset = static_cast<uint32_t>(packedData.size());
+            packedData.insert(packedData.end(), b2.begin(), b2.end());
+
+            // Layer 3 weights and bias (if depth == 3)
+            offsets.w3Offset = static_cast<uint32_t>(packedData.size());
+            if (!w3.empty())
+                packedData.insert(packedData.end(), w3.begin(), w3.end());
+
+            offsets.b3Offset = static_cast<uint32_t>(packedData.size());
+            if (!b3.empty())
+                packedData.insert(packedData.end(), b3.begin(), b3.end());
+
             struct LoadedDecoder
             {
                 int32_t mlpWidth = 0;
                 int32_t mlpDepth = 0;
-                ref<Buffer> frameLinear;
-                ref<Buffer> w0;
-                ref<Buffer> b0;
-                ref<Buffer> w1;
-                ref<Buffer> b1;
-                ref<Buffer> w2;
-                ref<Buffer> b2;
-                ref<Buffer> w3;
-                ref<Buffer> b3;
+                ref<Buffer> decoderBuffer;
+                Data::DecoderWeightOffsets offsets;
             };
 
             LoadedDecoder loaded;
             loaded.mlpWidth = mlpWidth;
             loaded.mlpDepth = mlpDepth;
-            loaded.frameLinear = makeStructured(frameLinear);
-            loaded.w0 = makeStructured(w0);
-            loaded.b0 = makeStructured(b0);
-            loaded.w1 = makeStructured(w1);
-            loaded.b1 = makeStructured(b1);
-            loaded.w2 = makeStructured(w2);
-            loaded.b2 = makeStructured(b2);
-            loaded.w3 = w3.empty() ? makeStructured(std::vector<float>{ 0.f }) : makeStructured(w3);
-            loaded.b3 = b3.empty() ? makeStructured(std::vector<float>{ 0.f }) : makeStructured(b3);
+            loaded.offsets = offsets;
+            loaded.decoderBuffer = make_ref<Buffer>(
+                mpDevice,
+                sizeof(float),
+                static_cast<uint32_t>(packedData.size()),
+                ResourceBindFlags::ShaderResource,
+                MemoryType::DeviceLocal,
+                packedData.data(),
+                false
+            );
             return loaded;
         };
 
         auto brdf = loadDecoderWeights(weightsPath, 20, 3);
-        mpFrameLinear = brdf.frameLinear;
-        mpW0 = brdf.w0;
-        mpB0 = brdf.b0;
-        mpW1 = brdf.w1;
-        mpB1 = brdf.b1;
-        mpW2 = brdf.w2;
-        mpB2 = brdf.b2;
-        mpW3 = brdf.w3;
-        mpB3 = brdf.b3;
+        mpBrdfDecoderBuffer = brdf.decoderBuffer;
 
         mData.brdfMlpWidth = static_cast<uint32_t>(brdf.mlpWidth);
         mData.brdfMlpDepth = static_cast<uint32_t>(brdf.mlpDepth);
+        mData.brdfWeightOffsets = brdf.offsets;
 
 
         auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 10);
-        mpSamplerFrameLinear = sampler.frameLinear;
-        mpSamplerW0 = sampler.w0;
-        mpSamplerB0 = sampler.b0;
-        mpSamplerW1 = sampler.w1;
-        mpSamplerB1 = sampler.b1;
-        mpSamplerW2 = sampler.w2;
-        mpSamplerB2 = sampler.b2;
-        mpSamplerW3 = sampler.w3;
-        mpSamplerB3 = sampler.b3;
+        mpSamplerDecoderBuffer = sampler.decoderBuffer;
 
         mData.samplerMlpWidth = static_cast<uint32_t>(sampler.mlpWidth);
         mData.samplerMlpDepth = static_cast<uint32_t>(sampler.mlpDepth);
+        mData.samplerWeightOffsets = sampler.offsets;
 
         if (!mpSampler)
         {
@@ -229,27 +247,11 @@ namespace Falcor
         updateTextureHandle(pOwner, mpLatent0, mData.texLatent0);
         updateTextureHandle(pOwner, mpLatent1, mData.texLatent1);
 
-        //BRDF Decoder
-        uploadBuffer(pOwner, mpFrameLinear, mData.frameLinearBufferID);
-        uploadBuffer(pOwner, mpW0, mData.W0BufferID);
-        uploadBuffer(pOwner, mpB0, mData.B0BufferID);
-        uploadBuffer(pOwner, mpW1, mData.W1BufferID);
-        uploadBuffer(pOwner, mpB1, mData.B1BufferID);
-        uploadBuffer(pOwner, mpW2, mData.W2BufferID);
-        uploadBuffer(pOwner, mpB2, mData.B2BufferID);
-        uploadBuffer(pOwner, mpW3, mData.W3BufferID);
-        uploadBuffer(pOwner, mpB3, mData.B3BufferID);
+        // BRDF Decoder
+        uploadBuffer(pOwner, mpBrdfDecoderBuffer, mData.brdfDecoderBufferID);
 
-        //Sampler Decoder
-        uploadBuffer(pOwner, mpSamplerFrameLinear, mData.samplerFrameLinearBufferID);
-        uploadBuffer(pOwner, mpSamplerW0, mData.samplerW0BufferID);
-        uploadBuffer(pOwner, mpSamplerB0, mData.samplerB0BufferID);
-        uploadBuffer(pOwner, mpSamplerW1, mData.samplerW1BufferID);
-        uploadBuffer(pOwner, mpSamplerB1, mData.samplerB1BufferID);
-        uploadBuffer(pOwner, mpSamplerW2, mData.samplerW2BufferID);
-        uploadBuffer(pOwner, mpSamplerB2, mData.samplerB2BufferID);
-        uploadBuffer(pOwner, mpSamplerW3, mData.samplerW3BufferID);
-        uploadBuffer(pOwner, mpSamplerB3, mData.samplerB3BufferID);
+        // Sampler Decoder
+        uploadBuffer(pOwner, mpSamplerDecoderBuffer, mData.samplerDecoderBufferID);
 
         return updates;
     }
@@ -263,15 +265,8 @@ namespace Falcor
                mpLatent0 == p->mpLatent0 &&
                mpLatent1 == p->mpLatent1 &&
                mpSampler == p->mpSampler &&
-               mpFrameLinear == p->mpFrameLinear &&
-               mpW0 == p->mpW0 && mpB0 == p->mpB0 &&
-               mpW1 == p->mpW1 && mpB1 == p->mpB1 &&
-               mpW2 == p->mpW2 && mpB2 == p->mpB2 &&
-               mpW3 == p->mpW3 && mpB3 == p->mpB3 &&
-               mpSamplerFrameLinear == p->mpSamplerFrameLinear &&
-               mpSamplerW0 == p->mpSamplerW0 && mpSamplerB0 == p->mpSamplerB0 &&
-               mpSamplerW1 == p->mpSamplerW1 && mpSamplerB1 == p->mpSamplerB1 &&
-               mpSamplerW2 == p->mpSamplerW2 && mpSamplerB2 == p->mpSamplerB2;
+               mpBrdfDecoderBuffer == p->mpBrdfDecoderBuffer &&
+               mpSamplerDecoderBuffer == p->mpSamplerDecoderBuffer;
     }
 
     MaterialDataBlob NeuralMaterial::getDataBlob() const
