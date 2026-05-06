@@ -1679,10 +1679,10 @@ def parse_args() -> TrainConfig:
     p.add_argument("--latent_ch", type=int, default=8)
 
     p.add_argument("--num_frames", type=int, default=2)
-    p.add_argument("--brdf_mlp_width", type=int, default=32)
+    p.add_argument("--brdf_mlp_width", type=int, default=64)
     p.add_argument("--brdf_mlp_depth", type=int, default=2)
     p.add_argument("--sampler_mlp_width", type=int, default=32)
-    p.add_argument("--sampler_mlp_depth", type=int, default=2)
+    p.add_argument("--sampler_mlp_depth", type=int, default=3)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
     p.add_argument("--training_n", type=int, default=65536)
