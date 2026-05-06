@@ -63,6 +63,9 @@ namespace Falcor
             uint32_t W3BufferID = uint32_t(-1);
             uint32_t B3BufferID = uint32_t(-1);
 
+            uint32_t brdfMlpWidth = 32;
+            uint32_t brdfMlpDepth = 2;
+
             uint32_t samplerFrameLinearBufferID = uint32_t(-1);
             uint32_t samplerW0BufferID = uint32_t(-1);
             uint32_t samplerB0BufferID = uint32_t(-1);
@@ -70,9 +73,12 @@ namespace Falcor
             uint32_t samplerB1BufferID = uint32_t(-1);
             uint32_t samplerW2BufferID = uint32_t(-1);
             uint32_t samplerB2BufferID = uint32_t(-1);
+            uint32_t samplerB3BufferID = uint32_t(-1);
+            uint32_t samplerW3BufferID = uint32_t(-1);
 
-            uint32_t mlpWidth = 32;
-            uint32_t mlpDepth = 2;
+            uint32_t samplerMlpWidth = 32;
+            uint32_t samplerMlpDepth = 2;
+
         };
         static_assert(sizeof(Data) <= sizeof(MaterialPayload), "NeuralMaterial payload must fit in MaterialPayload");
 
@@ -102,6 +108,8 @@ namespace Falcor
         ref<Buffer> mpSamplerB1;
         ref<Buffer> mpSamplerW2;
         ref<Buffer> mpSamplerB2;
+        ref<Buffer> mpSamplerW3;
+        ref<Buffer> mpSamplerB3;
 
         Data mData = {};
     };

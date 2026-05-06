@@ -23,6 +23,9 @@ struct NeuralMaterialData
     uint W3BufferID = 0;
     uint B3BufferID = 0;
 
+    uint brdfMlpWidth = 32;
+    uint brdfMlpDepth = 2;
+
     uint samplerFrameLinearBufferID = 0;
     uint samplerW0BufferID = 0;
     uint samplerB0BufferID = 0;
@@ -31,11 +34,8 @@ struct NeuralMaterialData
     uint samplerW2BufferID = 0;
     uint samplerB2BufferID = 0;
 
-    uint brdfMlpWidth = 32;
-    uint brdfMlpDepth = 2;
-
-    //uint samplerMlpWidth = 32;
-    //uint samplerMlpDepth = 2;
+    uint samplerMlpWidth = 32;
+    uint samplerMlpDepth = 2;
 };
 
 float neuralBufferLoad(ByteAddressBuffer buf, uint index)
@@ -662,7 +662,7 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     }
 
     float raw[10];
-    evalSamplerMLP(W0, B0, W1, B1, W2, B2, md.brdfMlpWidth, x, raw);
+    evalSamplerMLP(W0, B0, W1, B1, W2, B2, md.samplerMlpWidth, x, raw);
 
     float3 N0 = neuralSafeNormalize(float3(sf[0], sf[1], sf[2]));
     float3 T0raw = float3(sf[3], sf[4], sf[5]);

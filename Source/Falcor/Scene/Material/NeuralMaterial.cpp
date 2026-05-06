@@ -94,6 +94,7 @@ namespace Falcor
 
             int32_t latentCh = 8;
             int32_t numFrames = 2;
+
             int32_t mlpWidth = 32;
             int32_t mlpDepth = 2;
 
@@ -174,21 +175,23 @@ namespace Falcor
         mpW3 = brdf.w3;
         mpB3 = brdf.b3;
 
-        mData.mlpWidth = static_cast<uint32_t>(brdf.mlpWidth);
-        mData.mlpDepth = static_cast<uint32_t>(brdf.mlpDepth);
+        mData.brdfMlpWidth = static_cast<uint32_t>(brdf.mlpWidth);
+        mData.brdfMlpDepth = static_cast<uint32_t>(brdf.mlpDepth);
 
-        if (std::filesystem::exists(samplerWeightsPath))
-        {
-            auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 10);
 
-            mpSamplerFrameLinear = sampler.frameLinear;
-            mpSamplerW0 = sampler.w0;
-            mpSamplerB0 = sampler.b0;
-            mpSamplerW1 = sampler.w1;
-            mpSamplerB1 = sampler.b1;
-            mpSamplerW2 = sampler.w2;
-            mpSamplerB2 = sampler.b2;
-        }
+        auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 10);
+        mpSamplerFrameLinear = sampler.frameLinear;
+        mpSamplerW0 = sampler.w0;
+        mpSamplerB0 = sampler.b0;
+        mpSamplerW1 = sampler.w1;
+        mpSamplerB1 = sampler.b1;
+        mpSamplerW2 = sampler.w2;
+        mpSamplerB2 = sampler.b2;
+        mpSamplerW3 = sampler.w3;
+        mpSamplerB3 = sampler.b3;
+
+        mData.samplerMlpWidth = static_cast<uint32_t>(sampler.mlpWidth);
+        mData.samplerMlpDepth = static_cast<uint32_t>(sampler.mlpDepth);
 
         if (!mpSampler)
         {
@@ -226,6 +229,7 @@ namespace Falcor
         updateTextureHandle(pOwner, mpLatent0, mData.texLatent0);
         updateTextureHandle(pOwner, mpLatent1, mData.texLatent1);
 
+        //BRDF Decoder
         uploadBuffer(pOwner, mpFrameLinear, mData.frameLinearBufferID);
         uploadBuffer(pOwner, mpW0, mData.W0BufferID);
         uploadBuffer(pOwner, mpB0, mData.B0BufferID);
@@ -236,16 +240,16 @@ namespace Falcor
         uploadBuffer(pOwner, mpW3, mData.W3BufferID);
         uploadBuffer(pOwner, mpB3, mData.B3BufferID);
 
-        if (mpSamplerFrameLinear)
-        {
-            uploadBuffer(pOwner, mpSamplerFrameLinear, mData.samplerFrameLinearBufferID);
-            uploadBuffer(pOwner, mpSamplerW0, mData.samplerW0BufferID);
-            uploadBuffer(pOwner, mpSamplerB0, mData.samplerB0BufferID);
-            uploadBuffer(pOwner, mpSamplerW1, mData.samplerW1BufferID);
-            uploadBuffer(pOwner, mpSamplerB1, mData.samplerB1BufferID);
-            uploadBuffer(pOwner, mpSamplerW2, mData.samplerW2BufferID);
-            uploadBuffer(pOwner, mpSamplerB2, mData.samplerB2BufferID);
-        }
+        //Sampler Decoder
+        uploadBuffer(pOwner, mpSamplerFrameLinear, mData.samplerFrameLinearBufferID);
+        uploadBuffer(pOwner, mpSamplerW0, mData.samplerW0BufferID);
+        uploadBuffer(pOwner, mpSamplerB0, mData.samplerB0BufferID);
+        uploadBuffer(pOwner, mpSamplerW1, mData.samplerW1BufferID);
+        uploadBuffer(pOwner, mpSamplerB1, mData.samplerB1BufferID);
+        uploadBuffer(pOwner, mpSamplerW2, mData.samplerW2BufferID);
+        uploadBuffer(pOwner, mpSamplerB2, mData.samplerB2BufferID);
+        uploadBuffer(pOwner, mpSamplerW3, mData.samplerW3BufferID);
+        uploadBuffer(pOwner, mpSamplerB3, mData.samplerB3BufferID);
 
         return updates;
     }
