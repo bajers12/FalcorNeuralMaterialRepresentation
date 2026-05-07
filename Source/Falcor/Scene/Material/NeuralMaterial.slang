@@ -63,19 +63,70 @@ float3 neuralSafeNormalize(float3 v)
     return v * rsqrt(max(dot(v, v), 1e-16f));
 }
 
+// ============================================================================
+// Half-Vector Parametrization Helpers (NVIDIA Real-Time Neural Appearance)
+// ============================================================================
+
+struct HalfVectorParams
+{
+    float3 h;              // half-vector in frame
+    float cos_theta_i;     // cos of angle between wi and h
+    float cos_theta_o;     // cos of angle between wo and h
+    float cos_phi_diff;    // cos of azimuth difference
+};
+
+HalfVectorParams encodeHalfVector(float3 wiLocal, float3 woLocal)
+{
+    HalfVectorParams params;
+
+    // Compute half-vector
+    float3 h = neuralSafeNormalize(wiLocal + woLocal);
+    params.h = h;
+
+    // Angle between wi and h (store cosine)
+    float cos_theta_i = clamp(dot(wiLocal, h), -1.f, 1.f);
+    params.cos_theta_i = cos_theta_i;
+
+    // Angle between wo and h (store cosine)
+    float cos_theta_o = clamp(dot(woLocal, h), -1.f, 1.f);
+    params.cos_theta_o = cos_theta_o;
+
+    // Project onto plane perpendicular to h
+    float3 wi_perp = wiLocal - cos_theta_i * h;
+    float3 wo_perp = woLocal - cos_theta_o * h;
+
+    float wi_perp_len = length(wi_perp);
+    float wo_perp_len = length(wo_perp);
+
+    if (wi_perp_len > 1e-6f && wo_perp_len > 1e-6f)
+    {
+        wi_perp /= wi_perp_len;
+        wo_perp /= wo_perp_len;
+        float cos_phi_diff = clamp(dot(wi_perp, wo_perp), -1.f, 1.f);
+        params.cos_phi_diff = cos_phi_diff;
+    }
+    else
+    {
+        params.cos_phi_diff = 1.f;
+    }
+
+    return params;
+}
+
 float3 evalMLP16x2(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
-    const float x[20]
+    const float x[18]
 )
 {
     float4 x4[5];
     [unroll]
-    for (uint i = 0; i < 5; ++i)
+    for (uint i = 0; i < 4; ++i)
     {
         uint base = 4 * i;
         x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
     }
+    x4[4] = float4(x[16], x[17], 0.f, 0.f);
 
     float h0[16];
     [unroll]
@@ -84,7 +135,7 @@ float3 evalMLP16x2(
         float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 18 + g * 4), x4[g]);
         h0[r] = max(s, 0.f);
     }
 
@@ -128,16 +179,17 @@ float3 evalMLP16x2(
 float3 evalMLP32x2(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
-    const float x[20]
+    const float x[18]
 )
 {
     float4 x4[5];
     [unroll]
-    for (uint i = 0; i < 5; ++i)
+    for (uint i = 0; i < 4; ++i)
     {
         uint base = 4 * i;
         x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
     }
+    x4[4] = float4(x[16], x[17], 0.f, 0.f);
 
     float h0[32];
     [unroll]
@@ -146,7 +198,7 @@ float3 evalMLP32x2(
         float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 18 + g * 4), x4[g]);
         h0[r] = max(s, 0.f);
     }
 
@@ -190,16 +242,17 @@ float3 evalMLP32x2(
 float3 evalMLP64x2(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
-    const float x[20]
+    const float x[18]
 )
 {
     float4 x4[5];
     [unroll]
-    for (uint i = 0; i < 5; ++i)
+    for (uint i = 0; i < 4; ++i)
     {
         uint base = 4 * i;
         x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
     }
+    x4[4] = float4(x[16], x[17], 0.f, 0.f);
 
     float h0[64];
     [unroll]
@@ -208,7 +261,7 @@ float3 evalMLP64x2(
         float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 18 + g * 4), x4[g]);
         h0[r] = max(s, 0.f);
     }
 
@@ -252,16 +305,17 @@ float3 evalMLP64x2(
 float3 evalMLP64x3(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
-    const float x[20]
+    const float x[18]
 )
 {
     float4 x4[5];
     [unroll]
-    for (uint i = 0; i < 5; ++i)
+    for (uint i = 0; i < 4; ++i)
     {
         uint base = 4 * i;
         x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
     }
+    x4[4] = float4(x[16], x[17], 0.f, 0.f);
 
     float h0[64];
     [unroll]
@@ -270,7 +324,7 @@ float3 evalMLP64x3(
         float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 18 + g * 4), x4[g]);
         h0[r] = max(s, 0.f);
     }
 
@@ -428,13 +482,14 @@ float3 evalNeuralBRDFFromLatents(
         sf[r] = s;
     }
 
-    float x[20];
+    float x[18];
 
-    // Trainer contract:
+    // Trainer contract (Compact Half-Vector Parametrization - NVIDIA style):
     //   - frame_linear(z) -> (Nxyz, Txyz) per frame, no +1 offsets
     //   - B = normalize(cross(N, T))
-    //   - MLP input is [z, dir_feats]
-    //   - dir_feats flatten as [frame0(wi_TBN, wo_TBN), frame1(...)]
+    //   - MLP input is [z, dir_feats_half_vector_per_frame]
+    //   - For each frame: [h_xy, cos_theta_i, cos_theta_o, cos_phi_diff] (5 values)
+    //   - Total: 8 latent + 2*5 directions = 18 inputs
     [unroll]
     for (uint i = 0; i < 8; ++i)
         x[i] = z[i];
@@ -443,22 +498,28 @@ float3 evalNeuralBRDFFromLatents(
     for (uint f = 0; f < 2; ++f)
     {
         uint sfBase = 6 * f;
-        uint xBase = 8 + 6 * f;
+        uint xBase = 8 + 5 * f;  // 5 values per frame now
 
         float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
         float3 Traw = float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]);
         float3 T = neuralSafeNormalize(Traw - dot(Traw, N) * N);
         float3 B = cross(N, T);
 
-        float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
-        float3 woPred = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
+        // Transform wi/wo into frame space
+        float3 wiFrame = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
+        float3 woFrame = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
 
-        x[xBase + 0] = wiPred.x;
-        x[xBase + 1] = wiPred.y;
-        x[xBase + 2] = wiPred.z;
-        x[xBase + 3] = woPred.x;
-        x[xBase + 4] = woPred.y;
-        x[xBase + 5] = woPred.z;
+        // Encode using compact half-vector parametrization
+        HalfVectorParams hvParams = encodeHalfVector(wiFrame, woFrame);
+
+        // Store half-vector (z implicit from normalization)
+        x[xBase + 0] = hvParams.h.x;
+        x[xBase + 1] = hvParams.h.y;
+
+        // Store angle cosines
+        x[xBase + 2] = hvParams.cos_theta_i;
+        x[xBase + 3] = hvParams.cos_theta_o;
+        x[xBase + 4] = hvParams.cos_phi_diff;
     }
 
     float3 y = 0.f.xxx;

@@ -196,7 +196,7 @@ namespace Falcor
             return loaded;
         };
 
-        auto brdf = loadDecoderWeights(weightsPath, 20, 3);
+        auto brdf = loadDecoderWeights(weightsPath, 18, 3);
         mpBrdfDecoderBuffer = brdf.decoderBuffer;
 
         mData.brdfMlpWidth = static_cast<uint32_t>(brdf.mlpWidth);

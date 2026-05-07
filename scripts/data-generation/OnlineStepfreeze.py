@@ -177,6 +177,64 @@ def get_encoder_input_dim(cfg: TrainConfig) -> int:
 
 
 # =============================================================================
+# Half-Vector Parametrization Helpers
+# =============================================================================
+
+def encode_half_vector(
+    wi: torch.Tensor, wo: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Encode wi and wo directions using half-vector parametrization.
+
+    Input:
+        wi: [B, 3] or [B, num_frames, 3]
+        wo: [B, 3] or [B, num_frames, 3]
+
+    Output:
+        h_x, h_y:              half-vector components (z implicit from normalization)
+        cos_theta_i:           cosine of angle between wi and h
+        cos_theta_o:           cosine of angle between wo and h
+        cos_phi_diff:          cosine of azimuth angle difference
+    """
+    # Compute half-vector h = normalize(wi + wo)
+    h = torch.nn.functional.normalize(wi + wo, p=2, dim=-1)
+
+    # Extract x, y components of half-vector (z is implicit)
+    h_x = h[..., 0]
+    h_y = h[..., 1]
+
+    # Cosine of angle between wi and h
+    cos_theta_i = torch.clamp(torch.sum(wi * h, dim=-1), -1.0, 1.0)
+
+    # Cosine of angle between wo and h
+    cos_theta_o = torch.clamp(torch.sum(wo * h, dim=-1), -1.0, 1.0)
+
+    # Project onto plane perpendicular to h
+    wi_perp = wi - cos_theta_i.unsqueeze(-1) * h
+    wo_perp = wo - cos_theta_o.unsqueeze(-1) * h
+
+    wi_perp_len = torch.norm(wi_perp, p=2, dim=-1, keepdim=True)
+    wo_perp_len = torch.norm(wo_perp, p=2, dim=-1, keepdim=True)
+
+    # Avoid division by zero
+    wi_perp = torch.where(
+        wi_perp_len > 1e-6,
+        wi_perp / wi_perp_len,
+        torch.zeros_like(wi_perp)
+    )
+    wo_perp = torch.where(
+        wo_perp_len > 1e-6,
+        wo_perp / wo_perp_len,
+        torch.zeros_like(wo_perp)
+    )
+
+    # Cosine of azimuth angle difference
+    cos_phi_diff = torch.clamp(torch.sum(wi_perp * wo_perp, dim=-1), -1.0, 1.0)
+
+    return h_x, h_y, cos_theta_i, cos_theta_o, cos_phi_diff
+
+
+# =============================================================================
 # Model
 # =============================================================================
 
@@ -242,7 +300,8 @@ class Decoder(nn.Module):
 
         self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias)
 
-        mlp_in = latent_ch + 6 * num_frames
+        # MLP input: latent_ch + 5*num_frames (compact half-vector: h_xy, cos_theta_i, cos_theta_o, cos_phi_diff)
+        mlp_in = latent_ch + 5 * num_frames
         layers = []
         prev = mlp_in
         for _ in range(mlp_depth):
@@ -286,30 +345,51 @@ class Decoder(nn.Module):
         wi: [B,3] (local)
         wo: [B,3] (local)
         returns raw RGB logits before exp parameterization
+
+        Uses compact half-vector parametrization for direction encoding.
         """
         T, Bv, N = self._predict_frames(z)
 
-        wi_f = torch.stack(
-            [
-                (wi.unsqueeze(1) * T).sum(dim=-1),
-                (wi.unsqueeze(1) * Bv).sum(dim=-1),
-                (wi.unsqueeze(1) * N).sum(dim=-1),
-            ],
-            dim=-1,
-        )
-        wo_f = torch.stack(
-            [
-                (wo.unsqueeze(1) * T).sum(dim=-1),
-                (wo.unsqueeze(1) * Bv).sum(dim=-1),
-                (wo.unsqueeze(1) * N).sum(dim=-1),
-            ],
-            dim=-1,
-        )
+        # MLP input is [z, half_vector_params_per_frame]
+        # With 2 frames and 5 half-vector params each: 8 + 2*5 = 18
+        B = z.shape[0]
+        x_list = [z]  # Start with latent codes [B, 8]
 
-        dir_feats = torch.cat([wi_f, wo_f], dim=-1).view(
-            z.shape[0], 6 * self.num_frames
-        )
-        x = torch.cat([z, dir_feats], dim=-1)
+        # For each frame, encode directions using compact half-vector parametrization
+        for frame_idx in range(self.num_frames):
+            # Extract frame basis
+            T_f = T[:, frame_idx, :]      # [B, 3]
+            Bv_f = Bv[:, frame_idx, :]    # [B, 3]
+            N_f = N[:, frame_idx, :]      # [B, 3]
+
+            # Transform directions into frame space
+            wi_f = torch.stack([
+                (wi * T_f).sum(dim=-1),
+                (wi * Bv_f).sum(dim=-1),
+                (wi * N_f).sum(dim=-1),
+            ], dim=-1)  # [B, 3]
+
+            wo_f = torch.stack([
+                (wo * T_f).sum(dim=-1),
+                (wo * Bv_f).sum(dim=-1),
+                (wo * N_f).sum(dim=-1),
+            ], dim=-1)  # [B, 3]
+
+            # Encode using compact half-vector parametrization
+            h_x, h_y, cos_theta_i, cos_theta_o, cos_phi_diff = encode_half_vector(wi_f, wo_f)
+
+            # Stack all parameters for this frame
+            frame_params = torch.stack([
+                h_x, h_y,
+                cos_theta_i,
+                cos_theta_o,
+                cos_phi_diff
+            ], dim=-1)  # [B, 5]
+
+            x_list.append(frame_params)
+
+        # Concatenate all components
+        x = torch.cat(x_list, dim=-1)  # [B, 18]
         return self.mlp(x)
 
     def forward(
@@ -1470,7 +1550,7 @@ def save_weights_bin(path: Path, weights: dict) -> None:
     return save_network_weights_bin(
         path=path,
         weights=weights,
-        input_dim=20,
+        input_dim=18,
         output_dim=3,
     )
 
@@ -1564,7 +1644,7 @@ def save_network_weights_bin(
 
 def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
     _, h, w = latent.shape
-    layout = _infer_network_layout(weights, input_dim=20, output_dim=3)
+    layout = _infer_network_layout(weights, input_dim=18, output_dim=3)
     metadata = {
         "width": int(w),
         "height": int(h),
