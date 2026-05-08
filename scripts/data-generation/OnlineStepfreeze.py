@@ -2013,7 +2013,7 @@ def main():
                 best_phase = phase
                 best_metrics = dict(metrics)
                 best_model_state = snapshot_model_state(model)
-                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
+                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} and sampler_loss={best_metrics.get('sampler_loss', float('nan')):.6} cached in memory")
 
             if run_logger.should_log_progress(
                 epoch=epoch,
@@ -2059,7 +2059,7 @@ def main():
         )
         print(
             f"[export] Restored best validation state from epoch "
-            f"{best_epoch:03d} with val_loss={best_metrics.get('val_loss', float('nan')):.6f} "
+            f"{best_epoch:03d} with val_loss={best_metrics.get('val_loss', float('nan')):.6f} and sampler_loss={best_metrics.get('sampler_loss', float('nan')):.6}"
             f"and saved {best_ckpt_path}"
         )
 
