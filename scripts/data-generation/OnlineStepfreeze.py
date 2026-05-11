@@ -896,6 +896,12 @@ def importance_sampling_loss(
     )
 
     brdf_weights = (y_true.sum(dim=-1) / (3.0 + eps)).clamp_min(0.0)
+    # Normalize to sum-to-1 so loss scale is independent of BRDF magnitude.
+    # Without this, bright specular samples (large y) produce large negative
+    # loss terms when pdf > 1, pushing the loss into the hundreds-negative range.
+    weight_sum = brdf_weights.sum().clamp_min(eps)
+    brdf_weights = brdf_weights / weight_sum
+
     loss_terms = -torch.log(pdf_sampler) * brdf_weights
     finite_mask = torch.isfinite(loss_terms)
 
@@ -903,7 +909,8 @@ def importance_sampling_loss(
         # Keep graph connected while avoiding a hard failure on a pathological batch.
         return (pdf_sampler * 0.0).sum()
 
-    return loss_terms[finite_mask].mean()
+    # sum not mean — weights already integrate to ~1 over the finite samples
+    return loss_terms[finite_mask].sum()
 
 
 def build_material_features(
@@ -1343,7 +1350,7 @@ def validate(
 
     out = {
         "phase": phase,
-        "val_loss": loss.item(),
+        "brdf_val_loss": loss.item(),
         "val_mae": stats["mae"],
         "val_yhat_mean": stats["yhat_mean"],
         "val_y_mean": stats["y_mean"],
@@ -1639,7 +1646,7 @@ def main():
     opt = make_optimizer(model, cfg, current_phase)
     scheduler = make_scheduler(opt, cfg)
 
-    best_val = float("inf")
+    best_brdf_val_loss = float("inf")
     best_model_state: Optional[Dict[str, torch.Tensor]] = None
     best_metrics: Optional[Dict[str, float]] = None
     best_epoch: Optional[int] = None
@@ -1647,6 +1654,10 @@ def main():
     last_epoch: Optional[int] = None
     last_metrics: Optional[Dict[str, float]] = None
     run_status = "completed"
+
+    best_sampler_loss = float("inf")
+    best_sampler_state: Optional[Dict[str, torch.Tensor]] = None
+    best_sampler_epoch: Optional[int] = None
 
     try:
         # Gene validation data only once, and keep as single holdout set for all epochs
@@ -1741,19 +1752,29 @@ def main():
                     f"[train] epoch {epoch:03d} "
                     f"phase={phase} brdf_loss={metrics['brdf_loss']:.6f}" \
                     f"{sampler_log} "
-                    f"val_loss={metrics['val_loss']:.6f} "
+                    f"val_loss={metrics['brdf_val_loss']:.6f} "
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )
 
-            if metrics["val_loss"] < best_val:
-                best_val = metrics["val_loss"]
+            if metrics["brdf_val_loss"] < best_brdf_val_loss:
+                best_brdf_val_loss = metrics["brdf_val_loss"]
                 best_epoch = epoch
                 best_phase = phase
                 best_metrics = dict(metrics)
                 best_model_state = snapshot_model_state(model)
-                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} and sampler_loss={best_metrics.get('sampler_loss', float('nan')):.6} cached in memory")
+                print(f"[best] epoch {epoch:03d} val_loss={best_brdf_val_loss:.6f}")
 
+            if cfg.train_importance_sampler and "sampler_loss" in metrics:
+                current_sampler_loss = metrics["sampler_loss"]
+                if current_sampler_loss < best_sampler_loss:
+                    best_sampler_loss = current_sampler_loss
+                    best_sampler_epoch = epoch
+                    best_sampler_state = {
+                        k: v.detach().cpu().clone()
+                        for k, v in model.importance_sampler.state_dict().items()
+                    }
+                    print(f"[best_sampler] epoch {epoch:03d} sampler_loss={metrics['sampler_loss']:.6f} cached in memory")
             if run_logger.should_log_progress(
                 epoch=epoch,
                 phase_changed=phase_changed,
@@ -1787,6 +1808,10 @@ def main():
             initialize_latent_texture_from_encoder(
                 model, cfg, best_epoch
             )
+
+        if best_sampler_state is not None:
+            model.importance_sampler.load_state_dict(best_sampler_state)
+
         best_ckpt_path = save_checkpoint(
             model,
             None,
@@ -1798,7 +1823,7 @@ def main():
         )
         print(
             f"[export] Restored best validation state from epoch "
-            f"{best_epoch:03d} with val_loss={best_metrics.get('val_loss', float('nan')):.6f} and sampler_loss={best_metrics.get('sampler_loss', float('nan')):.6}"
+            f"{best_epoch:03d} with val_loss={best_metrics.get('brdf_val_loss', float('nan')):.6f} and sampler_loss={best_sampler_loss:.6f} at epoch {best_sampler_epoch:03d} "
             f"and saved {best_ckpt_path}"
         )
 
