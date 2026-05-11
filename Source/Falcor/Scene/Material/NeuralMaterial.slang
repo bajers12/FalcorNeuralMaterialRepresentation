@@ -8,34 +8,34 @@ static const float kPi = 3.14159265358979323846f;
 static const float kInvPi = 0.31830988618379067154f;
 static const float expOffset = 3.0f;
 
+struct DecoderWeightOffsets
+{
+    uint frameLinearOffset;  // in floats
+    uint w0Offset;
+    uint b0Offset;
+    uint w1Offset;
+    uint b1Offset;
+    uint w2Offset;
+    uint b2Offset;
+    uint w3Offset;
+    uint b3Offset;
+};
+
 struct NeuralMaterialData
 {
     TextureHandle texLatent0 = {};
     TextureHandle texLatent1 = {};
 
-    uint frameLinearBufferID = 0;
-    uint W0BufferID = 0;
-    uint B0BufferID = 0;
-    uint W1BufferID = 0;
-    uint B1BufferID = 0;
-    uint W2BufferID = 0;
-    uint B2BufferID = 0;
-    uint W3BufferID = 0;
-    uint B3BufferID = 0;
-
-    uint samplerFrameLinearBufferID = 0;
-    uint samplerW0BufferID = 0;
-    uint samplerB0BufferID = 0;
-    uint samplerW1BufferID = 0;
-    uint samplerB1BufferID = 0;
-    uint samplerW2BufferID = 0;
-    uint samplerB2BufferID = 0;
+    uint brdfDecoderBufferID = 0;
+    uint samplerDecoderBufferID = 0;
 
     uint brdfMlpWidth = 32;
     uint brdfMlpDepth = 2;
+    DecoderWeightOffsets brdfWeightOffsets = {};
 
-    //uint samplerMlpWidth = 32;
-    //uint samplerMlpDepth = 2;
+    uint samplerMlpWidth = 32;
+    uint samplerMlpDepth = 2;
+    DecoderWeightOffsets samplerWeightOffsets = {};
 };
 
 float neuralBufferLoad(ByteAddressBuffer buf, uint index)
@@ -48,18 +48,24 @@ float4 neuralBufferLoad4(ByteAddressBuffer buf, uint index)
     return asfloat(buf.Load4(index * 4));
 }
 
+float neuralBufferLoadWithOffset(ByteAddressBuffer buf, uint offset, uint index)
+{
+    return neuralBufferLoad(buf, offset + index);
+}
+
+float4 neuralBufferLoad4WithOffset(ByteAddressBuffer buf, uint offset, uint index)
+{
+    return neuralBufferLoad4(buf, offset + index);
+}
+
 float3 neuralSafeNormalize(float3 v)
 {
     return v * rsqrt(max(dot(v, v), 1e-16f));
 }
 
 float3 evalMLP16x2(
-    ByteAddressBuffer W0,
-    ByteAddressBuffer B0,
-    ByteAddressBuffer W1,
-    ByteAddressBuffer B1,
-    ByteAddressBuffer W2,
-    ByteAddressBuffer B2,
+    ByteAddressBuffer buf,
+    const DecoderWeightOffsets offsets,
     const float x[20]
 )
 {
@@ -75,10 +81,10 @@ float3 evalMLP16x2(
     [unroll]
     for (uint r = 0; r < 16; ++r)
     {
-        float s = neuralBufferLoad(B0, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4(W0, r * 20 + g * 4), x4[g]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
         h0[r] = max(s, 0.f);
     }
 
@@ -86,13 +92,13 @@ float3 evalMLP16x2(
     [unroll]
     for (uint r = 0; r < 16; ++r)
     {
-        float s = neuralBufferLoad(B1, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b1Offset, r);
         [unroll]
         for (uint g = 0; g < 4; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
-            s += dot(neuralBufferLoad4(W1, r * 16 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w1Offset, r * 16 + base), h);
         }
         h1[r] = max(s, 0.f);
     }
@@ -101,13 +107,13 @@ float3 evalMLP16x2(
     [unroll]
     for (uint r = 0; r < 3; ++r)
     {
-        float s = neuralBufferLoad(B2, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b2Offset, r);
         [unroll]
         for (uint g = 0; g < 4; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
-            s += dot(neuralBufferLoad4(W2, r * 16 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w2Offset, r * 16 + base), h);
         }
         if (r == 0)
             y.x = s;
@@ -120,12 +126,8 @@ float3 evalMLP16x2(
 }
 
 float3 evalMLP32x2(
-    ByteAddressBuffer W0,
-    ByteAddressBuffer B0,
-    ByteAddressBuffer W1,
-    ByteAddressBuffer B1,
-    ByteAddressBuffer W2,
-    ByteAddressBuffer B2,
+    ByteAddressBuffer buf,
+    const DecoderWeightOffsets offsets,
     const float x[20]
 )
 {
@@ -141,10 +143,10 @@ float3 evalMLP32x2(
     [unroll]
     for (uint r = 0; r < 32; ++r)
     {
-        float s = neuralBufferLoad(B0, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4(W0, r * 20 + g * 4), x4[g]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
         h0[r] = max(s, 0.f);
     }
 
@@ -152,13 +154,13 @@ float3 evalMLP32x2(
     [unroll]
     for (uint r = 0; r < 32; ++r)
     {
-        float s = neuralBufferLoad(B1, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b1Offset, r);
         [unroll]
         for (uint g = 0; g < 8; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
-            s += dot(neuralBufferLoad4(W1, r * 32 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w1Offset, r * 32 + base), h);
         }
         h1[r] = max(s, 0.f);
     }
@@ -167,13 +169,13 @@ float3 evalMLP32x2(
     [unroll]
     for (uint r = 0; r < 3; ++r)
     {
-        float s = neuralBufferLoad(B2, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b2Offset, r);
         [unroll]
         for (uint g = 0; g < 8; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
-            s += dot(neuralBufferLoad4(W2, r * 32 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w2Offset, r * 32 + base), h);
         }
         if (r == 0)
             y.x = s;
@@ -186,12 +188,8 @@ float3 evalMLP32x2(
 }
 
 float3 evalMLP64x2(
-    ByteAddressBuffer W0,
-    ByteAddressBuffer B0,
-    ByteAddressBuffer W1,
-    ByteAddressBuffer B1,
-    ByteAddressBuffer W2,
-    ByteAddressBuffer B2,
+    ByteAddressBuffer buf,
+    const DecoderWeightOffsets offsets,
     const float x[20]
 )
 {
@@ -207,10 +205,10 @@ float3 evalMLP64x2(
     [unroll]
     for (uint r = 0; r < 64; ++r)
     {
-        float s = neuralBufferLoad(B0, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4(W0, r * 20 + g * 4), x4[g]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
         h0[r] = max(s, 0.f);
     }
 
@@ -218,13 +216,13 @@ float3 evalMLP64x2(
     [unroll]
     for (uint r = 0; r < 64; ++r)
     {
-        float s = neuralBufferLoad(B1, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b1Offset, r);
         [unroll]
         for (uint g = 0; g < 16; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
-            s += dot(neuralBufferLoad4(W1, r * 64 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w1Offset, r * 64 + base), h);
         }
         h1[r] = max(s, 0.f);
     }
@@ -233,13 +231,13 @@ float3 evalMLP64x2(
     [unroll]
     for (uint r = 0; r < 3; ++r)
     {
-        float s = neuralBufferLoad(B2, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b2Offset, r);
         [unroll]
         for (uint g = 0; g < 16; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
-            s += dot(neuralBufferLoad4(W2, r * 64 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w2Offset, r * 64 + base), h);
         }
         if (r == 0)
             y.x = s;
@@ -252,14 +250,8 @@ float3 evalMLP64x2(
 }
 
 float3 evalMLP64x3(
-    ByteAddressBuffer W0,
-    ByteAddressBuffer B0,
-    ByteAddressBuffer W1,
-    ByteAddressBuffer B1,
-    ByteAddressBuffer W2,
-    ByteAddressBuffer B2,
-    ByteAddressBuffer W3,
-    ByteAddressBuffer B3,
+    ByteAddressBuffer buf,
+    const DecoderWeightOffsets offsets,
     const float x[20]
 )
 {
@@ -275,10 +267,10 @@ float3 evalMLP64x3(
     [unroll]
     for (uint r = 0; r < 64; ++r)
     {
-        float s = neuralBufferLoad(B0, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4(W0, r * 20 + g * 4), x4[g]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
         h0[r] = max(s, 0.f);
     }
 
@@ -286,13 +278,13 @@ float3 evalMLP64x3(
     [unroll]
     for (uint r = 0; r < 64; ++r)
     {
-        float s = neuralBufferLoad(B1, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b1Offset, r);
         [unroll]
         for (uint g = 0; g < 16; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
-            s += dot(neuralBufferLoad4(W1, r * 64 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w1Offset, r * 64 + base), h);
         }
         h1[r] = max(s, 0.f);
     }
@@ -301,13 +293,13 @@ float3 evalMLP64x3(
     [unroll]
     for (uint r = 0; r < 64; ++r)
     {
-        float s = neuralBufferLoad(B2, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b2Offset, r);
         [unroll]
         for (uint g = 0; g < 16; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
-            s += dot(neuralBufferLoad4(W2, r * 64 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w2Offset, r * 64 + base), h);
         }
         h2[r] = max(s, 0.f);
     }
@@ -316,13 +308,13 @@ float3 evalMLP64x3(
     [unroll]
     for (uint r = 0; r < 3; ++r)
     {
-        float s = neuralBufferLoad(B3, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b3Offset, r);
         [unroll]
         for (uint g = 0; g < 16; ++g)
         {
             uint base = 4 * g;
             float4 h = float4(h2[base + 0], h2[base + 1], h2[base + 2], h2[base + 3]);
-            s += dot(neuralBufferLoad4(W3, r * 64 + base), h);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w3Offset, r * 64 + base), h);
         }
         if (r == 0)
             y.x = s;
@@ -335,12 +327,8 @@ float3 evalMLP64x3(
 }
 
 void evalSamplerMLP(
-    ByteAddressBuffer W0,
-    ByteAddressBuffer B0,
-    ByteAddressBuffer W1,
-    ByteAddressBuffer B1,
-    ByteAddressBuffer W2,
-    ByteAddressBuffer B2,
+    ByteAddressBuffer buf,
+    const DecoderWeightOffsets offsets,
     uint width,
     const float x[14],
     out float y[10]
@@ -356,11 +344,11 @@ void evalSamplerMLP(
     [loop]
     for (uint r = 0; r < width; ++r)
     {
-        float s = neuralBufferLoad(B0, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
         [unroll]
         for (uint c = 0; c < 14; ++c)
         {
-            s += neuralBufferLoad(W0, r * 14 + c) * x[c];
+            s += neuralBufferLoadWithOffset(buf, offsets.w0Offset, r * 14 + c) * x[c];
         }
         h0[r] = max(s, 0.f);
     }
@@ -369,11 +357,11 @@ void evalSamplerMLP(
     [loop]
     for (uint r = 0; r < width; ++r)
     {
-        float s = neuralBufferLoad(B1, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b1Offset, r);
         [loop]
         for (uint c = 0; c < width; ++c)
         {
-            s += neuralBufferLoad(W1, r * width + c) * h0[c];
+            s += neuralBufferLoadWithOffset(buf, offsets.w1Offset, r * width + c) * h0[c];
         }
         h1[r] = max(s, 0.f);
     }
@@ -381,11 +369,11 @@ void evalSamplerMLP(
     [unroll]
     for (uint r = 0; r < 10; ++r)
     {
-        float s = neuralBufferLoad(B2, r);
+        float s = neuralBufferLoadWithOffset(buf, offsets.b2Offset, r);
         [loop]
         for (uint c = 0; c < width; ++c)
         {
-            s += neuralBufferLoad(W2, r * width + c) * h1[c];
+            s += neuralBufferLoadWithOffset(buf, offsets.w2Offset, r * width + c) * h1[c];
         }
         y[r] = s;
     }
@@ -420,15 +408,7 @@ float3 evalNeuralBRDFFromLatents(
     if (wiLocal.z <= 0.f || woLocal.z <= 0.f)
         return 0.f.xxx;
 
-    ByteAddressBuffer frameLinear = materials.getBuffer(md.frameLinearBufferID);
-    ByteAddressBuffer W0 = materials.getBuffer(md.W0BufferID);
-    ByteAddressBuffer B0 = materials.getBuffer(md.B0BufferID);
-    ByteAddressBuffer W1 = materials.getBuffer(md.W1BufferID);
-    ByteAddressBuffer B1 = materials.getBuffer(md.B1BufferID);
-    ByteAddressBuffer W2 = materials.getBuffer(md.W2BufferID);
-    ByteAddressBuffer B2 = materials.getBuffer(md.B2BufferID);
-    ByteAddressBuffer W3 = materials.getBuffer(md.W3BufferID);
-    ByteAddressBuffer B3 = materials.getBuffer(md.B3BufferID);
+    ByteAddressBuffer decoderBuf = materials.getBuffer(md.brdfDecoderBufferID);
 
     if (md.brdfMlpWidth == 0 || md.brdfMlpWidth > 64)
         return 0.f.xxx;
@@ -443,8 +423,8 @@ float3 evalNeuralBRDFFromLatents(
     for (uint r = 0; r < 12; ++r)
     {
         float s = 0.f;
-        s += dot(neuralBufferLoad4(frameLinear, r * 8 + 0), z4a);
-        s += dot(neuralBufferLoad4(frameLinear, r * 8 + 4), z4b);
+        s += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, r * 8 + 0), z4a);
+        s += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, r * 8 + 4), z4b);
         sf[r] = s;
     }
 
@@ -483,13 +463,13 @@ float3 evalNeuralBRDFFromLatents(
 
     float3 y = 0.f.xxx;
     if (md.brdfMlpWidth == 16 && md.brdfMlpDepth == 2)
-        y = evalMLP16x2(W0, B0, W1, B1, W2, B2, x);
+        y = evalMLP16x2(decoderBuf, md.brdfWeightOffsets, x);
     else if (md.brdfMlpWidth == 32 && md.brdfMlpDepth == 2)
-        y = evalMLP32x2(W0, B0, W1, B1, W2, B2, x);
+        y = evalMLP32x2(decoderBuf, md.brdfWeightOffsets, x);
     else if (md.brdfMlpWidth == 64 && md.brdfMlpDepth == 2)
-        y = evalMLP64x2(W0, B0, W1, B1, W2, B2, x);
+        y = evalMLP64x2(decoderBuf, md.brdfWeightOffsets, x);
     else if (md.brdfMlpWidth == 64 && md.brdfMlpDepth == 3)
-        y = evalMLP64x3(W0, B0, W1, B1, W2, B2, W3, B3, x);
+        y = evalMLP64x3(decoderBuf, md.brdfWeightOffsets, x);
     else
         return 0.f.xxx;
 
@@ -618,13 +598,7 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     if (wiLocal.z <= 0.f)
         return p;
 
-    ByteAddressBuffer frameLinear = materials.getBuffer(md.samplerFrameLinearBufferID);
-    ByteAddressBuffer W0 = materials.getBuffer(md.samplerW0BufferID);
-    ByteAddressBuffer B0 = materials.getBuffer(md.samplerB0BufferID);
-    ByteAddressBuffer W1 = materials.getBuffer(md.samplerW1BufferID);
-    ByteAddressBuffer B1 = materials.getBuffer(md.samplerB1BufferID);
-    ByteAddressBuffer W2 = materials.getBuffer(md.samplerW2BufferID);
-    ByteAddressBuffer B2 = materials.getBuffer(md.samplerB2BufferID);
+    ByteAddressBuffer decoderBuf = materials.getBuffer(md.samplerDecoderBufferID);
 
     float4 z4a = float4(z[0], z[1], z[2], z[3]);
     float4 z4b = float4(z[4], z[5], z[6], z[7]);
@@ -634,8 +608,8 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     for (uint r = 0; r < 12; ++r)
     {
         float s = 0.f;
-        s += dot(neuralBufferLoad4(frameLinear, r * 8 + 0), z4a);
-        s += dot(neuralBufferLoad4(frameLinear, r * 8 + 4), z4b);
+        s += dot(neuralBufferLoad4WithOffset(decoderBuf, md.samplerWeightOffsets.frameLinearOffset, r * 8 + 0), z4a);
+        s += dot(neuralBufferLoad4WithOffset(decoderBuf, md.samplerWeightOffsets.frameLinearOffset, r * 8 + 4), z4b);
         sf[r] = s;
     }
 
@@ -662,7 +636,7 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     }
 
     float raw[10];
-    evalSamplerMLP(W0, B0, W1, B1, W2, B2, md.brdfMlpWidth, x, raw);
+    evalSamplerMLP(decoderBuf, md.samplerWeightOffsets, md.samplerMlpWidth, x, raw);
 
     float3 N0 = neuralSafeNormalize(float3(sf[0], sf[1], sf[2]));
     float3 T0raw = float3(sf[3], sf[4], sf[5]);

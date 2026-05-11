@@ -50,29 +50,32 @@ namespace Falcor
     private:
         struct Data
         {
+            struct DecoderWeightOffsets
+            {
+                uint32_t frameLinearOffset = 0;
+                uint32_t w0Offset = 0;
+                uint32_t b0Offset = 0;
+                uint32_t w1Offset = 0;
+                uint32_t b1Offset = 0;
+                uint32_t w2Offset = 0;
+                uint32_t b2Offset = 0;
+                uint32_t w3Offset = 0;
+                uint32_t b3Offset = 0;
+            };
+
             TextureHandle texLatent0;
             TextureHandle texLatent1;
 
-            uint32_t frameLinearBufferID = uint32_t(-1);
-            uint32_t W0BufferID = uint32_t(-1);
-            uint32_t B0BufferID = uint32_t(-1);
-            uint32_t W1BufferID = uint32_t(-1);
-            uint32_t B1BufferID = uint32_t(-1);
-            uint32_t W2BufferID = uint32_t(-1);
-            uint32_t B2BufferID = uint32_t(-1);
-            uint32_t W3BufferID = uint32_t(-1);
-            uint32_t B3BufferID = uint32_t(-1);
+            uint32_t brdfDecoderBufferID = uint32_t(-1);
+            uint32_t samplerDecoderBufferID = uint32_t(-1);
 
-            uint32_t samplerFrameLinearBufferID = uint32_t(-1);
-            uint32_t samplerW0BufferID = uint32_t(-1);
-            uint32_t samplerB0BufferID = uint32_t(-1);
-            uint32_t samplerW1BufferID = uint32_t(-1);
-            uint32_t samplerB1BufferID = uint32_t(-1);
-            uint32_t samplerW2BufferID = uint32_t(-1);
-            uint32_t samplerB2BufferID = uint32_t(-1);
+            uint32_t brdfMlpWidth = 32;
+            uint32_t brdfMlpDepth = 2;
+            DecoderWeightOffsets brdfWeightOffsets = {};
 
-            uint32_t mlpWidth = 32;
-            uint32_t mlpDepth = 2;
+            uint32_t samplerMlpWidth = 32;
+            uint32_t samplerMlpDepth = 2;
+            DecoderWeightOffsets samplerWeightOffsets = {};
         };
         static_assert(sizeof(Data) <= sizeof(MaterialPayload), "NeuralMaterial payload must fit in MaterialPayload");
 
@@ -85,23 +88,8 @@ namespace Falcor
         ref<Texture> mpLatent1;
         ref<Sampler> mpSampler;
 
-        ref<Buffer> mpFrameLinear;
-        ref<Buffer> mpW0;
-        ref<Buffer> mpB0;
-        ref<Buffer> mpW1;
-        ref<Buffer> mpB1;
-        ref<Buffer> mpW2;
-        ref<Buffer> mpB2;
-        ref<Buffer> mpW3;
-        ref<Buffer> mpB3;
-
-        ref<Buffer> mpSamplerFrameLinear;
-        ref<Buffer> mpSamplerW0;
-        ref<Buffer> mpSamplerB0;
-        ref<Buffer> mpSamplerW1;
-        ref<Buffer> mpSamplerB1;
-        ref<Buffer> mpSamplerW2;
-        ref<Buffer> mpSamplerB2;
+        ref<Buffer> mpBrdfDecoderBuffer;
+        ref<Buffer> mpSamplerDecoderBuffer;
 
         Data mData = {};
     };

@@ -53,6 +53,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import AssetConverter
 
 
 # =============================================================================
@@ -88,7 +89,8 @@ class TrainConfig:
     seed: int = 1337
     training_n: int = 65536 # total samples generated per outer epoch
     validation_n: int = 65536
-    max_epochs: int = 50
+    max_epochs: int = 300000
+    sampler_epochs: int = 20000
 
     lr: float = 1e-3
     lr_min: float = 1e-4
@@ -890,6 +892,12 @@ def importance_sampling_loss(
     )
 
     brdf_weights = (y_true.sum(dim=-1) / (3.0 + eps)).clamp_min(0.0)
+    # Normalize to sum-to-1 so loss scale is independent of BRDF magnitude.
+    # Without this, bright specular samples (large y) produce large negative
+    # loss terms when pdf > 1, pushing the loss into the hundreds-negative range.
+    weight_sum = brdf_weights.sum().clamp_min(eps)
+    brdf_weights = brdf_weights / weight_sum
+
     loss_terms = -torch.log(pdf_sampler) * brdf_weights
     finite_mask = torch.isfinite(loss_terms)
 
@@ -897,7 +905,8 @@ def importance_sampling_loss(
         # Keep graph connected while avoiding a hard failure on a pathological batch.
         return (pdf_sampler * 0.0).sum()
 
-    return loss_terms[finite_mask].mean()
+    # sum not mean — weights already integrate to ~1 over the finite samples
+    return loss_terms[finite_mask].sum()
 
 
 def build_material_features(
@@ -1228,7 +1237,11 @@ def train_one_epoch(
 
     sampler_loss = None
 
-    if cfg.train_importance_sampler:
+    should_train_sampler = (
+        cfg.train_importance_sampler
+        and (epoch < cfg.sampler_epochs)
+    )
+    if should_train_sampler:
         sampler_batch = batch_decoder if batch_sampler is None else batch_sampler
 
         uv_sam = sampler_batch["uv"].to(device, non_blocking=True)
@@ -1310,7 +1323,7 @@ def validate(
 
     out = {
         "phase": phase,
-        "val_loss": loss.item(),
+        "brdf_val_loss": loss.item(),
         "val_mae": stats["mae"],
         "val_yhat_mean": stats["yhat_mean"],
         "val_y_mean": stats["y_mean"],
@@ -1353,274 +1366,6 @@ def save_checkpoint(
     torch.save(payload, ckpt_path)
     return ckpt_path
 
-
-def load_model_weights_from_checkpoint(
-    model: NeuralMaterialModel, ckpt_path: str, device: torch.device
-) -> Dict:
-    payload = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(payload["model"])
-    return payload
-
-
-def export_latent_texture(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
-    os.makedirs(cfg.out_dir, exist_ok=True)
-
-    Z = model.latent.Z.detach().cpu()  # [1,C,H,W]
-    torch.save(
-        {"Z": Z, "shape": (cfg.tex_h, cfg.tex_w, cfg.latent_ch)},
-        os.path.join(cfg.out_dir, "latent_texture.pt"),
-    )
-
-    Z_np = Z.numpy()
-    if cfg.latent_ch == 8:
-        rgba0 = Z_np[0, 0:4, :, :]  # [4,H,W]
-        rgba1 = Z_np[0, 4:8, :, :]
-        np.savez_compressed(os.path.join(cfg.out_dir, "latent_rgba0.npz"), rgba=rgba0)
-        np.savez_compressed(os.path.join(cfg.out_dir, "latent_rgba1.npz"), rgba=rgba1)
-    else:
-        np.savez_compressed(os.path.join(cfg.out_dir, "latent_all.npz"), z=Z_np)
-
-
-def export_decoder_weights(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
-    os.makedirs(cfg.out_dir, exist_ok=True)
-
-    torch.save(model.decoder.state_dict(), os.path.join(cfg.out_dir, "decoder.pt"))
-
-    sd = model.decoder.state_dict()
-    out = {
-        "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
-        "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-    }
-
-    out["frame_linear.weight"] = sd["frame_linear.weight"].detach().cpu().numpy()
-    if "frame_linear.bias" in sd:
-        out["frame_linear.bias"] = sd["frame_linear.bias"].detach().cpu().numpy()
-
-    for k, v in sd.items():
-        if k.startswith("mlp."):
-            out[k] = v.detach().cpu().numpy()
-
-    np.savez_compressed(os.path.join(cfg.out_dir, "decoder_weights.npz"), **out)
-
-
-def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
-    rgba_hw4 = np.asarray(rgba_hw4, dtype=np.float32)
-    assert rgba_hw4.ndim == 3 and rgba_hw4.shape[2] == 4, f"Expected HxWx4, got {rgba_hw4.shape}"
-
-    h, w, _ = rgba_hw4.shape
-
-    try:
-        import OpenEXR
-        import Imath
-
-        header = OpenEXR.Header(w, h)
-        pt = Imath.PixelType(Imath.PixelType.FLOAT)
-        header["channels"] = {
-            "R": Imath.Channel(pt),
-            "G": Imath.Channel(pt),
-            "B": Imath.Channel(pt),
-            "A": Imath.Channel(pt),
-        }
-
-        exr = OpenEXR.OutputFile(str(path), header)
-        exr.writePixels(
-            {
-                "R": rgba_hw4[:, :, 0].astype(np.float32).tobytes(),
-                "G": rgba_hw4[:, :, 1].astype(np.float32).tobytes(),
-                "B": rgba_hw4[:, :, 2].astype(np.float32).tobytes(),
-                "A": rgba_hw4[:, :, 3].astype(np.float32).tobytes(),
-            }
-        )
-        exr.close()
-        return
-    except Exception:
-        pass
-
-
-def save_weights_bin(path: Path, weights: dict) -> None:
-    return save_network_weights_bin(
-        path=path,
-        weights=weights,
-        input_dim=20,
-        output_dim=3,
-    )
-
-
-def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> dict:
-    frame_weight = np.asarray(weights["frame_linear.weight"], dtype=np.float32)
-    if frame_weight.shape != (12, 8):
-        raise ValueError(f"frame_linear.weight expected shape (12, 8), got {frame_weight.shape}")
-
-    latent_ch = int(np.asarray(weights.get("latent_ch", np.array([8], dtype=np.int32))).reshape(-1)[0])
-    num_frames = int(np.asarray(weights.get("num_frames", np.array([2], dtype=np.int32))).reshape(-1)[0])
-
-    layer_indices = sorted(
-        int(k.split(".")[1]) for k in weights.keys() if k.startswith("mlp.") and k.endswith(".weight")
-    )
-    if not layer_indices:
-        raise ValueError("No MLP layers found in weights.")
-
-    linear_layers = ["frame_linear"] + [f"mlp.{idx}" for idx in layer_indices]
-    mlp_depth = len(layer_indices) - 1
-    if mlp_depth not in (2, 3):
-        raise ValueError(f"Unsupported MLP depth: {mlp_depth}. Expected 2 or 3.")
-
-    first_w = np.asarray(weights[f"mlp.{layer_indices[0]}.weight"], dtype=np.float32)
-    mlp_width = int(first_w.shape[0])
-
-    expected_prev = input_dim
-    decoder_layout = {"frame_linear.weight": [12, 8]}
-    for idx in layer_indices:
-        w_name = f"mlp.{idx}.weight"
-        b_name = f"mlp.{idx}.bias"
-        w = np.asarray(weights[w_name], dtype=np.float32)
-        b = np.asarray(weights[b_name], dtype=np.float32)
-
-        out_dim = output_dim if idx == layer_indices[-1] else mlp_width
-        if tuple(w.shape) != (out_dim, expected_prev):
-            raise ValueError(f"{w_name} expected shape {(out_dim, expected_prev)}, got {w.shape}")
-        if tuple(b.shape) != (out_dim,):
-            raise ValueError(f"{b_name} expected shape {(out_dim,)}, got {b.shape}")
-
-        decoder_layout[w_name] = [int(w.shape[0]), int(w.shape[1])]
-        decoder_layout[b_name] = [int(b.shape[0])]
-        expected_prev = mlp_width
-
-    if latent_ch != 8:
-        raise ValueError(f"Only latent_ch=8 is supported for runtime export, got {latent_ch}")
-    if num_frames != 2:
-        raise ValueError(f"Only num_frames=2 is supported for runtime export, got {num_frames}")
-    if mlp_width not in (16, 32, 64):
-        raise ValueError(f"Unsupported mlp_width={mlp_width}. Expected one of 16, 32, 64.")
-
-    return {
-        "latent_ch": latent_ch,
-        "num_frames": num_frames,
-        "mlp_width": mlp_width,
-        "mlp_depth": mlp_depth,
-        "linear_layers": linear_layers,
-        "decoder_layout": decoder_layout,
-    }
-
-
-def save_network_weights_bin(
-    path: Path,
-    weights: dict,
-    *,
-    input_dim: int,
-    output_dim: int,
-) -> dict:
-    layout = _infer_network_layout(weights, input_dim=input_dim, output_dim=output_dim)
-    latent_ch = layout["latent_ch"]
-    num_frames = layout["num_frames"]
-    mlp_width = layout["mlp_width"]
-    mlp_depth = layout["mlp_depth"]
-
-    with open(path, "wb") as f:
-        f.write(b"NMDLWT02")
-        f.write(struct.pack("<iiii", latent_ch, num_frames, mlp_width, mlp_depth))
-
-        for layer_name in layout["linear_layers"]:
-            weight_name = f"{layer_name}.weight"
-            bias_name = f"{layer_name}.bias"
-            w = np.asarray(weights[weight_name], dtype=np.float32)
-            f.write(w.ravel(order="C").tobytes())
-            if bias_name in weights:
-                b = np.asarray(weights[bias_name], dtype=np.float32)
-                f.write(b.ravel(order="C").tobytes())
-
-    layout["weight_file_format"] = "NMDLWT02"
-    return layout
-
-
-def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
-    _, h, w = latent.shape
-    layout = _infer_network_layout(weights, input_dim=20, output_dim=3)
-    metadata = {
-        "width": int(w),
-        "height": int(h),
-        "latent_dim": int(latent.shape[0]),
-        "num_frames": layout["num_frames"],
-        "apply_exp": True,
-        "mlp_width": layout["mlp_width"],
-        "mlp_depth": layout["mlp_depth"],
-        "weight_file_format": "NMDLWT02",
-        "decoder_layout": layout["decoder_layout"],
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
-
-
-def save_sampler_metadata(path: Path, weights: dict) -> None:
-    # Sampler head outputs 5 values per lobe × 2 lobes = 10 channels.
-    layout = _infer_network_layout(weights, input_dim=14, output_dim=10)
-    metadata = {
-        "latent_dim": layout["latent_ch"],
-        "num_frames": layout["num_frames"],
-        "mlp_width": layout["mlp_width"],
-        "mlp_depth": layout["mlp_depth"],
-        "weight_file_format": "NMDLWT02",
-        "decoder_layout": layout["decoder_layout"],
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
-
-
-def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
-    preview_dir = Path(cfg.preview_out_dir) if cfg.preview_out_dir else Path(__file__).resolve().parents[2] / "MatXScenes" / "Preview"
-    os.makedirs(preview_dir, exist_ok=True)
-
-    if cfg.latent_ch != 8:
-        print(
-            f"[export] Skipping renderer-ready latent/weight bundle because latent_ch={cfg.latent_ch}; expected 8."
-        )
-        return
-
-    latent = model.latent.Z.detach().cpu().numpy()[0]
-    rgba0 = latent[0:4].transpose(1, 2, 0).copy()
-    rgba1 = latent[4:8].transpose(1, 2, 0).copy()
-
-    write_exr(preview_dir / "latent0.exr", rgba0)
-    write_exr(preview_dir / "latent1.exr", rgba1)
-
-    np.save(preview_dir / "latent0.npy", rgba0)
-    np.save(preview_dir / "latent1.npy", rgba1)
-
-    sd = model.decoder.state_dict()
-    weights = {
-        "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
-        "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-        "frame_linear.weight": sd["frame_linear.weight"].detach().cpu().numpy(),
-    }
-    for key, value in sd.items():
-        if key.startswith("mlp."):
-            weights[key] = value.detach().cpu().numpy()
-
-    save_weights_bin(preview_dir / "decoder_weights.bin", weights)
-    save_metadata(preview_dir / "metadata.json", latent, weights)
-
-    if cfg.train_importance_sampler:
-        sampler_sd = model.importance_sampler.state_dict()
-        sampler_weights = {
-            "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
-            "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-            "frame_linear.weight": sampler_sd["frame_linear.weight"].detach().cpu().numpy(),
-        }
-        for key, value in sampler_sd.items():
-            if key.startswith("mlp."):
-                sampler_weights[key] = value.detach().cpu().numpy()
-
-        save_network_weights_bin(
-            preview_dir / "sampler_weights.bin",
-            sampler_weights,
-            input_dim=14,
-            output_dim=10,
-        )
-        save_sampler_metadata(preview_dir / "sampler_metadata.json", sampler_weights)
-
-    print(f"[export] Renderer-ready assets written to: {preview_dir}")
-
-
 def save_config(cfg: TrainConfig) -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
     with open(os.path.join(cfg.out_dir, "config.json"), "w", encoding="utf-8") as f:
@@ -1650,15 +1395,16 @@ def parse_args() -> TrainConfig:
     p.add_argument("--latent_ch", type=int, default=8)
 
     p.add_argument("--num_frames", type=int, default=2)
-    p.add_argument("--brdf_mlp_width", type=int, default=32)
+    p.add_argument("--brdf_mlp_width", type=int, default=64)
     p.add_argument("--brdf_mlp_depth", type=int, default=2)
     p.add_argument("--sampler_mlp_width", type=int, default=32)
-    p.add_argument("--sampler_mlp_depth", type=int, default=2)
+    p.add_argument("--sampler_mlp_depth", type=int, default=3)
     p.add_argument("--exp_offset", type=float, default=3.0)
 
     p.add_argument("--training_n", type=int, default=65536)
     p.add_argument("--validation_size", type=int, default=65536)
     p.add_argument("--max_epochs", type=int, default=300000)
+    p.add_argument("--sampler_epochs", type=int, default=20000)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
     p.add_argument("--lr_latent", type=float, default=None)
@@ -1780,6 +1526,7 @@ def parse_args() -> TrainConfig:
     cfg.training_n = args.training_n
     cfg.validation_n = args.validation_size
     cfg.max_epochs = args.max_epochs
+    cfg.sampler_epochs = args.sampler_epochs
     cfg.lr = args.lr
     cfg.lr_min = args.lr_min
     cfg.lr_latent = args.lr_latent
@@ -1902,7 +1649,7 @@ def main():
     opt = make_optimizer(model, cfg, current_phase)
     scheduler = make_scheduler(opt, cfg)
 
-    best_val = float("inf")
+    best_brdf_val_loss = float("inf")
     best_model_state: Optional[Dict[str, torch.Tensor]] = None
     best_metrics: Optional[Dict[str, float]] = None
     best_epoch: Optional[int] = None
@@ -1910,6 +1657,10 @@ def main():
     last_epoch: Optional[int] = None
     last_metrics: Optional[Dict[str, float]] = None
     run_status = "completed"
+
+    best_sampler_loss = float("inf")
+    best_sampler_state: Optional[Dict[str, torch.Tensor]] = None
+    best_sampler_epoch: Optional[int] = None
 
     try:
         # Generate validation data once per required payload shape.
@@ -1957,6 +1708,7 @@ def main():
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
         else:
             print(f"[train] brdf-only mode: batch={cfg.training_n}")
+
         for epoch in range(cfg.max_epochs):
             phase = get_training_phase(cfg, epoch)
             phase_changed = phase != current_phase
@@ -2032,19 +1784,29 @@ def main():
                     f"[train] epoch {epoch:03d} "
                     f"phase={phase} brdf_loss={metrics['brdf_loss']:.6f}" \
                     f"{sampler_log} "
-                    f"val_loss={metrics['val_loss']:.6f} "
+                    f"val_loss={metrics['brdf_val_loss']:.6f} "
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )
 
-            if metrics["val_loss"] < best_val:
-                best_val = metrics["val_loss"]
+            if metrics["brdf_val_loss"] < best_brdf_val_loss:
+                best_brdf_val_loss = metrics["brdf_val_loss"]
                 best_epoch = epoch
                 best_phase = phase
                 best_metrics = dict(metrics)
                 best_model_state = snapshot_model_state(model)
-                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
+                print(f"[best] epoch {epoch:03d} val_loss={best_brdf_val_loss:.6f}")
 
+            if cfg.train_importance_sampler and "sampler_loss" in metrics:
+                current_sampler_loss = metrics["sampler_loss"]
+                if current_sampler_loss < best_sampler_loss:
+                    best_sampler_loss = current_sampler_loss
+                    best_sampler_epoch = epoch
+                    best_sampler_state = {
+                        k: v.detach().cpu().clone()
+                        for k, v in model.importance_sampler.state_dict().items()
+                    }
+                    print(f"[best_sampler] epoch {epoch:03d} sampler_loss={metrics['sampler_loss']:.6f} cached in memory")
             if run_logger.should_log_progress(
                 epoch=epoch,
                 phase_changed=phase_changed,
@@ -2078,6 +1840,10 @@ def main():
             initialize_latent_texture_from_encoder(
                 model, cfg, best_epoch
             )
+
+        if best_sampler_state is not None:
+            model.importance_sampler.load_state_dict(best_sampler_state)
+
         best_ckpt_path = save_checkpoint(
             model,
             None,
@@ -2089,11 +1855,11 @@ def main():
         )
         print(
             f"[export] Restored best validation state from epoch "
-            f"{best_epoch:03d} with val_loss={best_metrics.get('val_loss', float('nan')):.6f} "
+            f"{best_epoch:03d} with val_loss={best_metrics.get('brdf_val_loss', float('nan')):.6f} and sampler_loss={best_sampler_loss:.6f} at epoch {best_sampler_epoch:03d} "
             f"and saved {best_ckpt_path}"
         )
 
-    export_renderer_assets(model, cfg)
+    AssetConverter.export_renderer_assets(model, cfg)
     print("Done. Exports written to:", cfg.out_dir)
 
 

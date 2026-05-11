@@ -152,8 +152,56 @@ void main(uint3 threadId : SV_DispatchThreadID)
         uv = (float2(texel) + 0.5f) / float2(gUvGridFullWidth, gUvGridFullHeight);
     }
 
-    float3 wo = sample_hemisphere(float2(rand(woSeed), rand(woSeed)));
-    float3 wi = sample_hemisphere(float2(rand(wiSeed), rand(wiSeed)));
+    // Sample wi and wo using the half/difference vector parametrization (Rusinkiewicz 1998).
+    //
+    // Approach 3: sample theta_d freely, then constrain theta_h to [0, pi/2 - theta_d].
+    // This guarantees both wi and wo remain in the upper hemisphere with no rejection.
+    // The tradeoff is that high-theta_h (grazing microfacet) configurations are
+    // undersampled relative to a uniform (h,d) distribution, but those regions
+    // contribute little energy and are learned easily by the network.
+    //
+    // Seed stream 1 (woSeed) drives (phi_h, phi_d) — the azimuthal angles.
+    // Seed stream 2 (wiSeed) drives (u_thetaD, u_thetaH) — the elevation angles.
+    //
+    // Note: in this file wi = view/incident direction (toward viewer),
+    //       wo = light direction (away from surface). Both must have z > 0.
+
+    // --- Elevation angles ---
+    // theta_d: free uniform sampling on [0, pi/2]
+    float u_thetaD = rand(wiSeed);
+    float cosTheta_d = u_thetaD;                        // cos(theta_d) uniform in [0,1] → uniform solid angle
+    float sinTheta_d = sqrt(max(0.f, 1.f - cosTheta_d * cosTheta_d));
+    float theta_d    = acos(cosTheta_d);
+
+    // theta_h: constrained to [0, pi/2 - theta_d] so that both wi and wo stay above horizon
+    float theta_h_max   = M_PI_2 - theta_d;            // M_PI_2 = pi/2
+    float cosMax        = cos(theta_h_max);             // = sin(theta_d)
+    float u_thetaH      = rand(wiSeed);
+    // Remap u_thetaH into the constrained solid-angle-uniform range
+    float cosTheta_h    = 1.f - u_thetaH * (1.f - cosMax);
+    float sinTheta_h    = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
+
+    // --- Azimuthal angles ---
+    float phi_h = M_2PI * rand(woSeed);                 // [0, 2*pi)
+    float phi_d = M_PI  * rand(woSeed);                 // [0, pi) — reciprocity symmetry
+
+    // --- Half vector h in tangent space (normal = (0,0,1)) ---
+    float3 h = float3(sinTheta_h * cos(phi_h),
+                      sinTheta_h * sin(phi_h),
+                      cosTheta_h);
+
+    // --- Build an orthonormal frame with h as the north pole ---
+    // Used to express wi (= omega_i in difference-vector frame) relative to h.
+    float3 h_tangent, h_bitangent;
+    makeBasis(h, h_tangent, h_bitangent);
+
+    // --- wi expressed in the h-aligned frame via (theta_d, phi_d) ---
+    float3 wi = sinTheta_d * cos(phi_d) * h_tangent
+              + sinTheta_d * sin(phi_d) * h_bitangent
+              + cosTheta_d              * h;
+
+    // --- wo is the reflection of wi about h ---
+    float3 wo = 2.f * dot(wi, h) * h - wi;
 
     // Keep independent sample streams for UVs, BSDF directions, and any
     // additional material sampling performed through the Falcor interfaces.
