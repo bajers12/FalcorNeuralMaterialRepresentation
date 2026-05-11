@@ -882,35 +882,64 @@ def importance_sampling_loss(
     model: NeuralMaterialModel,
     z: torch.Tensor,
     wi: torch.Tensor,
-    wo: torch.Tensor,
-    y: torch.Tensor,
     eps: float = 1e-6,
 ) -> torch.Tensor:
     """
-    Trains sampler by maximizing probability of directions weighted by BRDF magnitude.
+    KL divergence loss for the importance sampler, as described in Section 4.3 of
+    "Real-Time Neural Appearance Models" (Zeltner et al., 2023, NVIDIA).
+
+    The sampler is trained to match the (unnormalized) BRDF distribution via the
+    forward KL divergence:
+
+        KL(q || p̃) = E_{wo ~ q(wo|wi,z)} [ log q(wo|wi,z) - log p̃(wo|wi,z) ]
+
+    where:
+        q(wo|wi,z) : the sampler's GGX-mixture PDF  (differentiable w.r.t. sampler params)
+        p̃(wo|wi,z) : target proportional to BRDF luminance, f(wi,wo) * |cos θo|
+                     evaluated by the frozen BRDF decoder at the *sampled* wo directions.
+
+    Key design choices matching the paper:
+      - wo is drawn ON-POLICY from the sampler (not reused from the data batch).
+        This is mandatory for the KL gradient to be unbiased w.r.t. sampler parameters.
+      - The BRDF decoder is evaluated at the sampled wo but its gradients are DETACHED,
+        so only the sampler MLP is updated (the paper explicitly recommends this for
+        training stability).
+      - The latent code z must already be detached by the caller (per-paper recommendation).
+      - log p̃ uses a luminance-weighted average of the 3 RGB channels and is log-clamped
+        to avoid -inf when the BRDF evaluates to near-zero (dark/shadowed samples).
     """
-    y_true = torch.nan_to_num(y, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
-    pdf_sampler = model.importance_sampler.eval_pdf(z, wi, wo)
+    # --- 1. Sample wo on-policy from the current sampler ---
+    # sample() is differentiable through the GGX parameters (alpha, weights, frames),
+    # so gradients flow back into the sampler MLP via log q below.
+    wo_sampled, pdf_sampler = model.importance_sampler.sample(z, wi)  # [B,3], [B]
+
     pdf_sampler = torch.nan_to_num(pdf_sampler, nan=eps, posinf=1e6, neginf=eps).clamp(
         min=eps, max=1e6
     )
+    log_q = torch.log(pdf_sampler)  # [B]   — differentiable w.r.t. sampler params
 
-    brdf_weights = (y_true.sum(dim=-1) / (3.0 + eps)).clamp_min(0.0)
-    # Normalize to sum-to-1 so loss scale is independent of BRDF magnitude.
-    # Without this, bright specular samples (large y) produce large negative
-    # loss terms when pdf > 1, pushing the loss into the hundreds-negative range.
-    weight_sum = brdf_weights.sum().clamp_min(eps)
-    brdf_weights = brdf_weights / weight_sum
+    # --- 2. Evaluate the BRDF target at the sampled wo (frozen, no grad) ---
+    with torch.no_grad():
+        # Evaluate BRDF: y_hat [B, 3] = f(wi, wo_sampled) * |cos θo| (cos baked in)
+        y_hat = model.decoder.forward(z, wi, wo_sampled)  # [B, 3]
+        y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
 
-    loss_terms = -torch.log(pdf_sampler) * brdf_weights
+        # Scalar luminance target: mean over RGB channels, clamped for log stability
+        brdf_luminance = (y_hat.sum(dim=-1) / 3.0).clamp_min(eps)  # [B]
+        log_p_tilde = torch.log(brdf_luminance)  # [B]  — no grad needed
+
+    # --- 3. KL loss: E_{wo~q}[ log q - log p̃ ] ---
+    # Minimising this pushes q toward the BRDF shape.
+    # We stop grad on log_p_tilde (already in no_grad context above), so only
+    # log_q contributes gradients — exactly as the paper recommends.
+    loss_terms = log_q - log_p_tilde.detach()  # [B]
+
     finite_mask = torch.isfinite(loss_terms)
-
     if not finite_mask.any():
-        # Keep graph connected while avoiding a hard failure on a pathological batch.
+        # Keep the graph alive on a pathological batch without a hard crash.
         return (pdf_sampler * 0.0).sum()
 
-    # sum not mean — weights already integrate to ~1 over the finite samples
-    return loss_terms[finite_mask].sum()
+    return loss_terms[finite_mask].mean()
 
 
 def build_material_features(
@@ -1272,11 +1301,7 @@ def train_one_epoch(
         sampler_batch = batch_decoder if batch_sampler is None else batch_sampler
 
         uv_sam = sampler_batch["uv"].to(device, non_blocking=True)
-        y_sam = sampler_batch["y"].to(device, non_blocking=True)
-        wi_sam, wo_sam = _maybe_transform_dirs_with_normals(sampler_batch, cfg, device)
-
-        if cfg.clamp_min_target > 0.0:
-            y_sam = y_sam.clamp_min(cfg.clamp_min_target)
+        wi_sam, _ = _maybe_transform_dirs_with_normals(sampler_batch, cfg, device)
 
         if phase == "bootstrap":
             material_features_sam = build_material_features(sampler_batch, cfg, device)
@@ -1284,7 +1309,9 @@ def train_one_epoch(
         else:
             z_sam = model.latent.sample(uv_sam).detach()
 
-        sampler_loss = importance_sampling_loss(model, z_sam, wi_sam, wo_sam, y_sam, cfg.log_eps)
+        # KL-divergence loss (paper Section 4.3): on-policy wo ~ sampler, frozen BRDF target.
+        # z_sam is detached here (latent has no grad), matching the paper's stability recommendation.
+        sampler_loss = importance_sampling_loss(model, z_sam, wi_sam, cfg.log_eps)
         if not torch.isfinite(sampler_loss):
             raise RuntimeError(f"Non-finite sampler loss at epoch {epoch}: {sampler_loss.item()}")
 
