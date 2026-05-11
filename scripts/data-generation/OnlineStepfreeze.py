@@ -888,56 +888,60 @@ def importance_sampling_loss(
     KL divergence loss for the importance sampler, as described in Section 4.3 of
     "Real-Time Neural Appearance Models" (Zeltner et al., 2023, NVIDIA).
 
-    The sampler is trained to match the (unnormalized) BRDF distribution via the
-    forward KL divergence:
+    Minimises the forward KL divergence directly:
 
         KL(q || p̃) = E_{wo ~ q(wo|wi,z)} [ log q(wo|wi,z) - log p̃(wo|wi,z) ]
 
     where:
-        q(wo|wi,z) : the sampler's GGX-mixture PDF  (differentiable w.r.t. sampler params)
-        p̃(wo|wi,z) : target proportional to BRDF luminance, f(wi,wo) * |cos θo|
-                     evaluated by the frozen BRDF decoder at the *sampled* wo directions.
+        q(wo|wi,z) : the sampler's two-lobe GGX-mixture PDF
+        p̃(wo|wi,z) : unnormalised BRDF target ∝ f(wi,wo)·|cosθo|, evaluated
+                     by the frozen BRDF decoder at the sampled wo directions.
 
-    Key design choices matching the paper:
-      - wo is drawn ON-POLICY from the sampler (not reused from the data batch).
-        This is mandatory for the KL gradient to be unbiased w.r.t. sampler parameters.
-      - The BRDF decoder is evaluated at the sampled wo but its gradients are DETACHED,
-        so only the sampler MLP is updated (the paper explicitly recommends this for
-        training stability).
-      - The latent code z must already be detached by the caller (per-paper recommendation).
-      - log p̃ uses a luminance-weighted average of the 3 RGB channels and is log-clamped
-        to avoid -inf when the BRDF evaluates to near-zero (dark/shadowed samples).
+    Gradient estimator — reparameterization:
+    ----------------------------------------
+    GGX VNDF sampling (Heitz 2018) is reparameterizable: wo is a deterministic
+    differentiable function of (u1, u2, ax, ay, frames), where u1, u2 are fixed
+    uniform noise constants. Concretely in sample():
+
+        m_local = f(u1, u2, ax, ay)           # differentiable in ax, ay
+        wo = reflect(wi, m_local)             # differentiable in m_local
+        wo_world = R @ wo                     # differentiable in t, bv, n frames
+
+    So gradients flow through wo_sampled into ax, ay, frames, and lobe_weights —
+    the sampler learns by shifting *where* it places samples, not just by
+    reweighting the PDF at fixed points. This gives lower-variance gradients than
+    the score-function (REINFORCE) estimator and allows the direct KL as the loss.
+
+    The loss value is the true KL estimate and should decrease toward ~0 during
+    training, making it directly interpretable as a progress metric.
+
+    Additional paper recommendations followed here:
+      - z must be detached by the caller (latent has no grad w.r.t. sampler).
+      - BRDF decoder is evaluated inside no_grad; only sampler params update.
     """
-    # --- 1. Sample wo on-policy from the current sampler ---
-    # sample() is differentiable through the GGX parameters (alpha, weights, frames),
-    # so gradients flow back into the sampler MLP via log q below.
-    wo_sampled, pdf_sampler = model.importance_sampler.sample(z, wi)  # [B,3], [B]
+    # --- 1. Sample wo on-policy WITH gradient (reparameterized) ---
+    wo_sampled, pdf_q = model.importance_sampler.sample(z, wi)    # [B, 3], [B]
+    pdf_q = torch.nan_to_num(pdf_q, nan=eps, posinf=1e6, neginf=eps).clamp(min=eps, max=1e6)
+    log_q = torch.log(pdf_q)                                       # [B], has grad
 
-    pdf_sampler = torch.nan_to_num(pdf_sampler, nan=eps, posinf=1e6, neginf=eps).clamp(
-        min=eps, max=1e6
-    )
-    log_q = torch.log(pdf_sampler)  # [B]   — differentiable w.r.t. sampler params
-
-    # --- 2. Evaluate the BRDF target at the sampled wo (frozen, no grad) ---
+    # --- 2. Evaluate frozen BRDF target at sampled wo ---
+    # wo_sampled is passed in but its gradient is not needed by the decoder;
+    # we only need the scalar BRDF value as a fixed target weight.
     with torch.no_grad():
-        # Evaluate BRDF: y_hat [B, 3] = f(wi, wo_sampled) * |cos θo| (cos baked in)
-        y_hat = model.decoder.forward(z, wi, wo_sampled)  # [B, 3]
+        y_hat = model.decoder.forward(z, wi, wo_sampled.detach())  # [B, 3]
         y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
+        brdf_luminance = (y_hat.sum(dim=-1) / 3.0).clamp_min(eps) # [B]
+        log_p_tilde = torch.log(brdf_luminance)                    # [B], no grad
 
-        # Scalar luminance target: mean over RGB channels, clamped for log stability
-        brdf_luminance = (y_hat.sum(dim=-1) / 3.0).clamp_min(eps)  # [B]
-        log_p_tilde = torch.log(brdf_luminance)  # [B]  — no grad needed
-
-    # --- 3. KL loss: E_{wo~q}[ log q - log p̃ ] ---
-    # Minimising this pushes q toward the BRDF shape.
-    # We stop grad on log_p_tilde (already in no_grad context above), so only
-    # log_q contributes gradients — exactly as the paper recommends.
-    loss_terms = log_q - log_p_tilde.detach()  # [B]
+    # --- 3. Direct KL loss: E_{wo~q}[ log q - log p̃ ] ---
+    # Both log_q (via reparameterized wo) and log_p_tilde contribute to the value,
+    # but only log_q has gradients. log_p_tilde is detached (inside no_grad above).
+    # The loss value IS the KL estimate — interpretable, should decrease over time.
+    loss_terms = log_q - log_p_tilde                               # [B], has grad
 
     finite_mask = torch.isfinite(loss_terms)
     if not finite_mask.any():
-        # Keep the graph alive on a pathological batch without a hard crash.
-        return (pdf_sampler * 0.0).sum()
+        return (pdf_q * 0.0).sum()
 
     return loss_terms[finite_mask].mean()
 
@@ -1783,7 +1787,8 @@ def main():
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )
-
+            if epoch%10 == 0:
+                print(f"sampler loss: {metrics['sampler_loss']}")
             if metrics["brdf_val_loss"] < best_brdf_val_loss:
                 best_brdf_val_loss = metrics["brdf_val_loss"]
                 best_epoch = epoch
@@ -1791,7 +1796,6 @@ def main():
                 best_metrics = dict(metrics)
                 best_model_state = snapshot_model_state(model)
                 print(f"[best] epoch {epoch:03d} val_loss={best_brdf_val_loss:.6f}")
-
             if cfg.train_importance_sampler and "sampler_loss" in metrics:
                 current_sampler_loss = metrics["sampler_loss"]
                 if current_sampler_loss < best_sampler_loss:
