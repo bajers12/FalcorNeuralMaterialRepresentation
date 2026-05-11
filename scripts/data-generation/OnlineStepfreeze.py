@@ -87,7 +87,8 @@ class TrainConfig:
     seed: int = 1337
     training_n: int = 65536 # total samples generated per outer epoch
     validation_n: int = 65536
-    max_epochs: int = 50
+    max_epochs: int = 300000
+    sampler_epochs: int = 20000
 
     lr: float = 1e-3
     lr_min: float = 1e-4
@@ -1256,7 +1257,11 @@ def train_one_epoch(
 
     sampler_loss = None
 
-    if cfg.train_importance_sampler:
+    should_train_sampler = (
+        cfg.train_importance_sampler
+        and (epoch < cfg.sampler_epochs)
+    )
+    if should_train_sampler:
         sampler_batch = batch_decoder if batch_sampler is None else batch_sampler
 
         uv_sam = sampler_batch["uv"].to(device, non_blocking=True)
@@ -1419,6 +1424,7 @@ def parse_args() -> TrainConfig:
     p.add_argument("--training_n", type=int, default=65536)
     p.add_argument("--validation_size", type=int, default=65536)
     p.add_argument("--max_epochs", type=int, default=300000)
+    p.add_argument("--sampler_epochs", type=int, default=20000)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
     p.add_argument("--lr_latent", type=float, default=None)
@@ -1533,6 +1539,7 @@ def parse_args() -> TrainConfig:
     cfg.training_n = args.training_n
     cfg.validation_n = args.validation_size
     cfg.max_epochs = args.max_epochs
+    cfg.sampler_epochs = args.sampler_epochs
     cfg.lr = args.lr
     cfg.lr_min = args.lr_min
     cfg.lr_latent = args.lr_latent
@@ -1661,6 +1668,7 @@ def main():
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
         else:
             print(f"[train] brdf-only mode: batch={cfg.training_n}")
+
         for epoch in range(cfg.max_epochs):
             phase = get_training_phase(cfg, epoch)
             phase_changed = phase != current_phase
