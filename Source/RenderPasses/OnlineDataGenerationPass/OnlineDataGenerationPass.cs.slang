@@ -7,8 +7,16 @@ import Scene.Material.MaterialFactory;
 import Utils.Math.MathHelpers;
 import Utils.Sampling.UniformSampleGenerator;
 
-#ifndef BOOTSTRAP_FEATURES_ENABLED
-#define BOOTSTRAP_FEATURES_ENABLED 0
+#ifndef SAMPLE_FEATURES_ENABLED
+#define SAMPLE_FEATURES_ENABLED 0
+#endif
+
+#ifndef LEGACY_FEATURES_ENABLED
+#define LEGACY_FEATURES_ENABLED 0
+#endif
+
+#ifndef MATERIAL_FEATURES_ENABLED
+#define MATERIAL_FEATURES_ENABLED 0
 #endif
 
 struct BsdfSampleData
@@ -17,17 +25,14 @@ struct BsdfSampleData
     float3 wo;
     float3 wi;
     float3 f;
-    float3 specular;
-    float3 albedo;
-    float3 normal;
-    float roughness;
-    float pdf;
+#if SAMPLE_FEATURES_ENABLED
     float4 bootstrapFeature0;
     float4 bootstrapFeature1;
     float4 bootstrapFeature2;
     float4 bootstrapFeature3;
     float4 bootstrapFeature4;
     float4 bootstrapFeature5;
+#endif
 };
 
 RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
@@ -93,6 +98,7 @@ float3 sampleConeAround(float3 center, float2 u, float cosTheta)
     return coneDir.x * tangent + coneDir.y * bitangent + coneDir.z * center;
 }
 
+#if SAMPLE_FEATURES_ENABLED
 void clearBootstrapFeatures(inout BsdfSampleData data)
 {
     data.bootstrapFeature0 = 0.f.xxxx;
@@ -103,7 +109,16 @@ void clearBootstrapFeatures(inout BsdfSampleData data)
     data.bootstrapFeature5 = 0.f.xxxx;
 }
 
-#if BOOTSTRAP_FEATURES_ENABLED
+#if LEGACY_FEATURES_ENABLED
+void writeLegacyBootstrapFeatures(const BSDFProperties props, const float pdf, inout BsdfSampleData data)
+{
+    data.bootstrapFeature0 = float4(props.specularReflectionAlbedo, props.diffuseReflectionAlbedo.x);
+    data.bootstrapFeature1 = float4(props.diffuseReflectionAlbedo.yz, props.guideNormal.xy);
+    data.bootstrapFeature2 = float4(props.guideNormal.z, props.roughness, pdf, 0.f);
+}
+#endif
+
+#if MATERIAL_FEATURES_ENABLED
 void writeMaterialBootstrapFeatures(const ShadingData sd, inout BsdfSampleData data)
 {
     let material = gScene.materials.getBootstrapFeatureMaterial(gMaterialId);
@@ -115,6 +130,7 @@ void writeMaterialBootstrapFeatures(const ShadingData sd, inout BsdfSampleData d
     data.bootstrapFeature4 = features.feature4;
     data.bootstrapFeature5 = features.feature5;
 }
+#endif
 #endif
 
 [numthreads(64, 1, 1)]
@@ -155,7 +171,6 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
     const uint materialHints = (uint)MaterialInstanceHints::AdjustShadingNormal;
     let mi = gScene.materials.getMaterialInstance(sd, lod, materialHints);
-    BSDFProperties props = mi.getProperties(sd);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
     float3 f = float3(0.f);
@@ -188,15 +203,18 @@ void main(uint3 threadId : SV_DispatchThreadID)
     data.wi       = wi;   // incident/view direction, towards viewer
     data.wo       = wo;   // sampled light direction, away from surface
     data.f        = f;
-    data.albedo   = props.diffuseReflectionAlbedo;
-    data.specular = props.specularReflectionAlbedo;
-    data.normal = props.guideNormal;
-    data.roughness = props.roughness;
-    data.pdf = pdf;
+
+#if SAMPLE_FEATURES_ENABLED
     clearBootstrapFeatures(data);
 
-#if BOOTSTRAP_FEATURES_ENABLED
+#if LEGACY_FEATURES_ENABLED
+    BSDFProperties props = mi.getProperties(sd);
+    writeLegacyBootstrapFeatures(props, pdf, data);
+#endif
+
+#if MATERIAL_FEATURES_ENABLED
     writeMaterialBootstrapFeatures(sd, data);
+#endif
 #endif
 
     gSampleOutputBuffer[idx] = data;

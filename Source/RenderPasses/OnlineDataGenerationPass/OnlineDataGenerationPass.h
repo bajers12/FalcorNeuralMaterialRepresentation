@@ -42,11 +42,14 @@ struct BsdfSampleData
     float3 wo;
     float3 wi;
     float3 f;
-    float3 specular;
-    float3 albedo;
-    float3 normal;
-    float1 roughness;
-    float1 pdf;
+};
+
+struct BsdfFeatureSampleData
+{
+    float2 uv;
+    float3 wo;
+    float3 wi;
+    float3 f;
     float4 bootstrapFeature0;
     float4 bootstrapFeature1;
     float4 bootstrapFeature2;
@@ -90,6 +93,7 @@ public:
 private:
     enum class BootstrapFeatureLayout
     {
+        None,
         Auto,
         Legacy,
         Material,
@@ -97,6 +101,7 @@ private:
 
     void OnlineDataGenerationPass::parseProperties(const Properties& props);
     void resolveBootstrapFeatureLayout();
+    void recreateSampleBuffers();
     static BootstrapFeatureLayout parseBootstrapFeatureLayout(const std::string& value);
     static std::string bootstrapFeatureLayoutToString(BootstrapFeatureLayout layout);
 
@@ -118,6 +123,9 @@ private:
     float mMollificationConeAngleRad = 0.f;
     uint32_t mMollificationSampleCount = 1;
     BootstrapFeatureLayout mRequestedBootstrapFeatureLayout = BootstrapFeatureLayout::Auto;
+    BootstrapFeatureLayout mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::None;
     std::vector<std::string> mBootstrapFeatureNames;
-    BsdfSampleData* mpMappedData;
+    size_t mSampleStrideBytes = sizeof(BsdfSampleData);
+    size_t mSampleFloatCount = sizeof(BsdfSampleData) / sizeof(float);
+    void* mpMappedData;
 };

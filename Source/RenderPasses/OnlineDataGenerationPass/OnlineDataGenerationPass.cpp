@@ -32,6 +32,23 @@ const char kShaderFile[] = "RenderPasses/OnlineDataGenerationPass/OnlineDataGene
 const char kBootstrapFeatureLayout[] = "bootstrapFeatureLayout";
 const uint32_t kBootstrapFeatureCapacity = 24;
 
+namespace
+{
+    const std::vector<std::string> kLegacyFeatureNames = {
+        "specular.r",
+        "specular.g",
+        "specular.b",
+        "albedo.r",
+        "albedo.g",
+        "albedo.b",
+        "normal.x",
+        "normal.y",
+        "normal.z",
+        "roughness",
+        "pdf",
+    };
+}
+
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
 {
     registry.registerClass<RenderPass, OnlineDataGenerationPass>();
@@ -74,19 +91,7 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
     //For readback syncronization
     mpReadbackFence = mpDevice->createFence();
 
-    mpGpuSampleBuffer = mpDevice->createStructuredBuffer(
-        sizeof(BsdfSampleData),
-        mSampleCount,
-        ResourceBindFlags::UnorderedAccess,
-        MemoryType::DeviceLocal
-    );
-
-    mpReadbackBuffer = mpDevice->createStructuredBuffer(
-        sizeof(BsdfSampleData),
-        mSampleCount,
-        ResourceBindFlags::None,
-        MemoryType::ReadBack
-    );
+    recreateSampleBuffers();
 }
 
 void OnlineDataGenerationPass::parseProperties(const Properties& props)
@@ -178,7 +183,7 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     pRenderContext->submit(false);
     pRenderContext->signal(mpReadbackFence.get());
     mpReadbackFence->wait();
-    mpMappedData = (BsdfSampleData*)mpReadbackBuffer->map();
+    mpMappedData = mpReadbackBuffer->map();
     mIsMapped = true;
 
 }
@@ -190,18 +195,15 @@ pybind11::array OnlineDataGenerationPass::getData()
 
     size_t count = mSampleCount;
 
-    // Number of floats per sample:
-    constexpr size_t N = sizeof(BsdfSampleData) / sizeof(float);
-
     return pybind11::array(
         pybind11::buffer_info(
             (void*)mpMappedData,
             sizeof(float),
             pybind11::format_descriptor<float>::format(),
             2,
-            { count, N },
+            { count, mSampleFloatCount },
             {
-                sizeof(BsdfSampleData),
+                mSampleStrideBytes,
                 sizeof(float)
             }
         )
@@ -267,6 +269,7 @@ void OnlineDataGenerationPass::generate() {
 
 OnlineDataGenerationPass::BootstrapFeatureLayout OnlineDataGenerationPass::parseBootstrapFeatureLayout(const std::string& value)
 {
+    if (value == "none" || value == "off" || value == "disabled") return BootstrapFeatureLayout::None;
     if (value == "auto") return BootstrapFeatureLayout::Auto;
     if (value == "legacy") return BootstrapFeatureLayout::Legacy;
     if (value == "material" || value == "features" || value == "three_layered_ggx" || value == "ThreeLayeredGGXMaterial")
@@ -280,6 +283,8 @@ std::string OnlineDataGenerationPass::bootstrapFeatureLayoutToString(BootstrapFe
 {
     switch (layout)
     {
+    case BootstrapFeatureLayout::None:
+        return "none";
     case BootstrapFeatureLayout::Auto:
         return "auto";
     case BootstrapFeatureLayout::Legacy:
@@ -294,19 +299,34 @@ std::string OnlineDataGenerationPass::bootstrapFeatureLayoutToString(BootstrapFe
 void OnlineDataGenerationPass::resolveBootstrapFeatureLayout()
 {
     mBootstrapFeatureNames.clear();
+    mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::None;
 
     if (
-        mRequestedBootstrapFeatureLayout == BootstrapFeatureLayout::Legacy ||
+        mRequestedBootstrapFeatureLayout == BootstrapFeatureLayout::None ||
         mpScene == nullptr ||
         mpScene->getMaterialCount() == 0 ||
         mMaterialId >= mpScene->getMaterialCount()
     )
         return;
 
+    if (mRequestedBootstrapFeatureLayout == BootstrapFeatureLayout::Legacy)
+    {
+        mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::Legacy;
+        mBootstrapFeatureNames = kLegacyFeatureNames;
+        return;
+    }
+
     const auto& pMat = mpScene->getMaterials()[mMaterialId];
     if (!pMat) return;
 
     mBootstrapFeatureNames = pMat->getBootstrapFeatureNames();
+    if (mBootstrapFeatureNames.empty() && mRequestedBootstrapFeatureLayout == BootstrapFeatureLayout::Auto)
+    {
+        mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::Legacy;
+        mBootstrapFeatureNames = kLegacyFeatureNames;
+        return;
+    }
+
     if (mBootstrapFeatureNames.size() > kBootstrapFeatureCapacity)
     {
         FALCOR_THROW(
@@ -320,7 +340,32 @@ void OnlineDataGenerationPass::resolveBootstrapFeatureLayout()
     if (mRequestedBootstrapFeatureLayout == BootstrapFeatureLayout::Material && mBootstrapFeatureNames.empty())
     {
         logWarning("OnlineDataGenerationPass: Material '{}' does not expose bootstrap features.", pMat->getName());
+        return;
     }
+
+    if (!mBootstrapFeatureNames.empty()) mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::Material;
+}
+
+void OnlineDataGenerationPass::recreateSampleBuffers()
+{
+    if (mIsMapped) releaseData();
+
+    mSampleStrideBytes = mBootstrapFeatureNames.empty() ? sizeof(BsdfSampleData) : sizeof(BsdfFeatureSampleData);
+    mSampleFloatCount = mSampleStrideBytes / sizeof(float);
+
+    mpGpuSampleBuffer = mpDevice->createStructuredBuffer(
+        mSampleStrideBytes,
+        mSampleCount,
+        ResourceBindFlags::UnorderedAccess,
+        MemoryType::DeviceLocal
+    );
+
+    mpReadbackBuffer = mpDevice->createStructuredBuffer(
+        mSampleStrideBytes,
+        mSampleCount,
+        ResourceBindFlags::None,
+        MemoryType::ReadBack
+    );
 }
 
 void OnlineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -330,6 +375,7 @@ void OnlineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref
     if(mpScene == nullptr) return;
 
     resolveBootstrapFeatureLayout();
+    recreateSampleBuffers();
 
     //Setup program with defines in execute, as the slang files cannot compile if no scene is available at compile time for gScene acess
     ProgramDesc desc;
@@ -340,7 +386,9 @@ void OnlineDataGenerationPass::setScene(RenderContext* pRenderContext, const ref
 
     DefineList defines;
     defines = mpScene->getSceneDefines();
-    defines.add("BOOTSTRAP_FEATURES_ENABLED", mBootstrapFeatureNames.empty() ? "0" : "1");
+    defines.add("SAMPLE_FEATURES_ENABLED", mBootstrapFeatureNames.empty() ? "0" : "1");
+    defines.add("LEGACY_FEATURES_ENABLED", mActiveBootstrapFeatureLayout == BootstrapFeatureLayout::Legacy ? "1" : "0");
+    defines.add("MATERIAL_FEATURES_ENABLED", mActiveBootstrapFeatureLayout == BootstrapFeatureLayout::Material ? "1" : "0");
 
 
     mpPass = ComputePass::create(mpDevice, desc, defines);
