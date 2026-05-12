@@ -116,19 +116,24 @@ void main(uint3 threadId : SV_DispatchThreadID)
     //       wo = light direction (away from surface). Both must have z > 0.
 
     // --- Elevation angles ---
-    // theta_d: free uniform sampling on [0, pi/2]
-    float u_thetaD = rand(wiSeed);
-    float cosTheta_d = u_thetaD;                        // cos(theta_d) uniform in [0,1] → uniform solid angle
+    // Fix 4: remap u_thetaD away from 0 and 1 to avoid the sinTheta_d ≈ 0 pole
+    // which destabilises the h-aligned basis built by makeBasis below.
+    float u_thetaD   = lerp(1e-3f, 1.f - 1e-4f, rand(wiSeed));
+    float cosTheta_d = u_thetaD;                        // cos(theta_d) uniform in (0,1) → uniform solid angle
     float sinTheta_d = sqrt(max(0.f, 1.f - cosTheta_d * cosTheta_d));
     float theta_d    = acos(cosTheta_d);
 
-    // theta_h: constrained to [0, pi/2 - theta_d] so that both wi and wo stay above horizon
-    float theta_h_max   = M_PI_2 - theta_d;            // M_PI_2 = pi/2
-    float cosMax        = cos(theta_h_max);             // = sin(theta_d)
-    float u_thetaH      = rand(wiSeed);
-    // Remap u_thetaH into the constrained solid-angle-uniform range
-    float cosTheta_h    = 1.f - u_thetaH * (1.f - cosMax);
-    float sinTheta_h    = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
+    // Fix 1: subtract a small horizon epsilon from theta_h_max so that the
+    // generated wi/wo are never right on the surface boundary. Samples exactly
+    // at the horizon produce pathological Fresnel (red tint) and GGX G-term
+    // compensation spikes (edge glow).
+    const float kHorizonEps = 1e-3f;                    // ~0.057 degrees
+    float theta_h_max = max(0.f, M_PI_2 - theta_d - kHorizonEps);
+    float cosMax      = cos(theta_h_max);               // ≈ sin(theta_d) + small margin
+    float u_thetaH    = rand(wiSeed);
+    // Remap u_thetaH into the constrained solid-angle-uniform range [0, theta_h_max]
+    float cosTheta_h  = 1.f - u_thetaH * (1.f - cosMax);
+    float sinTheta_h  = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
 
     // --- Azimuthal angles ---
     float phi_h = M_2PI * rand(woSeed);                 // [0, 2*pi)
@@ -151,6 +156,12 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
     // --- wo is the reflection of wi about h ---
     float3 wo = 2.f * dot(wi, h) * h - wi;
+
+    // Fix 2: explicit fp safety clamp — the epsilon above should prevent z <= 0,
+    // but floating-point arithmetic near the boundary can still produce small
+    // negative values. Renormalise after clamping so directions stay unit length.
+    wi = normalize(float3(wi.x, wi.y, max(wi.z, kHorizonEps)));
+    wo = normalize(float3(wo.x, wo.y, max(wo.z, kHorizonEps)));
 
     // Keep independent sample streams for UVs, BSDF directions, and any
     // additional material sampling performed through the Falcor interfaces.
@@ -187,7 +198,12 @@ void main(uint3 threadId : SV_DispatchThreadID)
             }
         }
 
-        f = validSampleCount > 0u ? f / float(validSampleCount) : mi.eval(sd, wo, sg);
+        // Fix 3: require at least half the cone samples to be valid before trusting
+        // the mollified average. When wo is near the horizon the surviving samples
+        // are biased toward the upper side of the cone, producing a brighter-than-
+        // correct average. Fall back to the unmollified evaluation in that case.
+        float validFraction = float(validSampleCount) / float(gMollificationSampleCount);
+        f = (validFraction >= 0.5f) ? f / float(validSampleCount) : mi.eval(sd, wo, sg);
     }
     else
     {
