@@ -18,6 +18,30 @@ namespace Falcor
     namespace
     {
         const std::string kShaderFile = "Scene/Material/ThreeLayeredGGXMaterial.slang";
+        const std::vector<std::string> kBootstrapFeatureNames = {
+            "attenuated_base_color.r",
+            "attenuated_base_color.g",
+            "attenuated_base_color.b",
+            "base_roughness",
+            "mid_roughness",
+            "coat_roughness",
+            "base_weight",
+            "mid_weight",
+            "coat_weight",
+            "attenuation.r",
+            "attenuation.g",
+            "attenuation.b",
+            "base_normal.x",
+            "base_normal.y",
+            "base_normal.z",
+            "mid_normal.x",
+            "mid_normal.y",
+            "mid_normal.z",
+            "coat_normal.x",
+            "coat_normal.y",
+            "coat_normal.z",
+            "thickness",
+        };
 
         MaterialType getThreeLayeredGGXMaterialType()
         {
@@ -380,6 +404,14 @@ namespace Falcor
 
     TypeConformanceList ThreeLayeredGGXMaterial::getTypeConformances() const
     {
-        return {{{"ThreeLayeredGGXMaterial", "IMaterial"}, (uint32_t)getType()}};
+        TypeConformanceList conformances;
+        conformances.add("ThreeLayeredGGXMaterial", "IMaterial", (uint32_t)getType());
+        conformances.add("ThreeLayeredGGXMaterial", "IBootstrapFeatureMaterial", (uint32_t)getType());
+        return conformances;
+    }
+
+    std::vector<std::string> ThreeLayeredGGXMaterial::getBootstrapFeatureNames() const
+    {
+        return kBootstrapFeatureNames;
     }
 }

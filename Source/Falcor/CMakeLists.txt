@@ -414,6 +414,7 @@ target_sources(Falcor PRIVATE
     Scene/Material/BasicMaterial.cpp
     Scene/Material/BasicMaterial.h
     Scene/Material/BasicMaterialData.slang
+    Scene/Material/BootstrapFeatureMaterial.slang
     Scene/Material/ClothMaterial.cpp
     Scene/Material/ClothMaterial.h
     Scene/Material/DiffuseSpecularData.slang

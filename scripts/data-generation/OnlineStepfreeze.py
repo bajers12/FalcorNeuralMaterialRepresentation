@@ -37,7 +37,9 @@ import math
 import json
 import time
 import argparse
-from dataclasses import dataclass, asdict
+import struct
+from dataclasses import dataclass, asdict, field
+from pathlib import Path
 from typing import Dict, Tuple, Optional
 from DataGenerator import (
     DataGenerator,
@@ -123,6 +125,9 @@ class TrainConfig:
     encoder_depth: int = 2
     encoder_bootstrap_epochs: int = 200
     latent_init_batch_size: int = 65536
+    bootstrap_feature_layout: str = "auto"
+    material_feature_dim: int = 0
+    material_feature_names: Tuple[str, ...] = field(default_factory=tuple)
     use_albedo_features: bool = True
     use_spec_features: bool = True
     use_normal_features: bool = True
@@ -146,7 +151,7 @@ def tensorize_batch(data_dict: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]
 
 def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
     print(f"[debug] first sample from {label}:")
-    ordered_keys = ["uv", "wi", "wo", "y", "spec", "albedo", "normal", "roughness", "pdf"]
+    ordered_keys = ["uv", "wi", "wo", "y", "features"]
     for key in ordered_keys:
         if key not in batch:
             continue
@@ -160,20 +165,11 @@ def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
 
 
 def get_encoder_input_dim(cfg: TrainConfig) -> int:
-    dim = 0
-    if cfg.use_albedo_features:
-        dim += 3
-    if cfg.use_spec_features:
-        dim += 3
-    if cfg.use_normal_features:
-        dim += 3
-    if cfg.use_roughness_feature:
-        dim += 1
-    if cfg.use_pdf_feature:
-        dim += 1
-    if dim == 0:
-        raise ValueError("Encoder feature set is empty. Enable at least one training feature.")
-    return dim
+    if cfg.material_feature_dim > 0:
+        return cfg.material_feature_dim
+    if cfg.encoder_bootstrap_epochs <= 0:
+        return 1
+    raise ValueError("Encoder bootstrap requires an active feature layout. Use --bootstrap_feature_layout auto, material, or legacy.")
 
 
 # =============================================================================
@@ -840,23 +836,32 @@ def to_local(
 
 
 def log_l1_loss(
-    y_hat: torch.Tensor, y: torch.Tensor, eps: float, mask_threshold: float = 1e-4
+    raw: torch.Tensor,
+    y: torch.Tensor,
+    exp_offset: float,
+    eps: float,
+    mask_threshold: float = 1e-4,
 ) -> torch.Tensor:
     """
     L1 loss in log space:
-      mean(|log(y_hat+eps) - log(y+eps)|)
+      mean(|(raw - exp_offset) - log(y+eps)|)
+
+    This is equivalent to taking the log of the exponential decoder output, but
+    avoids overflowing exp(raw - exp_offset) before the logarithm is applied.
     """
+    y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
+
     # Build per-sample mask: keep samples that have at least one significant channel
     valid = y.amax(dim=-1) >= mask_threshold  # [B]
     if valid.any():
-        y_hat_c = y_hat[valid].clamp_min(eps)
+        raw_c = raw[valid]
         y_c = y[valid].clamp_min(eps)
     else:
         # Fallback: use everything (avoids zero-element mean on pathological batches)
-        y_hat_c = y_hat.clamp_min(eps)
+        raw_c = raw
         y_c = y.clamp_min(eps)
 
-    return (torch.log(y_hat_c) - torch.log(y_c)).abs().mean()
+    return ((raw_c - exp_offset) - torch.log(y_c)).abs().mean()
 
 
 @torch.no_grad()
@@ -949,35 +954,9 @@ def importance_sampling_loss(
 def build_material_features(
     batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
 ) -> torch.Tensor:
-    features = []
-
-    if cfg.use_albedo_features:
-        features.append(batch["albedo"].to(device, non_blocking=True))
-
-    if cfg.use_spec_features:
-        features.append(batch["spec"].to(device, non_blocking=True))
-
-    if cfg.use_normal_features:
-        normal = F.normalize(
-            batch["normal"].to(device, non_blocking=True), dim=-1, eps=1e-8
-        )
-        features.append(normal)
-
-    if cfg.use_roughness_feature:
-        roughness = batch["roughness"].to(device, non_blocking=True).unsqueeze(-1)
-        features.append(roughness)
-
-    if cfg.use_pdf_feature:
-        pdf = (
-            torch.log1p(batch["pdf"].to(device, non_blocking=True).clamp_min(0.0))
-            .unsqueeze(-1)
-        )
-        features.append(pdf)
-
-    if not features:
-        raise ValueError("Encoder feature set is empty. Enable at least one training feature.")
-
-    return torch.cat(features, dim=-1)
+    if "features" not in batch:
+        raise ValueError("Configured bootstrap features are missing from the generated batch.")
+    return batch["features"].to(device, non_blocking=True)
 
 
 def get_training_phase(cfg: TrainConfig, epoch: int) -> str:
@@ -1016,7 +995,10 @@ def initialize_latent_texture_from_encoder(
         f"{cfg.tex_w}x{cfg.tex_h} UV grid in a single batch"
     )
     sample_count = cfg.tex_w * cfg.tex_h
-    grid_generator = DataGenerator(sampleCount=sample_count)
+    grid_generator = DataGenerator(
+        sampleCount=sample_count,
+        bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+    )
     try:
         grid_batch = grid_generator.generate_grid_data(
             cfg.tex_w,
@@ -1028,7 +1010,7 @@ def initialize_latent_texture_from_encoder(
     finally:
         grid_generator.release_data()
 
-    grid_tensor = tensorize_batch(data_to_dict(grid_batch))
+    grid_tensor = tensorize_batch(data_to_dict(grid_batch, cfg.material_feature_dim))
     latent_chunks = []
 
     for start in range(0, sample_count, cfg.latent_init_batch_size):
@@ -1279,7 +1261,7 @@ def train_one_epoch(
         z_dec = model.latent.sample(uv_dec)
 
     y_hat_dec, raw_dec = model.decode_with_raw(z_dec, wi_dec, wo_dec)
-    bsdf_loss = log_l1_loss(y_hat_dec, y_dec, cfg.log_eps)
+    bsdf_loss = log_l1_loss(raw_dec, y_dec, model.decoder.exp_offset, cfg.log_eps)
 
     if not torch.isfinite(bsdf_loss):
         raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
@@ -1375,7 +1357,7 @@ def validate(
         z = model.latent.sample(uv)
 
     y_hat, raw = model.decode_with_raw(z, wi, wo)
-    loss = log_l1_loss(y_hat, y, cfg.log_eps)
+    loss = log_l1_loss(raw, y, model.decoder.exp_offset, cfg.log_eps)
     stats = compute_basic_stats(y_hat, y)
     raw_stats = compute_raw_stats(raw)
 
@@ -1525,6 +1507,13 @@ def parse_args() -> TrainConfig:
         help="Batch size used when initializing the latent texture from encoder outputs.",
     )
     p.add_argument(
+        "--bootstrap_feature_layout",
+        type=str,
+        default="auto",
+        choices=("none", "auto", "legacy", "material", "three_layered_ggx"),
+        help="Bootstrap-only encoder feature layout. Finetune generation always uses 'none'. 'three_layered_ggx' is kept as an alias for 'material'.",
+    )
+    p.add_argument(
         "--albedo_feature",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1604,6 +1593,7 @@ def parse_args() -> TrainConfig:
     cfg.encoder_depth = args.encoder_depth
     cfg.encoder_bootstrap_epochs = max(0, args.encoder_bootstrap_epochs)
     cfg.latent_init_batch_size = max(1, args.latent_init_batch_size)
+    cfg.bootstrap_feature_layout = args.bootstrap_feature_layout
     cfg.use_albedo_features = args.albedo_feature
     cfg.use_spec_features = args.spec_feature
     cfg.use_normal_features = args.normal_feature
@@ -1615,29 +1605,29 @@ def parse_args() -> TrainConfig:
     return cfg
 
 
-def data_to_dict(data: np.ndarray):
+def data_to_dict(data: np.ndarray, material_feature_dim: int = 0):
     uv = data[:, 0:2]
     wo = data[:, 2:5]
     wi = data[:, 5:8]
     f = data[:, 8:11]
-    spec = data[:, 11:14]
-    albedo = data[:, 14:17]
-    normal = data[:, 17:20]
-    roughness = data[:, 20]
-    pdf = data[:, 21]
 
-    return {
+    batch = {
         "uv": uv,
         "wo": wo,
         "wi": wi,
         "y": f,
-        "spec": spec,
-        "albedo": albedo,
-        "normal": normal,
-        "roughness": roughness,
-        "pdf": pdf,
     }
+    if material_feature_dim > 0:
+        feature_start = 11
+        feature_end = feature_start + material_feature_dim
+        if data.shape[1] < feature_end:
+            raise ValueError(
+                f"Generated data has {data.shape[1]} columns, but material feature dim "
+                f"{material_feature_dim} requires at least {feature_end}."
+            )
+        batch["features"] = data[:, feature_start:feature_end]
 
+    return batch
 
 # =============================================================================
 # Main
@@ -1660,6 +1650,28 @@ def main():
         cfg.device = "cpu"
 
     device = torch.device(cfg.device)
+
+    bootstrap_validation_generator = None
+    if cfg.encoder_bootstrap_epochs > 0:
+        bootstrap_validation_generator = DataGenerator(
+            sampleCount=cfg.validation_n,
+            bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+        )
+        cfg.material_feature_names = tuple(bootstrap_validation_generator.get_bootstrap_feature_names())
+        cfg.material_feature_dim = bootstrap_validation_generator.get_bootstrap_feature_dim()
+        if cfg.material_feature_dim != len(cfg.material_feature_names):
+            raise RuntimeError(
+                "OnlineDataGenerationPass reported inconsistent bootstrap feature metadata: "
+                f"dim={cfg.material_feature_dim}, names={len(cfg.material_feature_names)}."
+            )
+        if cfg.material_feature_dim <= 0:
+            raise RuntimeError(
+                "Encoder bootstrap is enabled, but the selected bootstrap feature layout produced no features."
+            )
+        print(
+            "[bootstrap] using encoder features: "
+            f"layout={cfg.bootstrap_feature_layout}, dim={cfg.material_feature_dim}"
+        )
 
     os.makedirs(cfg.out_dir, exist_ok=True)
     save_config(cfg)
@@ -1691,21 +1703,47 @@ def main():
     best_sampler_epoch: Optional[int] = None
 
     try:
-        # Gene validation data only once, and keep as single holdout set for all epochs
-        data_generator = DataGenerator(sampleCount=cfg.validation_n)
-        if cfg.encoder_bootstrap_epochs > 0 and not data_generator.supports_uv_grid():
+        # Generate validation data once per required payload shape.
+        bootstrap_validation_tensor = None
+        if bootstrap_validation_generator is not None:
+            if not bootstrap_validation_generator.supports_uv_grid():
+                raise RuntimeError(
+                    "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
+                    "Rebuild Falcor/plugin binaries so setUvGrid/clearUvGrid are available, or set --encoder_bootstrap_epochs 0."
+                )
+            bootstrap_validation_batch = bootstrap_validation_generator.generate_data(
+                cfg.seed, SEED_DOMAIN_VALIDATION, 0
+            ).copy()
+            bootstrap_validation_generator.release_data()
+            bootstrap_validation_tensor = tensorize_batch(data_to_dict(bootstrap_validation_batch, cfg.material_feature_dim))
+            print_first_sample(bootstrap_validation_tensor, "bootstrap validation batch")
+
+        validation_generator = DataGenerator(
+            sampleCount=cfg.validation_n,
+            bootstrap_feature_layout="none",
+        )
+        if cfg.encoder_bootstrap_epochs > 0 and not validation_generator.supports_uv_grid():
             raise RuntimeError(
                 "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
                 "Rebuild Falcor/plugin binaries so setUvGrid/clearUvGrid are available, or set --encoder_bootstrap_epochs 0."
             )
-        validation_batch = data_generator.generate_data(
+        validation_batch = validation_generator.generate_data(
             cfg.seed, SEED_DOMAIN_VALIDATION, 0
         ).copy()
-        data_generator.release_data()
-        validation_tensor = tensorize_batch(data_to_dict(validation_batch))
-        print_first_sample(validation_tensor, "validation batch")
+        validation_generator.release_data()
+        validation_tensor = tensorize_batch(data_to_dict(validation_batch, 0))
+        print_first_sample(validation_tensor, "finetune validation batch")
 
-        data_generator = DataGenerator(sampleCount=cfg.training_n)
+        bootstrap_data_generator = None
+        if cfg.encoder_bootstrap_epochs > 0:
+            bootstrap_data_generator = DataGenerator(
+                sampleCount=cfg.training_n,
+                bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+            )
+        finetune_data_generator = DataGenerator(
+            sampleCount=cfg.training_n,
+            bootstrap_feature_layout="none",
+        )
         if cfg.train_importance_sampler:
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
         else:
@@ -1734,14 +1772,16 @@ def main():
                     f"iterations={cfg.mollification_iterations}, "
                     f"samples={cfg.mollification_sample_count}"
                 )
-            data_batch_decoder = data_generator.generate_data(
+            active_data_generator = bootstrap_data_generator if phase == "bootstrap" else finetune_data_generator
+            active_feature_dim = cfg.material_feature_dim if phase == "bootstrap" else 0
+            data_batch_decoder = active_data_generator.generate_data(
                 cfg.seed,
                 SEED_DOMAIN_TRAIN,
                 epoch,
                 mollification_cone_angle_rad,
                 cfg.mollification_sample_count,
             )
-            training_tensor_decoder = tensorize_batch(data_to_dict(data_batch_decoder))
+            training_tensor_decoder = tensorize_batch(data_to_dict(data_batch_decoder, active_feature_dim))
 
             training_tensor_sampler = None
             if cfg.train_importance_sampler:
@@ -1767,7 +1807,8 @@ def main():
 
             metrics = dict(train_metrics)
 
-            val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
+            active_validation_tensor = bootstrap_validation_tensor if phase == "bootstrap" else validation_tensor
+            val_metrics = validate(model, active_validation_tensor, cfg, epoch, phase)
             metrics.update(val_metrics)
             last_epoch = epoch
             last_metrics = dict(metrics)
@@ -1813,7 +1854,7 @@ def main():
             ):
                 run_logger.append_progress(epoch, metrics, phase)
 
-            data_generator.release_data()
+            active_data_generator.release_data()
     except KeyboardInterrupt:
         run_status = "interrupted"
         raise
