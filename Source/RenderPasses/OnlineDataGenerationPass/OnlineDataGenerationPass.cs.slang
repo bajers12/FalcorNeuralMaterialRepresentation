@@ -154,65 +154,56 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
     // Sample wi and wo using the half/difference vector parametrization (Rusinkiewicz 1998).
     //
-    // Approach 3: sample theta_d freely, then constrain theta_h to [0, pi/2 - theta_d].
-    // This guarantees both wi and wo remain in the upper hemisphere with no rejection.
-    // The tradeoff is that high-theta_h (grazing microfacet) configurations are
-    // undersampled relative to a uniform (h,d) distribution, but those regions
-    // contribute little energy and are learned easily by the network.
+    // We sample the half vector h and difference direction freely, then reject
+    // only candidates where either resulting direction leaves the upper
+    // hemisphere. This covers the full valid half/difference domain instead of
+    // using the conservative theta_h + theta_d <= pi/2 shortcut.
     //
     // Seed stream 1 (woSeed) drives (phi_h, phi_d) — the azimuthal angles.
     // Seed stream 2 (wiSeed) drives (u_thetaD, u_thetaH) — the elevation angles.
     //
     // Note: in this file wi = view/incident direction (toward viewer),
     //       wo = light direction (away from surface). Both must have z > 0.
+    const float kHorizonEps = 1e-4f;
+    const uint kMaxDirectionAttempts = 64u;
 
-    // --- Elevation angles ---
-    // Fix 4: remap u_thetaD away from 0 and 1 to avoid the sinTheta_d ≈ 0 pole
-    // which destabilises the h-aligned basis built by makeBasis below.
-    float u_thetaD   = lerp(1e-3f, 1.f - 1e-4f, rand(wiSeed));
-    float cosTheta_d = u_thetaD;                        // cos(theta_d) uniform in (0,1) → uniform solid angle
-    float sinTheta_d = sqrt(max(0.f, 1.f - cosTheta_d * cosTheta_d));
-    float theta_d    = acos(cosTheta_d);
+    float3 wi = float3(0.f, 0.f, 1.f);
+    float3 wo = float3(0.f, 0.f, 1.f);
 
-    // Fix 1: subtract a small horizon epsilon from theta_h_max so that the
-    // generated wi/wo are never right on the surface boundary. Samples exactly
-    // at the horizon produce pathological Fresnel (red tint) and GGX G-term
-    // compensation spikes (edge glow).
-    const float kHorizonEps = 1e-3f;                    // ~0.057 degrees
-    float theta_h_max = max(0.f, M_PI_2 - theta_d - kHorizonEps);
-    float cosMax      = cos(theta_h_max);               // ≈ sin(theta_d) + small margin
-    float u_thetaH    = rand(wiSeed);
-    // Remap u_thetaH into the constrained solid-angle-uniform range [0, theta_h_max]
-    float cosTheta_h  = 1.f - u_thetaH * (1.f - cosMax);
-    float sinTheta_h  = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
+    for (uint attempt = 0u; attempt < kMaxDirectionAttempts; ++attempt)
+    {
+        // --- Half vector h in tangent space (normal = (0,0,1)) ---
+        float cosTheta_h = lerp(kHorizonEps, 1.f, rand(wiSeed));
+        float sinTheta_h = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
+        float phi_h = M_2PI * rand(woSeed);
 
-    // --- Azimuthal angles ---
-    float phi_h = M_2PI * rand(woSeed);                 // [0, 2*pi)
-    float phi_d = M_PI  * rand(woSeed);                 // [0, pi) — reciprocity symmetry
+        float3 h = float3(sinTheta_h * cos(phi_h),
+                          sinTheta_h * sin(phi_h),
+                          cosTheta_h);
 
-    // --- Half vector h in tangent space (normal = (0,0,1)) ---
-    float3 h = float3(sinTheta_h * cos(phi_h),
-                      sinTheta_h * sin(phi_h),
-                      cosTheta_h);
+        // --- Build an orthonormal frame with h as the north pole ---
+        // Used to express wi (= omega_i in difference-vector frame) relative to h.
+        float3 h_tangent, h_bitangent;
+        makeBasis(h, h_tangent, h_bitangent);
 
-    // --- Build an orthonormal frame with h as the north pole ---
-    // Used to express wi (= omega_i in difference-vector frame) relative to h.
-    float3 h_tangent, h_bitangent;
-    makeBasis(h, h_tangent, h_bitangent);
+        // --- Difference direction around h ---
+        float cosTheta_d = lerp(kHorizonEps, 1.f, rand(wiSeed));
+        float sinTheta_d = sqrt(max(0.f, 1.f - cosTheta_d * cosTheta_d));
+        float phi_d = M_2PI * rand(woSeed);
 
-    // --- wi expressed in the h-aligned frame via (theta_d, phi_d) ---
-    float3 wi = sinTheta_d * cos(phi_d) * h_tangent
-              + sinTheta_d * sin(phi_d) * h_bitangent
-              + cosTheta_d              * h;
+        float3 candidateWi = sinTheta_d * cos(phi_d) * h_tangent
+                           + sinTheta_d * sin(phi_d) * h_bitangent
+                           + cosTheta_d              * h;
 
-    // --- wo is the reflection of wi about h ---
-    float3 wo = 2.f * dot(wi, h) * h - wi;
+        float3 candidateWo = 2.f * dot(candidateWi, h) * h - candidateWi;
 
-    // Fix 2: explicit fp safety clamp — the epsilon above should prevent z <= 0,
-    // but floating-point arithmetic near the boundary can still produce small
-    // negative values. Renormalise after clamping so directions stay unit length.
-    wi = normalize(float3(wi.x, wi.y, max(wi.z, kHorizonEps)));
-    wo = normalize(float3(wo.x, wo.y, max(wo.z, kHorizonEps)));
+        if (candidateWi.z > kHorizonEps && candidateWo.z > kHorizonEps)
+        {
+            wi = normalize(candidateWi);
+            wo = normalize(candidateWo);
+            break;
+        }
+    }
 
     // Keep independent sample streams for UVs, BSDF directions, and any
     // additional material sampling performed through the Falcor interfaces.
