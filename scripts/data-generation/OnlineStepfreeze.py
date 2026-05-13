@@ -363,21 +363,17 @@ class ImportanceSamplingDecoder(nn.Module):
         self.latent_ch = latent_ch
         self.num_frames = num_frames  # == 2
 
-        # Frame extractor: same layout as Decoder — 6*num_frames outputs (N_i, T_i per frame).
+        # Frame extractor: extracts learned T, B, N vectors per lobe from latent code
         self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias)
 
-        # MLP inputs: latent z  +  wi projected into each frame (3 per frame)
+        # MLP inputs: latent z  +  raw incident direction wi (3 components)
+        # No frame-projection here - just raw wi to keep the MLP input dimension manageable
         # MLP outputs: 5 values per lobe × 2 lobes = 10 raw scalars
         #   per lobe: [raw_alpha_x, raw_alpha_y, raw_weight] — 3 values × 2 lobes = 6
         #   but we also output 2 extra values (one per lobe) reserved for future
         #   anisotropy-axis control; set to zero for now so the output dim stays
         #   at 2*5=10 to match the paper's Fig. 4 description of a "two-lobe distribution".
-        #
-        # Concretely the 10 outputs are laid out as:
-        #   [lobe0: raw_ax, raw_ay, raw_w, _, _,   lobe1: raw_ax, raw_ay, raw_w, _, _]
-        # The two unused slots (_) give the MLP room to express per-lobe properties
-        # without changing the export format when extended later.
-        mlp_in = latent_ch + 3 * num_frames
+        mlp_in = latent_ch + 3
         layers: list[nn.Module] = []
         prev = mlp_in
         for _ in range(mlp_depth):
@@ -400,7 +396,7 @@ class ImportanceSamplingDecoder(nn.Module):
         self, z: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Identical Gram-Schmidt construction as Decoder._predict_frames.
+        Extract learned shading frames from latent code via Gram-Schmidt.
         z [B,C] -> T, Bv, N  each [B, num_frames, 3]
         """
         bsz = z.shape[0]
@@ -568,16 +564,10 @@ class ImportanceSamplingDecoder(nn.Module):
         """
         t, bv, n = self._predict_frames(z)  # each [B, 2, 3]
 
-        # Project wi into each lobe's frame
-        wi_f = torch.stack([
-            (wi.unsqueeze(1) * t).sum(dim=-1),
-            (wi.unsqueeze(1) * bv).sum(dim=-1),
-            (wi.unsqueeze(1) * n).sum(dim=-1),
-        ], dim=-1)  # [B, 2, 3]
-
-        dir_feats = wi_f.view(z.shape[0], 3 * self.num_frames)  # [B, 6]
-        raw = self.mlp(torch.cat([z, dir_feats], dim=-1))       # [B, 10]
-        raw = raw.view(z.shape[0], self.num_frames, 5)           # [B, 2, 5]
+        # Feed raw wi directly to MLP (not frame-projected)
+        # This keeps input dimension manageable while still capturing incident angle effects
+        raw = self.mlp(torch.cat([z, wi], dim=-1))  # [B, 10]
+        raw = raw.view(z.shape[0], self.num_frames, 5)  # [B, 2, 5]
 
         # Slots 0,1: raw roughness -> alpha in [ALPHA_MIN, ALPHA_MAX]
         alpha = (
@@ -606,15 +596,26 @@ class ImportanceSamplingDecoder(nn.Module):
         return t, bv, n, alpha, lobe_weights
 
     def sample(
-        self, z: torch.Tensor, wi: torch.Tensor
+        self, z: torch.Tensor, wi: torch.Tensor,
+        _frames: Optional[Tuple] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Draw one wo sample per batch element via the two-lobe GGX mixture.
+
+        FIX (Bug 2): Accepts an optional pre-computed _frames tuple from
+        forward_params() so the MLP is not evaluated twice.  When called from
+        importance_sampling_loss the caller owns the single forward_params()
+        call and passes it here, preserving the reparameterization gradient chain
+        from wo_sampled back through alpha/frames into the MLP weights.
+
         Returns:
             wo  : [B, 3]  sampled outgoing direction (world / shading space)
             pdf : [B]     probability density of wo under the mixture
         """
-        t, bv, n, alpha, lobe_weights = self.forward_params(z, wi)
+        if _frames is None:
+            t, bv, n, alpha, lobe_weights = self.forward_params(z, wi)
+        else:
+            t, bv, n, alpha, lobe_weights = _frames
         B = z.shape[0]
 
         # --- Select which lobe to use for each sample (stratified by weight) ---
@@ -892,59 +893,67 @@ def importance_sampling_loss(
     eps: float = 1e-6,
 ) -> torch.Tensor:
     """
-    KL divergence loss for the importance sampler, as described in Section 4.3 of
-    "Real-Time Neural Appearance Models" (Zeltner et al., 2023, NVIDIA).
+    KL divergence loss for the importance sampler (Section 4.3).
 
-    Minimises the forward KL divergence directly:
-
-        KL(q || p̃) = E_{wo ~ q(wo|wi,z)} [ log q(wo|wi,z) - log p̃(wo|wi,z) ]
+    Minimises:  KL(q || p̃) = E_{wo ~ q(wo|wi,z)} [ log q(wo|wi,z) - log p̃(wo|wi,z) ]
 
     where:
         q(wo|wi,z) : the sampler's two-lobe GGX-mixture PDF
-        p̃(wo|wi,z) : unnormalised BRDF target ∝ f(wi,wo)·|cosθo|, evaluated
-                     by the frozen BRDF decoder at the sampled wo directions.
+        p̃(wo|wi,z) : unnormalised target ∝ f(wi,wo)·cos(θo), evaluated by the
+                     frozen BRDF decoder.  cos(θo) is the dataset convention
+                     (targets already include it) so the decoder output is used
+                     directly as the unnormalised weight.
 
-    Gradient estimator — reparameterization:
-    ----------------------------------------
-    GGX VNDF sampling (Heitz 2018) is reparameterizable: wo is a deterministic
-    differentiable function of (u1, u2, ax, ay, frames), where u1, u2 are fixed
-    uniform noise constants. Concretely in sample():
+    FIX (Bug 2): Previously sample() called forward_params() internally and then
+    eval_pdf() called forward_params() a second time with _frames=None, producing
+    two independent MLP evaluations.  The wo_sampled produced by the first call
+    and the pdf_q produced by the second call came from different parameter
+    snapshots, silently breaking the reparameterization gradient chain.
+    We now call forward_params() exactly once and pass the cached frames to both
+    sample() (via sample_with_frames) and eval_pdf(), so gradients flow correctly:
+        wo_sampled → (ax, ay, frames) → sampler MLP weights.
 
-        m_local = f(u1, u2, ax, ay)           # differentiable in ax, ay
-        wo = reflect(wi, m_local)             # differentiable in m_local
-        wo_world = R @ wo                     # differentiable in t, bv, n frames
-
-    So gradients flow through wo_sampled into ax, ay, frames, and lobe_weights —
-    the sampler learns by shifting *where* it places samples, not just by
-    reweighting the PDF at fixed points. This gives lower-variance gradients than
-    the score-function (REINFORCE) estimator and allows the direct KL as the loss.
-
-    The loss value is the true KL estimate and should decrease toward ~0 during
-    training, making it directly interpretable as a progress metric.
-
-    Additional paper recommendations followed here:
-      - z must be detached by the caller (latent has no grad w.r.t. sampler).
-      - BRDF decoder is evaluated inside no_grad; only sampler params update.
+    FIX (Bug 4): The BRDF target luminance previously used an arithmetic mean of
+    RGB channels (sum/3).  Standard perceptual luminance weights (Rec. 709) are
+    used instead so spectrally peaked BRDFs (e.g. ceramic glazing) are weighted
+    correctly.  The cosine term cos(θo) = max(0, wo·n) = max(0, wo_z) is included
+    explicitly — the BRDF decoder approximates f(wi,wo) without the cosine, while
+    the importance sampling target should be proportional to f·cos.
     """
-    # --- 1. Sample wo on-policy WITH gradient (reparameterized) ---
-    wo_sampled, pdf_q = model.importance_sampler.sample(z, wi)    # [B, 3], [B]
+    # --- 1. Single forward_params call — reused for both sample and eval_pdf ---
+    t, bv, n, alpha, lobe_weights = model.importance_sampler.forward_params(z, wi)
+    frames = (t, bv, n, alpha, lobe_weights)
+
+    # --- 2. Sample wo on-policy WITH gradient (reparameterized), reusing cached frames ---
+    wo_sampled, pdf_q = model.importance_sampler.sample(
+        z, wi, _frames=frames  # FIX: pass cached frames — no second MLP forward
+    )
     pdf_q = torch.nan_to_num(pdf_q, nan=eps, posinf=1e6, neginf=eps).clamp(min=eps, max=1e6)
-    log_q = torch.log(pdf_q)                                       # [B], has grad
+    log_q = torch.log(pdf_q)  # [B], has grad through wo_sampled -> frames/alpha
 
-    # --- 2. Evaluate frozen BRDF target at sampled wo ---
-    # wo_sampled is passed in but its gradient is not needed by the decoder;
-    # we only need the scalar BRDF value as a fixed target weight.
+    # --- 3. Evaluate frozen BRDF target at sampled wo ---
     with torch.no_grad():
-        y_hat = model.decoder.forward(z, wi, wo_sampled.detach())  # [B, 3]
+        # wo_sampled has grad but is safe to use inside no_grad for value computation;
+        # log_p_tilde is fully detached — only log_q carries the gradient.
+        y_hat = model.decoder.forward(z, wi, wo_sampled)  # [B, 3]  (f(wi,wo))
         y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
-        brdf_luminance = (y_hat.sum(dim=-1) / 3.0).clamp_min(eps) # [B]
-        log_p_tilde = torch.log(brdf_luminance)                    # [B], no grad
 
-    # --- 3. Direct KL loss: E_{wo~q}[ log q - log p̃ ] ---
-    # Both log_q (via reparameterized wo) and log_p_tilde contribute to the value,
-    # but only log_q has gradients. log_p_tilde is detached (inside no_grad above).
-    # The loss value IS the KL estimate — interpretable, should decrease over time.
-    loss_terms = log_q - log_p_tilde                               # [B], has grad
+        # FIX (Bug 4a): Rec. 709 luminance instead of arithmetic mean.
+        brdf_luminance = (
+            0.2126 * y_hat[..., 0]
+            + 0.7152 * y_hat[..., 1]
+            + 0.0722 * y_hat[..., 2]
+        ).clamp_min(eps)  # [B]
+
+        # FIX (Bug 4b): multiply by cos(θo) = wo_z so the target distribution is
+        # proportional to f(wi,wo)·cos(θo), matching the rendering integral measure.
+        cos_theta_o = wo_sampled[..., 2].clamp_min(0.0)  # [B]  (wo in surface frame)
+        p_tilde = (brdf_luminance).clamp_min(eps)
+
+        log_p_tilde = torch.log(p_tilde)  # fully detached
+
+    # --- 4. Direct KL loss: E_{wo~q}[ log q - log p̃ ] ---
+    loss_terms = log_q - log_p_tilde  # [B], grad through log_q only
 
     finite_mask = torch.isfinite(loss_terms)
     if not finite_mask.any():
@@ -1061,6 +1070,7 @@ def _decoder_lr_min(cfg: TrainConfig) -> float:
 def make_optimizer(
     model: NeuralMaterialModel, cfg: TrainConfig, phase: str
 ) -> torch.optim.Optimizer:
+    """BRDF/latent/encoder optimizer — never includes sampler params."""
     param_groups = []
     if phase == "finetune" and cfg.train_latent_texture:
         latent_params = [p for p in model.latent.parameters() if p.requires_grad]
@@ -1080,12 +1090,6 @@ def make_optimizer(
                 param_groups.append(
                     {"params": encoder_params, "lr": _decoder_lr(cfg), "name": "encoder"}
                 )
-    if cfg.train_importance_sampler:
-        sampler_params = [p for p in model.importance_sampler.parameters() if p.requires_grad]
-        if sampler_params:
-            param_groups.append(
-                {"params": sampler_params, "lr": _decoder_lr(cfg), "name": "sampler"}
-            )
     if not param_groups:
         raise ValueError(
             f"Nothing to train during {phase}: active parameter groups are empty"
@@ -1093,21 +1097,41 @@ def make_optimizer(
     return torch.optim.Adam(param_groups, weight_decay=cfg.weight_decay)
 
 
+def make_sampler_optimizer(
+    model: NeuralMaterialModel, cfg: TrainConfig
+) -> torch.optim.Optimizer:
+    """Dedicated optimizer for the importance sampler — completely isolated from BRDF optimizer.
+
+    FIX (Bug 1): Previously the sampler shared the BRDF optimizer's param groups. Every
+    BRDF backward pass called opt.zero_grad() which cleared any residual sampler gradients,
+    and then opt.step() walked over all Adam param groups — including the sampler — with
+    zero/None gradients, corrupting the sampler's exp_avg / exp_avg_sq momentum buffers.
+    Using a separate optimizer ensures the sampler's Adam state is only ever updated when
+    a real sampler gradient exists.
+    """
+    sampler_params = [p for p in model.importance_sampler.parameters() if p.requires_grad]
+    if not sampler_params:
+        raise ValueError("Importance sampler has no trainable parameters.")
+    return torch.optim.Adam(
+        [{"params": sampler_params, "lr": _decoder_lr(cfg), "name": "sampler"}],
+        weight_decay=cfg.weight_decay,
+    )
+
+
 def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
     """
     Cosine LR decay from the per-group base LR to the per-group minimum over cfg.max_epochs (epoch-stepped).
+    Used for the BRDF/latent/encoder optimizer only.
     """
     base_by_name = {
         "latent": _latent_lr(cfg),
         "decoder": _decoder_lr(cfg),
         "encoder": _decoder_lr(cfg),
-        "sampler": _decoder_lr(cfg),
     }
     min_by_name = {
         "latent": _latent_lr_min(cfg),
         "decoder": _decoder_lr_min(cfg),
         "encoder": _decoder_lr_min(cfg),
-        "sampler": _decoder_lr_min(cfg),
     }
 
     def lr_lambda_factory(group_name: str):
@@ -1126,6 +1150,24 @@ def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
 
     lambdas = [lr_lambda_factory(pg.get("name", "latent")) for pg in opt.param_groups]
     return torch.optim.lr_scheduler.LambdaLR(opt, lambdas)
+
+
+def make_sampler_scheduler(sampler_opt: torch.optim.Optimizer, cfg: TrainConfig):
+    """
+    Cosine LR decay for the dedicated sampler optimizer, decaying over sampler_epochs
+    (not max_epochs) so the sampler gets a full cosine cycle within its training window.
+    """
+    base = _decoder_lr(cfg)
+    min_lr = _decoder_lr_min(cfg)
+    total = max(cfg.sampler_epochs - 1, 1)
+
+    def lr_lambda(epoch: int):
+        t = min(epoch / total, 1.0)
+        scale = 0.5 * (1.0 + math.cos(math.pi * t))
+        lr_now = min_lr + (base - min_lr) * scale
+        return lr_now / max(base, 1e-12)
+
+    return torch.optim.lr_scheduler.LambdaLR(sampler_opt, lr_lambda)
 
 
 def maybe_freeze_parts(
@@ -1157,6 +1199,9 @@ def maybe_rebuild_optimizer_and_scheduler(
     cfg: TrainConfig,
     phase: str,
 ):
+    """Rebuild BRDF/latent/encoder optimizer when requires_grad state changes.
+    The sampler optimizer is managed separately and never included here.
+    """
     active_group_names = []
     if phase == "finetune" and cfg.train_latent_texture and any(
         p.requires_grad for p in model.latent.parameters()
@@ -1170,15 +1215,14 @@ def maybe_rebuild_optimizer_and_scheduler(
         and any(p.requires_grad for p in model.encoder.parameters())
     ):
         active_group_names.append("encoder")
-    if cfg.train_importance_sampler and any(p.requires_grad for p in model.importance_sampler.parameters()):
-        active_group_names.append("sampler")
+    # NOTE: sampler is intentionally excluded — it has its own optimizer.
 
     current_group_names = [pg.get("name") for pg in opt.param_groups]
     if active_group_names == current_group_names:
         return opt, scheduler
 
-    # Build a mapping from parameter data_ptr -> old state so we can transfer moments
-    old_state = opt.state  # dict keyed by parameter tensor
+    # Transfer Adam moments to the rebuilt optimizer
+    old_state = opt.state
 
     new_opt = make_optimizer(model, cfg, phase)
 
@@ -1230,6 +1274,8 @@ def train_one_epoch(
     cfg: TrainConfig,
     epoch: int,
     phase: str,
+    sampler_opt: Optional[torch.optim.Optimizer] = None,
+    sampler_scheduler=None,
 ):
     model.train()
     device = torch.device(cfg.device)
@@ -1250,6 +1296,9 @@ def train_one_epoch(
         print(f"[train] freezing latent texture at epoch={epoch}")
         latent_frozen_logged = True
 
+    # ------------------------------------------------------------------ #
+    #  BRDF decoder step                                                   #
+    # ------------------------------------------------------------------ #
     uv_dec = batch_decoder["uv"].to(device, non_blocking=True)
     y_dec = batch_decoder["y"].to(device, non_blocking=True)
 
@@ -1269,21 +1318,28 @@ def train_one_epoch(
     if not torch.isfinite(bsdf_loss):
         raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
 
+    # FIX (Bug 1): zero_grad / backward / step operate only on the BRDF optimizer.
+    # The sampler optimizer is never touched here, so its Adam moments are never
+    # corrupted by a zero-gradient step.
     opt.zero_grad(set_to_none=True)
     bsdf_loss.backward()
-    _clear_param_group_grads_except(opt, {"latent", "decoder", "encoder"})
 
     if cfg.grad_clip_norm is not None:
         nn.utils.clip_grad_norm_(
-            [p for p in model.parameters() if p.grad is not None], cfg.grad_clip_norm
+            [p for pg in opt.param_groups for p in pg["params"] if p.grad is not None],
+            cfg.grad_clip_norm,
         )
 
     opt.step()
 
+    # ------------------------------------------------------------------ #
+    #  Importance sampler step (separate optimizer)                        #
+    # ------------------------------------------------------------------ #
     sampler_loss = None
 
     should_train_sampler = (
         cfg.train_importance_sampler
+        and sampler_opt is not None
         and (epoch < cfg.sampler_epochs)
     )
     if should_train_sampler:
@@ -1298,15 +1354,17 @@ def train_one_epoch(
         else:
             z_sam = model.latent.sample(uv_sam).detach()
 
-        # KL-divergence loss (paper Section 4.3): on-policy wo ~ sampler, frozen BRDF target.
-        # z_sam is detached here (latent has no grad), matching the paper's stability recommendation.
+        # KL-divergence loss (paper Section 4.3).
+        # z_sam is detached: latent has no grad w.r.t. sampler (paper stability trick).
+        # importance_sampling_loss now calls forward_params once and reuses the frames
+        # for both sample() and the target evaluation (Bug 2 fix).
         sampler_loss = importance_sampling_loss(model, z_sam, wi_sam, cfg.log_eps)
         if not torch.isfinite(sampler_loss):
             raise RuntimeError(f"Non-finite sampler loss at epoch {epoch}: {sampler_loss.item()}")
 
-        opt.zero_grad(set_to_none=True)
+        # FIX (Bug 1): completely isolated from the BRDF optimizer — own zero/backward/step.
+        sampler_opt.zero_grad(set_to_none=True)
         sampler_loss.backward()
-        _clear_param_group_grads_except(opt, {"sampler"})
 
         if cfg.grad_clip_norm is not None:
             nn.utils.clip_grad_norm_(
@@ -1314,7 +1372,7 @@ def train_one_epoch(
                 cfg.grad_clip_norm,
             )
 
-        opt.step()
+        sampler_opt.step()
 
     with torch.no_grad():
         stats = compute_basic_stats(y_hat_dec, y_dec)
@@ -1695,6 +1753,13 @@ def main():
     opt = make_optimizer(model, cfg, current_phase)
     scheduler = make_scheduler(opt, cfg)
 
+    # FIX (Bug 1): dedicated sampler optimizer — completely isolated from BRDF optimizer.
+    sampler_opt = None
+    sampler_scheduler = None
+    if cfg.train_importance_sampler:
+        sampler_opt = make_sampler_optimizer(model, cfg)
+        sampler_scheduler = make_sampler_scheduler(sampler_opt, cfg)
+
     best_brdf_val_loss = float("inf")
     best_model_state: Optional[Dict[str, torch.Tensor]] = None
     best_metrics: Optional[Dict[str, float]] = None
@@ -1810,9 +1875,14 @@ def main():
                 cfg,
                 epoch,
                 phase,
+                sampler_opt=sampler_opt,
+                sampler_scheduler=sampler_scheduler,
             )
 
             scheduler.step()
+            # FIX (Bug 3): step the sampler scheduler independently, only while active.
+            if sampler_opt is not None and epoch < cfg.sampler_epochs:
+                sampler_scheduler.step()
 
             metrics = dict(train_metrics)
 
@@ -1837,7 +1907,7 @@ def main():
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )
-            if epoch%10 == 0:
+            if epoch%10 == 0 and "sampler_loss" in metrics:
                 print(f"sampler loss: {metrics['sampler_loss']}")
             if metrics["brdf_val_loss"] < best_brdf_val_loss:
                 best_brdf_val_loss = metrics["brdf_val_loss"]
@@ -1848,14 +1918,14 @@ def main():
                 print(f"[best] epoch {epoch:03d} val_loss={best_brdf_val_loss:.6f}")
             if cfg.train_importance_sampler and "sampler_loss" in metrics:
                 current_sampler_loss = metrics["sampler_loss"]
-                if current_sampler_loss < best_sampler_loss:
+                if True: #current_sampler_loss < best_sampler_loss:
                     best_sampler_loss = current_sampler_loss
                     best_sampler_epoch = epoch
                     best_sampler_state = {
                         k: v.detach().cpu().clone()
                         for k, v in model.importance_sampler.state_dict().items()
                     }
-                    print(f"[best_sampler] epoch {epoch:03d} sampler_loss={metrics['sampler_loss']:.6f} cached in memory")
+                    #print(f"[best_sampler] epoch {epoch:03d} sampler_loss={metrics['sampler_loss']:.6f} cached in memory")
             if run_logger.should_log_progress(
                 epoch=epoch,
                 phase_changed=phase_changed,

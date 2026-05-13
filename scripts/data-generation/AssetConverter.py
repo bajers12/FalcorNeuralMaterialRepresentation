@@ -153,9 +153,9 @@ def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
         json.dump(metadata, f, indent=2)
 
 
-def save_sampler_metadata(path: Path, weights: dict) -> None:
+def save_sampler_metadata(path: Path, weights: dict, *, latent_ch: int) -> None:
     # Sampler head outputs 5 values per lobe × 2 lobes = 10 channels.
-    layout = _infer_network_layout(weights, input_dim=14, output_dim=10)
+    layout = _infer_network_layout(weights, input_dim=latent_ch + 3, output_dim=10)
     metadata = {
         "latent_dim": layout["latent_ch"],
         "num_frames": layout["num_frames"],
@@ -215,9 +215,9 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
         save_network_weights_bin(
             preview_dir / "sampler_weights.bin",
             sampler_weights,
-            input_dim=14,
+            input_dim=cfg.latent_ch + 3,
             output_dim=10,
         )
-        save_sampler_metadata(preview_dir / "sampler_metadata.json", sampler_weights)
+        save_sampler_metadata(preview_dir / "sampler_metadata.json", sampler_weights, latent_ch=cfg.latent_ch)
 
     print(f"[export] Renderer-ready assets written to: {preview_dir}")

@@ -204,7 +204,7 @@ namespace Falcor
         mData.brdfWeightOffsets = brdf.offsets;
 
 
-        auto sampler = loadDecoderWeights(samplerWeightsPath, 14, 10);
+        auto sampler = loadDecoderWeights(samplerWeightsPath, 8 + 3, 10);
         mpSamplerDecoderBuffer = sampler.decoderBuffer;
 
         mData.samplerMlpWidth = static_cast<uint32_t>(sampler.mlpWidth);
