@@ -46,6 +46,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace Falcor
 {
@@ -312,6 +313,12 @@ namespace Falcor
             The defines must be set on any program using the material.
         */
         virtual DefineList getDefines() const { return {}; }
+
+        /** Get names of training-only bootstrap features exposed by this material.
+            Materials that implement IBootstrapFeatureMaterial should return one name per
+            scalar feature written into BootstrapFeatureData.
+        */
+        virtual std::vector<std::string> getBootstrapFeatureNames() const { return {}; }
 
         /** Get the number of buffers used by this material.
         */

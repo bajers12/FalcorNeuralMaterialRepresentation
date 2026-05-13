@@ -1,4 +1,5 @@
 import Scene.Scene;
+import Scene.Material.BootstrapFeatureMaterial;
 import Scene.Material.MaterialSystem;
 import Scene.Material.ShadingUtils;
 import Rendering.Materials.AnisotropicGGX;
@@ -612,7 +613,7 @@ struct ThreeLayeredGGXMaterialInstance : MaterialInstanceBase, IMaterialInstance
     }
 };
 
-struct ThreeLayeredGGXMaterial : MaterialBase, IMaterial
+struct ThreeLayeredGGXMaterial : MaterialBase, IMaterial, IBootstrapFeatureMaterial
 {
     ThreeLayeredGGXMaterialData data;
 
@@ -636,5 +637,32 @@ struct ThreeLayeredGGXMaterial : MaterialBase, IMaterial
     {
         diffData = {};
         return setupMaterialInstance(ms, sd, lod, hints);
+    }
+
+    BootstrapFeatureData getBootstrapFeatures(const MaterialSystem ms, const ShadingData sd)
+    {
+        BootstrapFeatureData features = {};
+
+        uint samplerID = header.getDefaultTextureSamplerID();
+        LayeredTextureInputs inputs = sampleLayeredTextureInputs(data, samplerID, sd);
+        LayeredTextureLayerParams baseLayer = layeredTextureGetBaseLayer(data, inputs);
+        LayeredTextureLayerParams midLayer = layeredTextureGetMidLayer(data, inputs);
+        LayeredTextureLayerParams coatLayer = layeredTextureGetCoatLayer(data, inputs);
+
+        float3 attenuation = layeredTextureAttenuation(data, inputs);
+        float thickness = layeredTextureThickness(data, inputs);
+        float3 attenuatedBaseColor = saturate(inputs.baseColor) * baseLayer.attenuation;
+
+        ShadingFrame baseSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, baseLayer.normalFlatten);
+        ShadingFrame midSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, midLayer.normalFlatten);
+        ShadingFrame coatSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, coatLayer.normalFlatten);
+
+        features.feature0 = float4(attenuatedBaseColor, baseLayer.roughness);
+        features.feature1 = float4(midLayer.roughness, coatLayer.roughness, baseLayer.weight, midLayer.weight);
+        features.feature2 = float4(coatLayer.weight, attenuation);
+        features.feature3 = float4(baseSf.N, midSf.N.x);
+        features.feature4 = float4(midSf.N.yz, coatSf.N.xy);
+        features.feature5 = float4(coatSf.N.z, thickness, 0.f, 0.f);
+        return features;
     }
 };

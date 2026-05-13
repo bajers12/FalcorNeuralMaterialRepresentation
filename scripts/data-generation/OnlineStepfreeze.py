@@ -38,7 +38,7 @@ import json
 import time
 import argparse
 import struct
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Dict, Tuple, Optional
 from DataGenerator import (
@@ -53,6 +53,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import AssetConverter
 
 
 # =============================================================================
@@ -88,7 +89,8 @@ class TrainConfig:
     seed: int = 1337
     training_n: int = 65536 # total samples generated per outer epoch
     validation_n: int = 65536
-    max_epochs: int = 50
+    max_epochs: int = 300000
+    sampler_epochs: int = 20000
 
     lr: float = 1e-3
     lr_min: float = 1e-4
@@ -123,6 +125,9 @@ class TrainConfig:
     encoder_depth: int = 2
     encoder_bootstrap_epochs: int = 200
     latent_init_batch_size: int = 65536
+    bootstrap_feature_layout: str = "auto"
+    material_feature_dim: int = 0
+    material_feature_names: Tuple[str, ...] = field(default_factory=tuple)
     use_albedo_features: bool = True
     use_spec_features: bool = True
     use_normal_features: bool = True
@@ -146,7 +151,7 @@ def tensorize_batch(data_dict: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]
 
 def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
     print(f"[debug] first sample from {label}:")
-    ordered_keys = ["uv", "wi", "wo", "y", "spec", "albedo", "normal", "roughness", "pdf"]
+    ordered_keys = ["uv", "wi", "wo", "y", "features"]
     for key in ordered_keys:
         if key not in batch:
             continue
@@ -160,20 +165,11 @@ def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
 
 
 def get_encoder_input_dim(cfg: TrainConfig) -> int:
-    dim = 0
-    if cfg.use_albedo_features:
-        dim += 3
-    if cfg.use_spec_features:
-        dim += 3
-    if cfg.use_normal_features:
-        dim += 3
-    if cfg.use_roughness_feature:
-        dim += 1
-    if cfg.use_pdf_feature:
-        dim += 1
-    if dim == 0:
-        raise ValueError("Encoder feature set is empty. Enable at least one training feature.")
-    return dim
+    if cfg.material_feature_dim > 0:
+        return cfg.material_feature_dim
+    if cfg.encoder_bootstrap_epochs <= 0:
+        return 1
+    raise ValueError("Encoder bootstrap requires an active feature layout. Use --bootstrap_feature_layout auto, material, or legacy.")
 
 
 # =============================================================================
@@ -920,23 +916,32 @@ def to_local(
 
 
 def log_l1_loss(
-    y_hat: torch.Tensor, y: torch.Tensor, eps: float, mask_threshold: float = 1e-4
+    raw: torch.Tensor,
+    y: torch.Tensor,
+    exp_offset: float,
+    eps: float,
+    mask_threshold: float = 1e-4,
 ) -> torch.Tensor:
     """
     L1 loss in log space:
-      mean(|log(y_hat+eps) - log(y+eps)|)
+      mean(|(raw - exp_offset) - log(y+eps)|)
+
+    This is equivalent to taking the log of the exponential decoder output, but
+    avoids overflowing exp(raw - exp_offset) before the logarithm is applied.
     """
+    y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
+
     # Build per-sample mask: keep samples that have at least one significant channel
     valid = y.amax(dim=-1) >= mask_threshold  # [B]
     if valid.any():
-        y_hat_c = y_hat[valid].clamp_min(eps)
+        raw_c = raw[valid]
         y_c = y[valid].clamp_min(eps)
     else:
         # Fallback: use everything (avoids zero-element mean on pathological batches)
-        y_hat_c = y_hat.clamp_min(eps)
+        raw_c = raw
         y_c = y.clamp_min(eps)
 
-    return (torch.log(y_hat_c) - torch.log(y_c)).abs().mean()
+    return ((raw_c - exp_offset) - torch.log(y_c)).abs().mean()
 
 
 @torch.no_grad()
@@ -976,6 +981,12 @@ def importance_sampling_loss(
     )
 
     brdf_weights = (y_true.sum(dim=-1) / (3.0 + eps)).clamp_min(0.0)
+    # Normalize to sum-to-1 so loss scale is independent of BRDF magnitude.
+    # Without this, bright specular samples (large y) produce large negative
+    # loss terms when pdf > 1, pushing the loss into the hundreds-negative range.
+    weight_sum = brdf_weights.sum().clamp_min(eps)
+    brdf_weights = brdf_weights / weight_sum
+
     loss_terms = -torch.log(pdf_sampler) * brdf_weights
     finite_mask = torch.isfinite(loss_terms)
 
@@ -983,41 +994,16 @@ def importance_sampling_loss(
         # Keep graph connected while avoiding a hard failure on a pathological batch.
         return (pdf_sampler * 0.0).sum()
 
-    return loss_terms[finite_mask].mean()
+    # sum not mean — weights already integrate to ~1 over the finite samples
+    return loss_terms[finite_mask].sum()
 
 
 def build_material_features(
     batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
 ) -> torch.Tensor:
-    features = []
-
-    if cfg.use_albedo_features:
-        features.append(batch["albedo"].to(device, non_blocking=True))
-
-    if cfg.use_spec_features:
-        features.append(batch["spec"].to(device, non_blocking=True))
-
-    if cfg.use_normal_features:
-        normal = F.normalize(
-            batch["normal"].to(device, non_blocking=True), dim=-1, eps=1e-8
-        )
-        features.append(normal)
-
-    if cfg.use_roughness_feature:
-        roughness = batch["roughness"].to(device, non_blocking=True).unsqueeze(-1)
-        features.append(roughness)
-
-    if cfg.use_pdf_feature:
-        pdf = (
-            torch.log1p(batch["pdf"].to(device, non_blocking=True).clamp_min(0.0))
-            .unsqueeze(-1)
-        )
-        features.append(pdf)
-
-    if not features:
-        raise ValueError("Encoder feature set is empty. Enable at least one training feature.")
-
-    return torch.cat(features, dim=-1)
+    if "features" not in batch:
+        raise ValueError("Configured bootstrap features are missing from the generated batch.")
+    return batch["features"].to(device, non_blocking=True)
 
 
 def get_training_phase(cfg: TrainConfig, epoch: int) -> str:
@@ -1056,7 +1042,10 @@ def initialize_latent_texture_from_encoder(
         f"{cfg.tex_w}x{cfg.tex_h} UV grid in a single batch"
     )
     sample_count = cfg.tex_w * cfg.tex_h
-    grid_generator = DataGenerator(sampleCount=sample_count)
+    grid_generator = DataGenerator(
+        sampleCount=sample_count,
+        bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+    )
     try:
         grid_batch = grid_generator.generate_grid_data(
             cfg.tex_w,
@@ -1068,7 +1057,7 @@ def initialize_latent_texture_from_encoder(
     finally:
         grid_generator.release_data()
 
-    grid_tensor = tensorize_batch(data_to_dict(grid_batch))
+    grid_tensor = tensorize_batch(data_to_dict(grid_batch, cfg.material_feature_dim))
     latent_chunks = []
 
     for start in range(0, sample_count, cfg.latent_init_batch_size):
@@ -1319,7 +1308,7 @@ def train_one_epoch(
         z_dec = model.latent.sample(uv_dec)
 
     y_hat_dec, raw_dec = model.decode_with_raw(z_dec, wi_dec, wo_dec)
-    bsdf_loss = log_l1_loss(y_hat_dec, y_dec, cfg.log_eps)
+    bsdf_loss = log_l1_loss(raw_dec, y_dec, model.decoder.exp_offset, cfg.log_eps)
 
     if not torch.isfinite(bsdf_loss):
         raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
@@ -1337,7 +1326,11 @@ def train_one_epoch(
 
     sampler_loss = None
 
-    if cfg.train_importance_sampler:
+    should_train_sampler = (
+        cfg.train_importance_sampler
+        and (epoch < cfg.sampler_epochs)
+    )
+    if should_train_sampler:
         sampler_batch = batch_decoder if batch_sampler is None else batch_sampler
 
         uv_sam = sampler_batch["uv"].to(device, non_blocking=True)
@@ -1413,13 +1406,13 @@ def validate(
         z = model.latent.sample(uv)
 
     y_hat, raw = model.decode_with_raw(z, wi, wo)
-    loss = log_l1_loss(y_hat, y, cfg.log_eps)
+    loss = log_l1_loss(raw, y, model.decoder.exp_offset, cfg.log_eps)
     stats = compute_basic_stats(y_hat, y)
     raw_stats = compute_raw_stats(raw)
 
     out = {
         "phase": phase,
-        "val_loss": loss.item(),
+        "brdf_val_loss": loss.item(),
         "val_mae": stats["mae"],
         "val_yhat_mean": stats["yhat_mean"],
         "val_y_mean": stats["y_mean"],
@@ -1462,274 +1455,6 @@ def save_checkpoint(
     torch.save(payload, ckpt_path)
     return ckpt_path
 
-
-def load_model_weights_from_checkpoint(
-    model: NeuralMaterialModel, ckpt_path: str, device: torch.device
-) -> Dict:
-    payload = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(payload["model"])
-    return payload
-
-
-def export_latent_texture(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
-    os.makedirs(cfg.out_dir, exist_ok=True)
-
-    Z = model.latent.Z.detach().cpu()  # [1,C,H,W]
-    torch.save(
-        {"Z": Z, "shape": (cfg.tex_h, cfg.tex_w, cfg.latent_ch)},
-        os.path.join(cfg.out_dir, "latent_texture.pt"),
-    )
-
-    Z_np = Z.numpy()
-    if cfg.latent_ch == 8:
-        rgba0 = Z_np[0, 0:4, :, :]  # [4,H,W]
-        rgba1 = Z_np[0, 4:8, :, :]
-        np.savez_compressed(os.path.join(cfg.out_dir, "latent_rgba0.npz"), rgba=rgba0)
-        np.savez_compressed(os.path.join(cfg.out_dir, "latent_rgba1.npz"), rgba=rgba1)
-    else:
-        np.savez_compressed(os.path.join(cfg.out_dir, "latent_all.npz"), z=Z_np)
-
-
-def export_decoder_weights(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
-    os.makedirs(cfg.out_dir, exist_ok=True)
-
-    torch.save(model.decoder.state_dict(), os.path.join(cfg.out_dir, "decoder.pt"))
-
-    sd = model.decoder.state_dict()
-    out = {
-        "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
-        "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-    }
-
-    out["frame_linear.weight"] = sd["frame_linear.weight"].detach().cpu().numpy()
-    if "frame_linear.bias" in sd:
-        out["frame_linear.bias"] = sd["frame_linear.bias"].detach().cpu().numpy()
-
-    for k, v in sd.items():
-        if k.startswith("mlp."):
-            out[k] = v.detach().cpu().numpy()
-
-    np.savez_compressed(os.path.join(cfg.out_dir, "decoder_weights.npz"), **out)
-
-
-def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
-    rgba_hw4 = np.asarray(rgba_hw4, dtype=np.float32)
-    assert rgba_hw4.ndim == 3 and rgba_hw4.shape[2] == 4, f"Expected HxWx4, got {rgba_hw4.shape}"
-
-    h, w, _ = rgba_hw4.shape
-
-    try:
-        import OpenEXR
-        import Imath
-
-        header = OpenEXR.Header(w, h)
-        pt = Imath.PixelType(Imath.PixelType.FLOAT)
-        header["channels"] = {
-            "R": Imath.Channel(pt),
-            "G": Imath.Channel(pt),
-            "B": Imath.Channel(pt),
-            "A": Imath.Channel(pt),
-        }
-
-        exr = OpenEXR.OutputFile(str(path), header)
-        exr.writePixels(
-            {
-                "R": rgba_hw4[:, :, 0].astype(np.float32).tobytes(),
-                "G": rgba_hw4[:, :, 1].astype(np.float32).tobytes(),
-                "B": rgba_hw4[:, :, 2].astype(np.float32).tobytes(),
-                "A": rgba_hw4[:, :, 3].astype(np.float32).tobytes(),
-            }
-        )
-        exr.close()
-        return
-    except Exception:
-        pass
-
-
-def save_weights_bin(path: Path, weights: dict) -> None:
-    return save_network_weights_bin(
-        path=path,
-        weights=weights,
-        input_dim=18,
-        output_dim=3,
-    )
-
-
-def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> dict:
-    frame_weight = np.asarray(weights["frame_linear.weight"], dtype=np.float32)
-    if frame_weight.shape != (12, 8):
-        raise ValueError(f"frame_linear.weight expected shape (12, 8), got {frame_weight.shape}")
-
-    latent_ch = int(np.asarray(weights.get("latent_ch", np.array([8], dtype=np.int32))).reshape(-1)[0])
-    num_frames = int(np.asarray(weights.get("num_frames", np.array([2], dtype=np.int32))).reshape(-1)[0])
-
-    layer_indices = sorted(
-        int(k.split(".")[1]) for k in weights.keys() if k.startswith("mlp.") and k.endswith(".weight")
-    )
-    if not layer_indices:
-        raise ValueError("No MLP layers found in weights.")
-
-    linear_layers = ["frame_linear"] + [f"mlp.{idx}" for idx in layer_indices]
-    mlp_depth = len(layer_indices) - 1
-    if mlp_depth not in (2, 3):
-        raise ValueError(f"Unsupported MLP depth: {mlp_depth}. Expected 2 or 3.")
-
-    first_w = np.asarray(weights[f"mlp.{layer_indices[0]}.weight"], dtype=np.float32)
-    mlp_width = int(first_w.shape[0])
-
-    expected_prev = input_dim
-    decoder_layout = {"frame_linear.weight": [12, 8]}
-    for idx in layer_indices:
-        w_name = f"mlp.{idx}.weight"
-        b_name = f"mlp.{idx}.bias"
-        w = np.asarray(weights[w_name], dtype=np.float32)
-        b = np.asarray(weights[b_name], dtype=np.float32)
-
-        out_dim = output_dim if idx == layer_indices[-1] else mlp_width
-        if tuple(w.shape) != (out_dim, expected_prev):
-            raise ValueError(f"{w_name} expected shape {(out_dim, expected_prev)}, got {w.shape}")
-        if tuple(b.shape) != (out_dim,):
-            raise ValueError(f"{b_name} expected shape {(out_dim,)}, got {b.shape}")
-
-        decoder_layout[w_name] = [int(w.shape[0]), int(w.shape[1])]
-        decoder_layout[b_name] = [int(b.shape[0])]
-        expected_prev = mlp_width
-
-    if latent_ch != 8:
-        raise ValueError(f"Only latent_ch=8 is supported for runtime export, got {latent_ch}")
-    if num_frames != 2:
-        raise ValueError(f"Only num_frames=2 is supported for runtime export, got {num_frames}")
-    if mlp_width not in (16, 32, 64):
-        raise ValueError(f"Unsupported mlp_width={mlp_width}. Expected one of 16, 32, 64.")
-
-    return {
-        "latent_ch": latent_ch,
-        "num_frames": num_frames,
-        "mlp_width": mlp_width,
-        "mlp_depth": mlp_depth,
-        "linear_layers": linear_layers,
-        "decoder_layout": decoder_layout,
-    }
-
-
-def save_network_weights_bin(
-    path: Path,
-    weights: dict,
-    *,
-    input_dim: int,
-    output_dim: int,
-) -> dict:
-    layout = _infer_network_layout(weights, input_dim=input_dim, output_dim=output_dim)
-    latent_ch = layout["latent_ch"]
-    num_frames = layout["num_frames"]
-    mlp_width = layout["mlp_width"]
-    mlp_depth = layout["mlp_depth"]
-
-    with open(path, "wb") as f:
-        f.write(b"NMDLWT02")
-        f.write(struct.pack("<iiii", latent_ch, num_frames, mlp_width, mlp_depth))
-
-        for layer_name in layout["linear_layers"]:
-            weight_name = f"{layer_name}.weight"
-            bias_name = f"{layer_name}.bias"
-            w = np.asarray(weights[weight_name], dtype=np.float32)
-            f.write(w.ravel(order="C").tobytes())
-            if bias_name in weights:
-                b = np.asarray(weights[bias_name], dtype=np.float32)
-                f.write(b.ravel(order="C").tobytes())
-
-    layout["weight_file_format"] = "NMDLWT02"
-    return layout
-
-
-def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
-    _, h, w = latent.shape
-    layout = _infer_network_layout(weights, input_dim=18, output_dim=3)
-    metadata = {
-        "width": int(w),
-        "height": int(h),
-        "latent_dim": int(latent.shape[0]),
-        "num_frames": layout["num_frames"],
-        "apply_exp": True,
-        "mlp_width": layout["mlp_width"],
-        "mlp_depth": layout["mlp_depth"],
-        "weight_file_format": "NMDLWT02",
-        "decoder_layout": layout["decoder_layout"],
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
-
-
-def save_sampler_metadata(path: Path, weights: dict) -> None:
-    # Sampler head outputs 5 values per lobe × 2 lobes = 10 channels.
-    layout = _infer_network_layout(weights, input_dim=14, output_dim=10)
-    metadata = {
-        "latent_dim": layout["latent_ch"],
-        "num_frames": layout["num_frames"],
-        "mlp_width": layout["mlp_width"],
-        "mlp_depth": layout["mlp_depth"],
-        "weight_file_format": "NMDLWT02",
-        "decoder_layout": layout["decoder_layout"],
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
-
-
-def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
-    preview_dir = Path(cfg.preview_out_dir) if cfg.preview_out_dir else Path(__file__).resolve().parents[2] / "MatXScenes" / "Preview"
-    os.makedirs(preview_dir, exist_ok=True)
-
-    if cfg.latent_ch != 8:
-        print(
-            f"[export] Skipping renderer-ready latent/weight bundle because latent_ch={cfg.latent_ch}; expected 8."
-        )
-        return
-
-    latent = model.latent.Z.detach().cpu().numpy()[0]
-    rgba0 = latent[0:4].transpose(1, 2, 0).copy()
-    rgba1 = latent[4:8].transpose(1, 2, 0).copy()
-
-    write_exr(preview_dir / "latent0.exr", rgba0)
-    write_exr(preview_dir / "latent1.exr", rgba1)
-
-    np.save(preview_dir / "latent0.npy", rgba0)
-    np.save(preview_dir / "latent1.npy", rgba1)
-
-    sd = model.decoder.state_dict()
-    weights = {
-        "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
-        "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-        "frame_linear.weight": sd["frame_linear.weight"].detach().cpu().numpy(),
-    }
-    for key, value in sd.items():
-        if key.startswith("mlp."):
-            weights[key] = value.detach().cpu().numpy()
-
-    save_weights_bin(preview_dir / "decoder_weights.bin", weights)
-    save_metadata(preview_dir / "metadata.json", latent, weights)
-
-    if cfg.train_importance_sampler:
-        sampler_sd = model.importance_sampler.state_dict()
-        sampler_weights = {
-            "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
-            "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-            "frame_linear.weight": sampler_sd["frame_linear.weight"].detach().cpu().numpy(),
-        }
-        for key, value in sampler_sd.items():
-            if key.startswith("mlp."):
-                sampler_weights[key] = value.detach().cpu().numpy()
-
-        save_network_weights_bin(
-            preview_dir / "sampler_weights.bin",
-            sampler_weights,
-            input_dim=14,
-            output_dim=10,
-        )
-        save_sampler_metadata(preview_dir / "sampler_metadata.json", sampler_weights)
-
-    print(f"[export] Renderer-ready assets written to: {preview_dir}")
-
-
 def save_config(cfg: TrainConfig) -> None:
     os.makedirs(cfg.out_dir, exist_ok=True)
     with open(os.path.join(cfg.out_dir, "config.json"), "w", encoding="utf-8") as f:
@@ -1768,6 +1493,7 @@ def parse_args() -> TrainConfig:
     p.add_argument("--training_n", type=int, default=65536)
     p.add_argument("--validation_size", type=int, default=65536)
     p.add_argument("--max_epochs", type=int, default=300000)
+    p.add_argument("--sampler_epochs", type=int, default=20000)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
     p.add_argument("--lr_latent", type=float, default=None)
@@ -1830,6 +1556,13 @@ def parse_args() -> TrainConfig:
         help="Batch size used when initializing the latent texture from encoder outputs.",
     )
     p.add_argument(
+        "--bootstrap_feature_layout",
+        type=str,
+        default="auto",
+        choices=("none", "auto", "legacy", "material", "three_layered_ggx"),
+        help="Bootstrap-only encoder feature layout. Finetune generation always uses 'none'. 'three_layered_ggx' is kept as an alias for 'material'.",
+    )
+    p.add_argument(
         "--albedo_feature",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1882,6 +1615,7 @@ def parse_args() -> TrainConfig:
     cfg.training_n = args.training_n
     cfg.validation_n = args.validation_size
     cfg.max_epochs = args.max_epochs
+    cfg.sampler_epochs = args.sampler_epochs
     cfg.lr = args.lr
     cfg.lr_min = args.lr_min
     cfg.lr_latent = args.lr_latent
@@ -1908,6 +1642,7 @@ def parse_args() -> TrainConfig:
     cfg.encoder_depth = args.encoder_depth
     cfg.encoder_bootstrap_epochs = max(0, args.encoder_bootstrap_epochs)
     cfg.latent_init_batch_size = max(1, args.latent_init_batch_size)
+    cfg.bootstrap_feature_layout = args.bootstrap_feature_layout
     cfg.use_albedo_features = args.albedo_feature
     cfg.use_spec_features = args.spec_feature
     cfg.use_normal_features = args.normal_feature
@@ -1919,29 +1654,29 @@ def parse_args() -> TrainConfig:
     return cfg
 
 
-def data_to_dict(data: np.ndarray):
+def data_to_dict(data: np.ndarray, material_feature_dim: int = 0):
     uv = data[:, 0:2]
     wo = data[:, 2:5]
     wi = data[:, 5:8]
     f = data[:, 8:11]
-    spec = data[:, 11:14]
-    albedo = data[:, 14:17]
-    normal = data[:, 17:20]
-    roughness = data[:, 20]
-    pdf = data[:, 21]
 
-    return {
+    batch = {
         "uv": uv,
         "wo": wo,
         "wi": wi,
         "y": f,
-        "spec": spec,
-        "albedo": albedo,
-        "normal": normal,
-        "roughness": roughness,
-        "pdf": pdf,
     }
+    if material_feature_dim > 0:
+        feature_start = 11
+        feature_end = feature_start + material_feature_dim
+        if data.shape[1] < feature_end:
+            raise ValueError(
+                f"Generated data has {data.shape[1]} columns, but material feature dim "
+                f"{material_feature_dim} requires at least {feature_end}."
+            )
+        batch["features"] = data[:, feature_start:feature_end]
 
+    return batch
 
 # =============================================================================
 # Main
@@ -1965,6 +1700,28 @@ def main():
 
     device = torch.device(cfg.device)
 
+    bootstrap_validation_generator = None
+    if cfg.encoder_bootstrap_epochs > 0:
+        bootstrap_validation_generator = DataGenerator(
+            sampleCount=cfg.validation_n,
+            bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+        )
+        cfg.material_feature_names = tuple(bootstrap_validation_generator.get_bootstrap_feature_names())
+        cfg.material_feature_dim = bootstrap_validation_generator.get_bootstrap_feature_dim()
+        if cfg.material_feature_dim != len(cfg.material_feature_names):
+            raise RuntimeError(
+                "OnlineDataGenerationPass reported inconsistent bootstrap feature metadata: "
+                f"dim={cfg.material_feature_dim}, names={len(cfg.material_feature_names)}."
+            )
+        if cfg.material_feature_dim <= 0:
+            raise RuntimeError(
+                "Encoder bootstrap is enabled, but the selected bootstrap feature layout produced no features."
+            )
+        print(
+            "[bootstrap] using encoder features: "
+            f"layout={cfg.bootstrap_feature_layout}, dim={cfg.material_feature_dim}"
+        )
+
     os.makedirs(cfg.out_dir, exist_ok=True)
     save_config(cfg)
     run_logger = TrainingRunLogger(cfg)
@@ -1981,7 +1738,7 @@ def main():
     opt = make_optimizer(model, cfg, current_phase)
     scheduler = make_scheduler(opt, cfg)
 
-    best_val = float("inf")
+    best_brdf_val_loss = float("inf")
     best_model_state: Optional[Dict[str, torch.Tensor]] = None
     best_metrics: Optional[Dict[str, float]] = None
     best_epoch: Optional[int] = None
@@ -1990,26 +1747,57 @@ def main():
     last_metrics: Optional[Dict[str, float]] = None
     run_status = "completed"
 
+    best_sampler_loss = float("inf")
+    best_sampler_state: Optional[Dict[str, torch.Tensor]] = None
+    best_sampler_epoch: Optional[int] = None
+
     try:
-        # Gene validation data only once, and keep as single holdout set for all epochs
-        data_generator = DataGenerator(sampleCount=cfg.validation_n)
-        if cfg.encoder_bootstrap_epochs > 0 and not data_generator.supports_uv_grid():
+        # Generate validation data once per required payload shape.
+        bootstrap_validation_tensor = None
+        if bootstrap_validation_generator is not None:
+            if not bootstrap_validation_generator.supports_uv_grid():
+                raise RuntimeError(
+                    "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
+                    "Rebuild Falcor/plugin binaries so setUvGrid/clearUvGrid are available, or set --encoder_bootstrap_epochs 0."
+                )
+            bootstrap_validation_batch = bootstrap_validation_generator.generate_data(
+                cfg.seed, SEED_DOMAIN_VALIDATION, 0
+            ).copy()
+            bootstrap_validation_generator.release_data()
+            bootstrap_validation_tensor = tensorize_batch(data_to_dict(bootstrap_validation_batch, cfg.material_feature_dim))
+            print_first_sample(bootstrap_validation_tensor, "bootstrap validation batch")
+
+        validation_generator = DataGenerator(
+            sampleCount=cfg.validation_n,
+            bootstrap_feature_layout="none",
+        )
+        if cfg.encoder_bootstrap_epochs > 0 and not validation_generator.supports_uv_grid():
             raise RuntimeError(
                 "Encoder bootstrap requires the rebuilt OnlineDataGenerationPass plugin with UV-grid support. "
                 "Rebuild Falcor/plugin binaries so setUvGrid/clearUvGrid are available, or set --encoder_bootstrap_epochs 0."
             )
-        validation_batch = data_generator.generate_data(
+        validation_batch = validation_generator.generate_data(
             cfg.seed, SEED_DOMAIN_VALIDATION, 0
         ).copy()
-        data_generator.release_data()
-        validation_tensor = tensorize_batch(data_to_dict(validation_batch))
-        print_first_sample(validation_tensor, "validation batch")
+        validation_generator.release_data()
+        validation_tensor = tensorize_batch(data_to_dict(validation_batch, 0))
+        print_first_sample(validation_tensor, "finetune validation batch")
 
-        data_generator = DataGenerator(sampleCount=cfg.training_n)
+        bootstrap_data_generator = None
+        if cfg.encoder_bootstrap_epochs > 0:
+            bootstrap_data_generator = DataGenerator(
+                sampleCount=cfg.training_n,
+                bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+            )
+        finetune_data_generator = DataGenerator(
+            sampleCount=cfg.training_n,
+            bootstrap_feature_layout="none",
+        )
         if cfg.train_importance_sampler:
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
         else:
             print(f"[train] brdf-only mode: batch={cfg.training_n}")
+
         for epoch in range(cfg.max_epochs):
             phase = get_training_phase(cfg, epoch)
             phase_changed = phase != current_phase
@@ -2033,14 +1821,16 @@ def main():
                     f"iterations={cfg.mollification_iterations}, "
                     f"samples={cfg.mollification_sample_count}"
                 )
-            data_batch_decoder = data_generator.generate_data(
+            active_data_generator = bootstrap_data_generator if phase == "bootstrap" else finetune_data_generator
+            active_feature_dim = cfg.material_feature_dim if phase == "bootstrap" else 0
+            data_batch_decoder = active_data_generator.generate_data(
                 cfg.seed,
                 SEED_DOMAIN_TRAIN,
                 epoch,
                 mollification_cone_angle_rad,
                 cfg.mollification_sample_count,
             )
-            training_tensor_decoder = tensorize_batch(data_to_dict(data_batch_decoder))
+            training_tensor_decoder = tensorize_batch(data_to_dict(data_batch_decoder, active_feature_dim))
 
             training_tensor_sampler = None
             if cfg.train_importance_sampler:
@@ -2066,7 +1856,8 @@ def main():
 
             metrics = dict(train_metrics)
 
-            val_metrics = validate(model, validation_tensor, cfg, epoch, phase)
+            active_validation_tensor = bootstrap_validation_tensor if phase == "bootstrap" else validation_tensor
+            val_metrics = validate(model, active_validation_tensor, cfg, epoch, phase)
             metrics.update(val_metrics)
             last_epoch = epoch
             last_metrics = dict(metrics)
@@ -2082,19 +1873,29 @@ def main():
                     f"[train] epoch {epoch:03d} "
                     f"phase={phase} brdf_loss={metrics['brdf_loss']:.6f}" \
                     f"{sampler_log} "
-                    f"val_loss={metrics['val_loss']:.6f} "
+                    f"val_loss={metrics['brdf_val_loss']:.6f} "
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )
 
-            if metrics["val_loss"] < best_val:
-                best_val = metrics["val_loss"]
+            if metrics["brdf_val_loss"] < best_brdf_val_loss:
+                best_brdf_val_loss = metrics["brdf_val_loss"]
                 best_epoch = epoch
                 best_phase = phase
                 best_metrics = dict(metrics)
                 best_model_state = snapshot_model_state(model)
-                print(f"[best] epoch {epoch:03d} val_loss={best_val:.6f} cached in memory")
+                print(f"[best] epoch {epoch:03d} val_loss={best_brdf_val_loss:.6f}")
 
+            if cfg.train_importance_sampler and "sampler_loss" in metrics:
+                current_sampler_loss = metrics["sampler_loss"]
+                if current_sampler_loss < best_sampler_loss:
+                    best_sampler_loss = current_sampler_loss
+                    best_sampler_epoch = epoch
+                    best_sampler_state = {
+                        k: v.detach().cpu().clone()
+                        for k, v in model.importance_sampler.state_dict().items()
+                    }
+                    print(f"[best_sampler] epoch {epoch:03d} sampler_loss={metrics['sampler_loss']:.6f} cached in memory")
             if run_logger.should_log_progress(
                 epoch=epoch,
                 phase_changed=phase_changed,
@@ -2102,7 +1903,7 @@ def main():
             ):
                 run_logger.append_progress(epoch, metrics, phase)
 
-            data_generator.release_data()
+            active_data_generator.release_data()
     except KeyboardInterrupt:
         run_status = "interrupted"
         raise
@@ -2128,6 +1929,10 @@ def main():
             initialize_latent_texture_from_encoder(
                 model, cfg, best_epoch
             )
+
+        if best_sampler_state is not None:
+            model.importance_sampler.load_state_dict(best_sampler_state)
+
         best_ckpt_path = save_checkpoint(
             model,
             None,
@@ -2139,11 +1944,11 @@ def main():
         )
         print(
             f"[export] Restored best validation state from epoch "
-            f"{best_epoch:03d} with val_loss={best_metrics.get('val_loss', float('nan')):.6f} "
+            f"{best_epoch:03d} with val_loss={best_metrics.get('brdf_val_loss', float('nan')):.6f} and sampler_loss={best_sampler_loss:.6f} at epoch {best_sampler_epoch:03d} "
             f"and saved {best_ckpt_path}"
         )
 
-    export_renderer_assets(model, cfg)
+    AssetConverter.export_renderer_assets(model, cfg)
     print("Done. Exports written to:", cfg.out_dir)
 
 

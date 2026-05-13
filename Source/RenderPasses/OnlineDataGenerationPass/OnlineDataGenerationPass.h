@@ -32,6 +32,7 @@
 #include <filesystem>
 #include "Scene/Material/MaterialXGraphMaterial.h"
 #include <pybind11/numpy.h>
+#include <pybind11/stl.h>
 
 using namespace Falcor;
 
@@ -41,11 +42,20 @@ struct BsdfSampleData
     float3 wo;
     float3 wi;
     float3 f;
-    float3 specular;
-    float3 albedo;
-    float3 normal;
-    float1 roughness;
-    float1 pdf;
+};
+
+struct BsdfFeatureSampleData
+{
+    float2 uv;
+    float3 wo;
+    float3 wi;
+    float3 f;
+    float4 bootstrapFeature0;
+    float4 bootstrapFeature1;
+    float4 bootstrapFeature2;
+    float4 bootstrapFeature3;
+    float4 bootstrapFeature4;
+    float4 bootstrapFeature5;
 };
 
 class OnlineDataGenerationPass : public RenderPass
@@ -76,10 +86,24 @@ public:
     void setUvGrid(uint32_t width, uint32_t height);
     void clearUvGrid();
     void setMollification(float coneAngleRadians, uint32_t sampleCount);
+    uint32_t getBootstrapFeatureDim() const;
+    std::vector<std::string> getBootstrapFeatureNames() const;
     static void registerBindings(pybind11::module& m);
 
 private:
+    enum class BootstrapFeatureLayout
+    {
+        None,
+        Auto,
+        Legacy,
+        Material,
+    };
+
     void OnlineDataGenerationPass::parseProperties(const Properties& props);
+    void resolveBootstrapFeatureLayout();
+    void recreateSampleBuffers();
+    static BootstrapFeatureLayout parseBootstrapFeatureLayout(const std::string& value);
+    static std::string bootstrapFeatureLayoutToString(BootstrapFeatureLayout layout);
 
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;
@@ -98,5 +122,10 @@ private:
     uint32_t mUvGridFullHeight = 0;
     float mMollificationConeAngleRad = 0.f;
     uint32_t mMollificationSampleCount = 1;
-    BsdfSampleData* mpMappedData;
+    BootstrapFeatureLayout mRequestedBootstrapFeatureLayout = BootstrapFeatureLayout::Auto;
+    BootstrapFeatureLayout mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::None;
+    std::vector<std::string> mBootstrapFeatureNames;
+    size_t mSampleStrideBytes = sizeof(BsdfSampleData);
+    size_t mSampleFloatCount = sizeof(BsdfSampleData) / sizeof(float);
+    void* mpMappedData;
 };

@@ -33,6 +33,7 @@ namespace Falcor
         MaterialDataBlob getDataBlob() const override;
         ProgramDesc::ShaderModuleList getShaderModules() const override;
         TypeConformanceList getTypeConformances() const override;
+        std::vector<std::string> getBootstrapFeatureNames() const override;
 
         void setDefaultTextureSampler(const ref<Sampler>& pSampler) override { mpSampler = pSampler; }
         ref<Sampler> getDefaultTextureSampler() const override { return mpSampler; }

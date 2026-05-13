@@ -1,3 +1,111 @@
+# Neural Material Representation in Falcor
+
+This repository is a master's thesis project exploring neural material representations inside NVIDIA Falcor. It extends Falcor with a pipeline for generating BSDF training data online, training compact neural material models, and rendering the trained representation as a native Falcor material.
+
+<table>
+  <tr>
+    <td align="center"><strong>Source material</strong></td>
+    <td align="center"><strong>Neural material</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/source-material.png" alt="Source material render" width="100%"></td>
+    <td><img src="docs/images/neural-material.png" alt="Neural material render" width="100%"></td>
+  </tr>
+</table>
+
+
+## Overview
+
+The project focuses on replacing expensive or complex material evaluations with a compact neural representation. A source material is sampled directly on the GPU, the resulting BSDF data is used to train a latent texture and small decoder networks, and the exported assets are loaded back into Falcor for rendering.
+
+```text
+Source material
+    -> Online GPU BSDF sampling
+    -> PyTorch training pipeline
+    -> Renderer-ready neural assets
+    -> Falcor NeuralMaterial
+```
+
+## What This Fork Adds
+
+- A native `NeuralMaterial` implementation integrated with Falcor's material system.
+- Runtime loading of neural material assets, including latent textures and decoder weights.
+- A BRDF decoder for evaluating the learned material response.
+- A learned importance sampler for neural material rendering.
+- An `OnlineDataGenerationPass` for generating BSDF samples directly from Falcor materials.
+- A PyTorch training pipeline for online data generation, encoder bootstrap, latent texture optimization, decoder training, validation, logging, and asset export.
+- A `ThreeLayeredGGXMaterial` source material used for layered-material experiments and material-specific bootstrap features.
+
+
+## Key Implementation Files
+
+- Neural material runtime:
+  [`Source/Falcor/Scene/Material/NeuralMaterial.h`](Source/Falcor/Scene/Material/NeuralMaterial.h),
+  [`NeuralMaterial.cpp`](Source/Falcor/Scene/Material/NeuralMaterial.cpp),
+  [`NeuralMaterial.slang`](Source/Falcor/Scene/Material/NeuralMaterial.slang)
+
+- Online BSDF data generation:
+  [`Source/RenderPasses/OnlineDataGenerationPass`](Source/RenderPasses/OnlineDataGenerationPass)
+
+- Training pipeline:
+  [`scripts/data-generation/OnlineStepfreeze.py`](scripts/data-generation/OnlineStepfreeze.py)
+
+- Python wrapper for online data generation:
+  [`scripts/data-generation/DataGenerator.py`](scripts/data-generation/DataGenerator.py)
+
+- Renderer asset export:
+  [`scripts/data-generation/AssetConverter.py`](scripts/data-generation/AssetConverter.py)
+
+- Training run logging:
+  [`scripts/data-generation/training_run_logging.py`](scripts/data-generation/training_run_logging.py)
+
+- Layered source material used for experiments:
+  [`Source/Falcor/Scene/Material/ThreeLayeredGGXMaterial.h`](Source/Falcor/Scene/Material/ThreeLayeredGGXMaterial.h),
+  [`ThreeLayeredGGXMaterial.cpp`](Source/Falcor/Scene/Material/ThreeLayeredGGXMaterial.cpp),
+  [`ThreeLayeredGGXMaterial.slang`](Source/Falcor/Scene/Material/ThreeLayeredGGXMaterial.slang)
+
+- Material-specific bootstrap features:
+  [`Source/Falcor/Scene/Material/BootstrapFeatureMaterial.slang`](Source/Falcor/Scene/Material/BootstrapFeatureMaterial.slang)
+
+- SceneBuilder integration:
+  [`Source/Falcor/Scene/SceneBuilder.cpp`](Source/Falcor/Scene/SceneBuilder.cpp)
+
+- Neural material preview scene:
+  [`MatXScenes/Preview/NeuralSphere_Mosaic.pyscene`](MatXScenes/Preview/NeuralSphere_Mosaic.pyscene)
+
+
+## Neural Material Assets
+
+A trained neural material is exported as a small asset bundle, currently expected to contain:
+
+- `latent0.exr`
+- `latent1.exr`
+- `decoder_weights.bin`
+- `sampler_weights.bin`
+- `metadata.json`
+- `sampler_metadata.json`
+
+These assets are loaded by `NeuralMaterial` and evaluated directly in Falcor shaders.
+
+## Current Scope
+
+This is project is developed as part of a master's thesis. The current implementation focuses on neural BSDF approximation, online training data generation, and renderer integration rather than being a general-purpose Falcor extension.
+
+Current assumptions include:
+
+- 8 latent channels stored as two RGBA latent textures.
+- Two learned shading frames.
+- Runtime-supported MLP widths of 16, 32, or 64.
+- Runtime-supported MLP depths of 2 or 3 hidden layers.
+
+
+
+---
+
+# Original Falcor README
+
+The following section is the original Falcor README content retained from the upstream repository.
+
 ![](docs/images/teaser.png)
 
 # Falcor
