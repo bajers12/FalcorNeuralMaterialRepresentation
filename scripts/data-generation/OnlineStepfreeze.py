@@ -68,6 +68,8 @@ class TrainConfig:
     tex_w: int = 512
     latent_ch: int = 8
 
+    scene_path: str = 'MatXScenes/Preview/MatXScene.pyscene'
+
     # Decoder architecture
     num_frames: int = 2
     brdf_mlp_width: int = 32
@@ -998,6 +1000,7 @@ def initialize_latent_texture_from_encoder(
     grid_generator = DataGenerator(
         sampleCount=sample_count,
         bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+        scene_path=cfg.scene_path
     )
     try:
         grid_batch = grid_generator.generate_grid_data(
@@ -1420,6 +1423,7 @@ def save_config(cfg: TrainConfig) -> None:
 def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser()
 
+    p.add_argument("--scene_path", type=str, default='MatXScenes/Preview/MatXScene.pyscene')
     p.add_argument("--out_dir", type=str, default="./output_weights")
     p.add_argument(
         "--preview_out_dir",
@@ -1551,6 +1555,7 @@ def parse_args() -> TrainConfig:
     cfg.preview_out_dir = args.preview_out_dir
     cfg.device = args.device
     cfg.seed = args.seed
+    cfg.scene_path = args.scene_path
 
     cfg.tex_h = args.tex_h
     cfg.tex_w = args.tex_w
@@ -1656,6 +1661,7 @@ def main():
         bootstrap_validation_generator = DataGenerator(
             sampleCount=cfg.validation_n,
             bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+            scene_path=cfg.scene_path
         )
         cfg.material_feature_names = tuple(bootstrap_validation_generator.get_bootstrap_feature_names())
         cfg.material_feature_dim = bootstrap_validation_generator.get_bootstrap_feature_dim()
@@ -1721,6 +1727,7 @@ def main():
         validation_generator = DataGenerator(
             sampleCount=cfg.validation_n,
             bootstrap_feature_layout="none",
+            scene_path=cfg.scene_path
         )
         if cfg.encoder_bootstrap_epochs > 0 and not validation_generator.supports_uv_grid():
             raise RuntimeError(
@@ -1739,10 +1746,12 @@ def main():
             bootstrap_data_generator = DataGenerator(
                 sampleCount=cfg.training_n,
                 bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+                scene_path=cfg.scene_path
             )
         finetune_data_generator = DataGenerator(
             sampleCount=cfg.training_n,
             bootstrap_feature_layout="none",
+            scene_path=cfg.scene_path
         )
         if cfg.train_importance_sampler:
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
