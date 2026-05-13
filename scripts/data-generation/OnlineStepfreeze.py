@@ -836,23 +836,32 @@ def to_local(
 
 
 def log_l1_loss(
-    y_hat: torch.Tensor, y: torch.Tensor, eps: float, mask_threshold: float = 1e-4
+    raw: torch.Tensor,
+    y: torch.Tensor,
+    exp_offset: float,
+    eps: float,
+    mask_threshold: float = 1e-4,
 ) -> torch.Tensor:
     """
     L1 loss in log space:
-      mean(|log(y_hat+eps) - log(y+eps)|)
+      mean(|(raw - exp_offset) - log(y+eps)|)
+
+    This is equivalent to taking the log of the exponential decoder output, but
+    avoids overflowing exp(raw - exp_offset) before the logarithm is applied.
     """
+    y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
+
     # Build per-sample mask: keep samples that have at least one significant channel
     valid = y.amax(dim=-1) >= mask_threshold  # [B]
     if valid.any():
-        y_hat_c = y_hat[valid].clamp_min(eps)
+        raw_c = raw[valid]
         y_c = y[valid].clamp_min(eps)
     else:
         # Fallback: use everything (avoids zero-element mean on pathological batches)
-        y_hat_c = y_hat.clamp_min(eps)
+        raw_c = raw
         y_c = y.clamp_min(eps)
 
-    return (torch.log(y_hat_c) - torch.log(y_c)).abs().mean()
+    return ((raw_c - exp_offset) - torch.log(y_c)).abs().mean()
 
 
 @torch.no_grad()
@@ -1219,7 +1228,7 @@ def train_one_epoch(
         z_dec = model.latent.sample(uv_dec)
 
     y_hat_dec, raw_dec = model.decode_with_raw(z_dec, wi_dec, wo_dec)
-    bsdf_loss = log_l1_loss(y_hat_dec, y_dec, cfg.log_eps)
+    bsdf_loss = log_l1_loss(raw_dec, y_dec, model.decoder.exp_offset, cfg.log_eps)
 
     if not torch.isfinite(bsdf_loss):
         raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
@@ -1317,7 +1326,7 @@ def validate(
         z = model.latent.sample(uv)
 
     y_hat, raw = model.decode_with_raw(z, wi, wo)
-    loss = log_l1_loss(y_hat, y, cfg.log_eps)
+    loss = log_l1_loss(raw, y, model.decoder.exp_offset, cfg.log_eps)
     stats = compute_basic_stats(y_hat, y)
     raw_stats = compute_raw_stats(raw)
 
