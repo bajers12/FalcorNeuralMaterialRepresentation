@@ -601,13 +601,6 @@ class ImportanceSamplingDecoder(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Draw one wo sample per batch element via the two-lobe GGX mixture.
-
-        FIX (Bug 2): Accepts an optional pre-computed _frames tuple from
-        forward_params() so the MLP is not evaluated twice.  When called from
-        importance_sampling_loss the caller owns the single forward_params()
-        call and passes it here, preserving the reparameterization gradient chain
-        from wo_sampled back through alpha/frames into the MLP weights.
-
         Returns:
             wo  : [B, 3]  sampled outgoing direction (world / shading space)
             pdf : [B]     probability density of wo under the mixture
@@ -903,22 +896,6 @@ def importance_sampling_loss(
                      frozen BRDF decoder.  cos(θo) is the dataset convention
                      (targets already include it) so the decoder output is used
                      directly as the unnormalised weight.
-
-    FIX (Bug 2): Previously sample() called forward_params() internally and then
-    eval_pdf() called forward_params() a second time with _frames=None, producing
-    two independent MLP evaluations.  The wo_sampled produced by the first call
-    and the pdf_q produced by the second call came from different parameter
-    snapshots, silently breaking the reparameterization gradient chain.
-    We now call forward_params() exactly once and pass the cached frames to both
-    sample() (via sample_with_frames) and eval_pdf(), so gradients flow correctly:
-        wo_sampled → (ax, ay, frames) → sampler MLP weights.
-
-    FIX (Bug 4): The BRDF target luminance previously used an arithmetic mean of
-    RGB channels (sum/3).  Standard perceptual luminance weights (Rec. 709) are
-    used instead so spectrally peaked BRDFs (e.g. ceramic glazing) are weighted
-    correctly.  The cosine term cos(θo) = max(0, wo·n) = max(0, wo_z) is included
-    explicitly — the BRDF decoder approximates f(wi,wo) without the cosine, while
-    the importance sampling target should be proportional to f·cos.
     """
     # --- 1. Single forward_params call — reused for both sample and eval_pdf ---
     t, bv, n, alpha, lobe_weights = model.importance_sampler.forward_params(z, wi)
@@ -926,7 +903,7 @@ def importance_sampling_loss(
 
     # --- 2. Sample wo on-policy WITH gradient (reparameterized), reusing cached frames ---
     wo_sampled, pdf_q = model.importance_sampler.sample(
-        z, wi, _frames=frames  # FIX: pass cached frames — no second MLP forward
+        z, wi, _frames=frames
     )
     pdf_q = torch.nan_to_num(pdf_q, nan=eps, posinf=1e6, neginf=eps).clamp(min=eps, max=1e6)
     log_q = torch.log(pdf_q)  # [B], has grad through wo_sampled -> frames/alpha
@@ -938,16 +915,11 @@ def importance_sampling_loss(
         y_hat = model.decoder.forward(z, wi, wo_sampled)  # [B, 3]  (f(wi,wo))
         y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
 
-        # FIX (Bug 4a): Rec. 709 luminance instead of arithmetic mean.
         brdf_luminance = (
             0.2126 * y_hat[..., 0]
             + 0.7152 * y_hat[..., 1]
             + 0.0722 * y_hat[..., 2]
         ).clamp_min(eps)  # [B]
-
-        # FIX (Bug 4b): multiply by cos(θo) = wo_z so the target distribution is
-        # proportional to f(wi,wo)·cos(θo), matching the rendering integral measure.
-        cos_theta_o = wo_sampled[..., 2].clamp_min(0.0)  # [B]  (wo in surface frame)
         p_tilde = (brdf_luminance).clamp_min(eps)
 
         log_p_tilde = torch.log(p_tilde)  # fully detached
@@ -1100,14 +1072,8 @@ def make_optimizer(
 def make_sampler_optimizer(
     model: NeuralMaterialModel, cfg: TrainConfig
 ) -> torch.optim.Optimizer:
-    """Dedicated optimizer for the importance sampler — completely isolated from BRDF optimizer.
-
-    FIX (Bug 1): Previously the sampler shared the BRDF optimizer's param groups. Every
-    BRDF backward pass called opt.zero_grad() which cleared any residual sampler gradients,
-    and then opt.step() walked over all Adam param groups — including the sampler — with
-    zero/None gradients, corrupting the sampler's exp_avg / exp_avg_sq momentum buffers.
-    Using a separate optimizer ensures the sampler's Adam state is only ever updated when
-    a real sampler gradient exists.
+    """
+    Dedicated optimizer for the importance sampler — completely isolated from BRDF optimizer.
     """
     sampler_params = [p for p in model.importance_sampler.parameters() if p.requires_grad]
     if not sampler_params:
@@ -1318,9 +1284,6 @@ def train_one_epoch(
     if not torch.isfinite(bsdf_loss):
         raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
 
-    # FIX (Bug 1): zero_grad / backward / step operate only on the BRDF optimizer.
-    # The sampler optimizer is never touched here, so its Adam moments are never
-    # corrupted by a zero-gradient step.
     opt.zero_grad(set_to_none=True)
     bsdf_loss.backward()
 
@@ -1357,12 +1320,10 @@ def train_one_epoch(
         # KL-divergence loss (paper Section 4.3).
         # z_sam is detached: latent has no grad w.r.t. sampler (paper stability trick).
         # importance_sampling_loss now calls forward_params once and reuses the frames
-        # for both sample() and the target evaluation (Bug 2 fix).
         sampler_loss = importance_sampling_loss(model, z_sam, wi_sam, cfg.log_eps)
         if not torch.isfinite(sampler_loss):
             raise RuntimeError(f"Non-finite sampler loss at epoch {epoch}: {sampler_loss.item()}")
 
-        # FIX (Bug 1): completely isolated from the BRDF optimizer — own zero/backward/step.
         sampler_opt.zero_grad(set_to_none=True)
         sampler_loss.backward()
 
@@ -1753,7 +1714,6 @@ def main():
     opt = make_optimizer(model, cfg, current_phase)
     scheduler = make_scheduler(opt, cfg)
 
-    # FIX (Bug 1): dedicated sampler optimizer — completely isolated from BRDF optimizer.
     sampler_opt = None
     sampler_scheduler = None
     if cfg.train_importance_sampler:
@@ -1880,7 +1840,6 @@ def main():
             )
 
             scheduler.step()
-            # FIX (Bug 3): step the sampler scheduler independently, only while active.
             if sampler_opt is not None and epoch < cfg.sampler_epochs:
                 sampler_scheduler.step()
 
@@ -1907,25 +1866,22 @@ def main():
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )
-            if epoch%10 == 0 and "sampler_loss" in metrics:
-                print(f"sampler loss: {metrics['sampler_loss']}")
+
             if metrics["brdf_val_loss"] < best_brdf_val_loss:
                 best_brdf_val_loss = metrics["brdf_val_loss"]
                 best_epoch = epoch
                 best_phase = phase
                 best_metrics = dict(metrics)
                 best_model_state = snapshot_model_state(model)
-                print(f"[best] epoch {epoch:03d} val_loss={best_brdf_val_loss:.6f}")
-            if cfg.train_importance_sampler and "sampler_loss" in metrics:
-                current_sampler_loss = metrics["sampler_loss"]
-                if True: #current_sampler_loss < best_sampler_loss:
-                    best_sampler_loss = current_sampler_loss
-                    best_sampler_epoch = epoch
+                # Keep the sampler that was trained against this same decoder
+                if cfg.train_importance_sampler and 'sampler_loss' in metrics:
                     best_sampler_state = {
                         k: v.detach().cpu().clone()
                         for k, v in model.importance_sampler.state_dict().items()
                     }
-                    #print(f"[best_sampler] epoch {epoch:03d} sampler_loss={metrics['sampler_loss']:.6f} cached in memory")
+                    best_sampler_loss = metrics["sampler_loss"]
+                print(f"[best] epoch {epoch:03d} val_loss={best_brdf_val_loss:.6f} and sampler_loss={best_sampler_loss:.6f}")
+
             if run_logger.should_log_progress(
                 epoch=epoch,
                 phase_changed=phase_changed,
@@ -1974,7 +1930,7 @@ def main():
         )
         print(
             f"[export] Restored best validation state from epoch "
-            f"{best_epoch:03d} with val_loss={best_metrics.get('brdf_val_loss', float('nan')):.6f} and sampler_loss={best_sampler_loss:.6f} at epoch {best_sampler_epoch:03d} "
+            f"{best_epoch:03d} with val_loss={best_metrics.get('brdf_val_loss', float('nan')):.6f} and sampler_loss={best_sampler_loss:.6f}"
             f"and saved {best_ckpt_path}"
         )
 
