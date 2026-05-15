@@ -121,8 +121,8 @@ class TrainConfig:
     use_normals: bool = False
 
     # Training-only encoder that maps sampled material values to latent codes.
-    encoder_width: int = 32
-    encoder_depth: int = 2
+    encoder_width: int = 64
+    encoder_depth: int = 4
     encoder_bootstrap_epochs: int = 200
     latent_init_batch_size: int = 65536
     bootstrap_feature_layout: str = "auto"
@@ -816,8 +816,8 @@ def parse_args() -> TrainConfig:
         action="store_true",
         help="Legacy no-op kept for CLI compatibility. Sampled guide normals stay on the training/material side only.",
     )
-    p.add_argument("--encoder_width", type=int, default=32)
-    p.add_argument("--encoder_depth", type=int, default=2)
+    p.add_argument("--encoder_width", type=int, default=64)
+    p.add_argument("--encoder_depth", type=int, default=4)
     p.add_argument(
         "--encoder_bootstrap_epochs",
         type=int,

@@ -259,18 +259,18 @@ void main(uint3 threadId : SV_DispatchThreadID)
     data.wo       = wo;   // sampled light direction, away from surface
     data.f        = f;
 
-#if SAMPLE_FEATURES_ENABLED
-    clearBootstrapFeatures(data);
+    #if SAMPLE_FEATURES_ENABLED
+        clearBootstrapFeatures(data);
 
-#if LEGACY_FEATURES_ENABLED
-    BSDFProperties props = mi.getProperties(sd);
-    writeLegacyBootstrapFeatures(props, pdf, data);
-#endif
+        #if LEGACY_FEATURES_ENABLED
+            BSDFProperties props = mi.getProperties(sd);
+            writeLegacyBootstrapFeatures(props, pdf, data);
+        #endif
 
-#if MATERIAL_FEATURES_ENABLED
-    writeMaterialBootstrapFeatures(sd, data);
-#endif
-#endif
+        #if MATERIAL_FEATURES_ENABLED
+            writeMaterialBootstrapFeatures(sd, data);
+        #endif
+    #endif
 
     gSampleOutputBuffer[idx] = data;
 }

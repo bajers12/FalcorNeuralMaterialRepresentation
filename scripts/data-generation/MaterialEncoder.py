@@ -8,7 +8,7 @@ class MaterialEncoder(nn.Module):
     The runtime path still only consumes the baked latent texture.
     """
 
-    def __init__(self, input_ch: int, latent_ch: int, hidden_width: int = 32, depth: int = 2):
+    def __init__(self, input_ch: int, latent_ch: int, hidden_width: int = 64, depth: int = 4):
         super().__init__()
         layers = []
         prev = input_ch
