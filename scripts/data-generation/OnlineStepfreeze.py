@@ -576,6 +576,7 @@ def train_one_epoch(
     wi_dec, wo_dec = _maybe_transform_dirs_with_normals(batch_decoder, cfg, device)
     if cfg.clamp_min_target > 0.0:
         y_dec = y_dec.clamp_min(cfg.clamp_min_target)
+    opt.zero_grad(set_to_none=True)
 
     if phase == "bootstrap":
         material_features_dec = build_material_features(batch_decoder, cfg, device)
@@ -589,7 +590,6 @@ def train_one_epoch(
     if not torch.isfinite(bsdf_loss):
         raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
 
-    opt.zero_grad(set_to_none=True)
     bsdf_loss.backward()
 
     if cfg.grad_clip_norm is not None:
@@ -609,27 +609,23 @@ def train_one_epoch(
         cfg.train_importance_sampler
         and sampler_opt is not None
         and (epoch < cfg.sampler_epochs)
+        and phase == "finetune"
     )
     if should_train_sampler:
         sampler_batch = batch_decoder if batch_sampler is None else batch_sampler
 
         uv_sam = sampler_batch["uv"].to(device, non_blocking=True)
         wi_sam, _ = _maybe_transform_dirs_with_normals(sampler_batch, cfg, device)
+        sampler_opt.zero_grad(set_to_none=True)
 
-        if phase == "bootstrap":
-            material_features_sam = build_material_features(sampler_batch, cfg, device)
-            z_sam = model.encoder(material_features_sam).detach()
-        else:
-            z_sam = model.latent.sample(uv_sam).detach()
+        z_sam = model.latent.sample(uv_sam).detach()
 
         # KL-divergence loss (paper Section 4.3).
         # z_sam is detached: latent has no grad w.r.t. sampler (paper stability trick).
-        # importance_sampling_loss now calls forward_params once and reuses the frames
         sampler_loss =model.importance_sampler.loss(model.decoder, z_sam, wi_sam, cfg.log_eps)
         if not torch.isfinite(sampler_loss):
             raise RuntimeError(f"Non-finite sampler loss at epoch {epoch}: {sampler_loss.item()}")
 
-        sampler_opt.zero_grad(set_to_none=True)
         sampler_loss.backward()
 
         if cfg.grad_clip_norm is not None:

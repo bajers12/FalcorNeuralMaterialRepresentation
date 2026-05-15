@@ -10,24 +10,13 @@ class ImportanceSamplingDecoder(nn.Module):
     """
     Importance sampling decoder matching the paper (Section 4.3 / Figure 4):
       - The network predicts parameters of a two-lobe anisotropic GGX (Trowbridge-Reitz)
-        microfacet distribution, NOT a von Mises-Fisher distribution.
-      - Each lobe has: anisotropic roughness (alpha_x, alpha_y), lobe weight, and its own
-        learned shading frame (T, B, N) extracted from the latent code.
+        microfacet distribution
+
       - Sampling follows the standard GGX visible-normal (VNDF) path:
           1. Sample a microfacet normal m ~ GGX-NDF in the lobe's shading frame.
           2. Reflect wi around m to get wo.
           3. Evaluate the blended two-lobe PDF at wo.
       - The MLP only sees wi (not wo), consistent with Fig. 4 ("ωi" feeds the sampler).
-
-    Network outputs (per forward pass, shape [B, 2*5]):
-        For each lobe i in {0, 1}:
-            raw_alpha_x_i, raw_alpha_y_i  -> alpha = alpha_min + (alpha_max-alpha_min)*sigmoid(·)
-            raw_weight_i                  -> lobe weight (softmax across lobes)
-            (frame comes from frame_linear, shared with BRDF decoder convention)
-
-    The frame_linear layer still outputs 6*num_frames values so that the weight layout
-    is identical to the BRDF Decoder and can share the same export path.
-    num_frames must equal 2 (one frame per lobe).
     """
 
     # Roughness is clamped to [alpha_min, 1] to avoid singularities in the GGX NDF.
@@ -37,31 +26,16 @@ class ImportanceSamplingDecoder(nn.Module):
     def __init__(
         self,
         latent_ch: int,
-        num_frames: int = 2,
         mlp_width: int = 32,
         mlp_depth: int = 2,
         use_bias_in_mlp: bool = True,
-        frame_linear_bias: bool = False,
     ):
         super().__init__()
-        if num_frames != 2:
-            raise ValueError(
-                "ImportanceSamplingDecoder requires num_frames=2 "
-                "(one GGX lobe per shading frame)."
-            )
-        self.latent_ch = latent_ch
-        self.num_frames = num_frames  # == 2
 
-        # Frame extractor: extracts learned T, B, N vectors per lobe from latent code
-        self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias) #TODO: Remove after ading tangent
+        self.latent_ch = latent_ch
+
 
         # MLP inputs: latent z  +  raw incident direction wi (3 components)
-        # No frame-projection here - just raw wi to keep the MLP input dimension manageable
-        # MLP outputs: 5 values per lobe × 2 lobes = 10 raw scalars
-        #   per lobe: [raw_alpha_x, raw_alpha_y, raw_weight] — 3 values × 2 lobes = 6
-        #   but we also output 2 extra values (one per lobe) reserved for future
-        #   anisotropy-axis control; set to zero for now so the output dim stays
-        #   at 2*5=10 to match the paper's Fig. 4 description of a "two-lobe distribution".
         mlp_in = latent_ch + 3
         layers: list[nn.Module] = []
         prev = mlp_in
@@ -69,8 +43,32 @@ class ImportanceSamplingDecoder(nn.Module):
             layers.append(nn.Linear(prev, mlp_width, bias=use_bias_in_mlp))
             layers.append(nn.ReLU(inplace=True))
             prev = mlp_width
-        layers.append(nn.Linear(prev, 5 * num_frames, bias=use_bias_in_mlp))
+        layers.append(nn.Linear(prev, 9, bias=use_bias_in_mlp))
         self.mlp = nn.Sequential(*layers)
+
+    def forward(self, z: torch.Tensor, wi: torch.Tensor):
+        """
+        Predict per-lobe GGX parameters from latent code z and incident direction wi.
+
+        Returns:
+            {wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy}
+            wd and wp are diffue and specular weights
+            mu_dx and mu_dy are surface slope parameters for cosine weighted normal tilt
+            ax and ay are orthgogonal rougness values
+            rho is correlation value for 2 above
+            mu_sx and mu_sx surface slope parameters for NDF mean offset
+        """
+
+        # Feed raw wi directly to MLP (not frame-projected)
+        # {wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy}
+        raw = self.mlp(torch.cat([z, wi], dim=-1))  # [B, 9]
+
+        #raw lobe weight -> softmax mixture
+        torch._softmax(raw[..., [0,3]], dim=-1)
+
+        return raw
+
+
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -80,24 +78,6 @@ class ImportanceSamplingDecoder(nn.Module):
     def _safe_normalize(v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
         out = v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
-
-    #TODO: Remove after adding tangent output
-    def _predict_frames(
-        self, z: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Extract learned shading frames from latent code via Gram-Schmidt.
-        z [B,C] -> T, Bv, N  each [B, num_frames, 3]
-        """
-        bsz = z.shape[0]
-        ft = self.frame_linear(z).view(bsz, self.num_frames, 6)
-
-        n = self._safe_normalize(ft[..., 0:3])
-        t_raw = ft[..., 3:6]
-        t_raw = t_raw - (t_raw * n).sum(dim=-1, keepdim=True) * n
-        t = self._safe_normalize(t_raw)
-        bv = torch.cross(n, t, dim=-1)
-        return t, bv, n  # each [B, num_frames, 3]
 
     @staticmethod
     def _ggx_ndf(m_local: torch.Tensor,
@@ -241,49 +221,6 @@ class ImportanceSamplingDecoder(nn.Module):
     # Public interface
     # ------------------------------------------------------------------
 
-    def forward_params(
-        self, z: torch.Tensor, wi: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Predict per-lobe GGX parameters from latent code z and incident direction wi.
-
-        Returns:
-            alpha        : [B, 2, 2]       — (alpha_x, alpha_y) per lobe, in [ALPHA_MIN, 1]
-            lobe_weights : [B, 2]          — mixture weights (sum to 1 via softmax)
-        """
-        t, bv, n = self._predict_frames(z)  #TODO: remove
-
-        # Feed raw wi directly to MLP (not frame-projected)
-        # This keeps input dimension manageable while still capturing incident angle effects
-        raw = self.mlp(torch.cat([z, wi], dim=-1))  # [B, 10]
-        raw = raw.view(z.shape[0], self.num_frames, 5)  # [B, 2, 5]
-
-        # Slots 0,1: raw roughness -> alpha in [ALPHA_MIN, ALPHA_MAX]
-        alpha = (
-            self.ALPHA_MIN
-            + (self.ALPHA_MAX - self.ALPHA_MIN) * torch.sigmoid(raw[..., 0:2])
-        )  # [B, 2, 2]
-        alpha = torch.nan_to_num(
-            alpha,
-            nan=0.5 * (self.ALPHA_MIN + self.ALPHA_MAX),
-            posinf=self.ALPHA_MAX,
-            neginf=self.ALPHA_MIN,
-        ).clamp(self.ALPHA_MIN, self.ALPHA_MAX)
-
-        # Slot 2: raw lobe weight -> softmax mixture
-        lobe_weights = torch.softmax(raw[..., 2], dim=-1)  # [B, 2]
-        lobe_weights = torch.nan_to_num(
-            lobe_weights,
-            nan=1.0 / float(self.num_frames),
-            posinf=1.0,
-            neginf=0.0,
-        ).clamp_min(0.0)
-        lobe_weights = lobe_weights / lobe_weights.sum(dim=-1, keepdim=True).clamp_min(
-            1e-8
-        )
-
-        return t, bv, n, alpha, lobe_weights
-
     def loss(
         self,
         decoder: Decoder,
@@ -304,12 +241,11 @@ class ImportanceSamplingDecoder(nn.Module):
                         directly as the unnormalised weight.
         """
         # --- 1. Single forward_params call — reused for both sample and eval_pdf ---
-        t, bv, n, alpha, lobe_weights = self.forward_params(z, wi)
-        frames = (t, bv, n, alpha, lobe_weights)
+        x = self.forward(z, wi)
 
         # --- 2. Sample wo on-policy WITH gradient (reparameterized), reusing cached frames ---
         wo_sampled, pdf_q = self.sample(
-            z, wi, _frames=frames
+            z, wi
         )
         pdf_q = torch.nan_to_num(pdf_q, nan=eps, posinf=1e6, neginf=eps).clamp(min=eps, max=1e6)
         log_q = torch.log(pdf_q)  # [B], has grad through wo_sampled -> frames/alpha
@@ -409,56 +345,27 @@ class ImportanceSamplingDecoder(nn.Module):
         p(wo) = sum_i  weight_i * p_i(wo)
         where p_i(wo) = p_vndf_i(m_i) / (4 |wo · m_i|)  and  m_i = normalize(wi + wo).
         """
-        if _frames is None:
-            t, bv, n, alpha, lobe_weights = self.forward_params(z, wi)
-        else:
-            t, bv, n, alpha, lobe_weights = _frames
 
-        B = z.shape[0]
-        pdf_total = torch.zeros(B, device=z.device, dtype=z.dtype)
+        alpha, lobe_weights = self.forward(z, wi)
 
-        for i in range(self.num_frames):
-            t_i  = t[:, i, :]   # [B, 3]
-            bv_i = bv[:, i, :]
-            n_i  = n[:, i, :]
-            ax_i = alpha[:, i, 0]
-            ay_i = alpha[:, i, 1]
-            w_i  = lobe_weights[:, i]  # [B]
 
-            # wi and wo in lobe i's local frame
-            wi_local = torch.stack([
-                (wi * t_i).sum(-1),
-                (wi * bv_i).sum(-1),
-                (wi * n_i).sum(-1),
-            ], dim=-1)
-            wo_local = torch.stack([
-                (wo * t_i).sum(-1),
-                (wo * bv_i).sum(-1),
-                (wo * n_i).sum(-1),
-            ], dim=-1)
 
-            # Flip below-hemisphere wi (same as in sample())
-            wi_local = torch.where(
-                wi_local[..., 2:3] < 0.0,
-                wi_local * torch.tensor([1.0, 1.0, -1.0], device=wi.device, dtype=wi.dtype),
-                wi_local,
-            )
 
-            # Half-vector m = normalize(wi + wo) in local frame
-            m_local = self._safe_normalize(wi_local + wo_local)
-            # Ensure m is on the upper hemisphere
-            m_local = torch.where(
-                m_local[..., 2:3] < 0.0, -m_local, m_local
-            )
+        # Half-vector m = normalize(wi + wo) in local frame
+        m_local = self._safe_normalize(wi + wo)
+        # Ensure m is on the upper hemisphere
+        m_local = torch.where(
+            m_local[..., 2:3] < 0.0, -m_local, m_local
+        )
 
-            wo_dot_m = (wo_local * m_local).sum(-1).abs().clamp_min(1e-6)
+        wo_dot_m = (wo * m_local).sum(-1).abs().clamp_min(1e-6)
 
-            p_m = self._ggx_vndf_pdf(wi_local, m_local, ax_i, ay_i)  # p(m)
-            p_wo = p_m / (4.0 * wo_dot_m)                            # p(wo)
+        p_m = self._ggx_vndf_pdf(wi, m_local, ax_i, ay_i)  # p(m)
+        p_wo = p_m / (4.0 * wo_dot_m)                            # p(wo)
 
-            p_wo = torch.nan_to_num(p_wo, nan=0.0, posinf=0.0, neginf=0.0)
-            w_i = torch.nan_to_num(w_i, nan=0.0, posinf=1.0, neginf=0.0).clamp_min(0.0)
+        p_wo = torch.nan_to_num(p_wo, nan=0.0, posinf=0.0, neginf=0.0)
+        w_i = torch.nan_to_num(w_i, nan=0.0, posinf=1.0, neginf=0.0).clamp_min(0.0)
 
-            pdf_total = pdf_total + w_i * p_wo.clamp_min(0.0)
+        pdf_total = pdf_total + w_i * p_wo.clamp_min(0.0)
 
         return torch.nan_to_num(pdf_total, nan=1e-10, posinf=1e10, neginf=1e-10).clamp_min(1e-10)
