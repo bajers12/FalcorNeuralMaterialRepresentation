@@ -622,7 +622,8 @@ def train_one_epoch(
 
         # KL-divergence loss (paper Section 4.3).
         # z_sam is detached: latent has no grad w.r.t. sampler (paper stability trick).
-        sampler_loss =model.importance_sampler.loss(model.decoder, z_sam, wi_sam, cfg.log_eps)
+        pred = model.importance_sampler(z_sam, wi_sam);
+        sampler_loss = model.importance_sampler.loss(pred, model.decoder, z_sam, wi_sam, cfg.log_eps)
         if not torch.isfinite(sampler_loss):
             raise RuntimeError(f"Non-finite sampler loss at epoch {epoch}: {sampler_loss.item()}")
 
