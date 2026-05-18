@@ -45,13 +45,26 @@ def save_weights_bin(path: Path, weights: dict) -> None:
         weights=weights,
         input_dim=20,
         output_dim=3,
+        has_frame_linear=True,
     )
 
 
-def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> dict:
-    frame_weight = np.asarray(weights["frame_linear.weight"], dtype=np.float32)
-    if frame_weight.shape != (12, 8):
-        raise ValueError(f"frame_linear.weight expected shape (12, 8), got {frame_weight.shape}")
+def _infer_network_layout(
+    weights: dict,
+    *,
+    input_dim: int,
+    output_dim: int,
+    has_frame_linear: bool = True,
+) -> dict:
+    linear_layers = []
+    decoder_layout = {}
+
+    if has_frame_linear:
+        frame_weight = np.asarray(weights["frame_linear.weight"], dtype=np.float32)
+        if frame_weight.shape != (12, 8):
+            raise ValueError(f"frame_linear.weight expected shape (12, 8), got {frame_weight.shape}")
+        linear_layers.append("frame_linear")
+        decoder_layout["frame_linear.weight"] = [12, 8]
 
     latent_ch = int(np.asarray(weights.get("latent_ch", np.array([8], dtype=np.int32))).reshape(-1)[0])
     num_frames = int(np.asarray(weights.get("num_frames", np.array([2], dtype=np.int32))).reshape(-1)[0])
@@ -62,7 +75,7 @@ def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> 
     if not layer_indices:
         raise ValueError("No MLP layers found in weights.")
 
-    linear_layers = ["frame_linear"] + [f"mlp.{idx}" for idx in layer_indices]
+    linear_layers += [f"mlp.{idx}" for idx in layer_indices]
     mlp_depth = len(layer_indices) - 1
     if mlp_depth not in (2, 3):
         raise ValueError(f"Unsupported MLP depth: {mlp_depth}. Expected 2 or 3.")
@@ -71,7 +84,6 @@ def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> 
     mlp_width = int(first_w.shape[0])
 
     expected_prev = input_dim
-    decoder_layout = {"frame_linear.weight": [12, 8]}
     for idx in layer_indices:
         w_name = f"mlp.{idx}.weight"
         b_name = f"mlp.{idx}.bias"
@@ -90,7 +102,7 @@ def _infer_network_layout(weights: dict, *, input_dim: int, output_dim: int) -> 
 
     if latent_ch != 8:
         raise ValueError(f"Only latent_ch=8 is supported for runtime export, got {latent_ch}")
-    if num_frames != 2:
+    if has_frame_linear and num_frames != 2:
         raise ValueError(f"Only num_frames=2 is supported for runtime export, got {num_frames}")
     if mlp_width not in (16, 32, 64):
         raise ValueError(f"Unsupported mlp_width={mlp_width}. Expected one of 16, 32, 64.")
@@ -111,8 +123,14 @@ def save_network_weights_bin(
     *,
     input_dim: int,
     output_dim: int,
+    has_frame_linear: bool = True,
 ) -> dict:
-    layout = _infer_network_layout(weights, input_dim=input_dim, output_dim=output_dim)
+    layout = _infer_network_layout(
+        weights,
+        input_dim=input_dim,
+        output_dim=output_dim,
+        has_frame_linear=has_frame_linear,
+    )
     latent_ch = layout["latent_ch"]
     num_frames = layout["num_frames"]
     mlp_width = layout["mlp_width"]
@@ -137,7 +155,7 @@ def save_network_weights_bin(
 
 def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
     _, h, w = latent.shape
-    layout = _infer_network_layout(weights, input_dim=20, output_dim=3)
+    layout = _infer_network_layout(weights, input_dim=20, output_dim=3, has_frame_linear=True)
     metadata = {
         "width": int(w),
         "height": int(h),
@@ -154,8 +172,13 @@ def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
 
 
 def save_sampler_metadata(path: Path, weights: dict, *, latent_ch: int) -> None:
-    # Sampler head outputs 5 values per lobe × 2 lobes = 10 channels.
-    layout = _infer_network_layout(weights, input_dim=latent_ch + 3, output_dim=10)
+    # Sampler head outputs {wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy} = 9 channels.
+    layout = _infer_network_layout(
+        weights,
+        input_dim=latent_ch + 3,
+        output_dim=9,
+        has_frame_linear=False,
+    )
     metadata = {
         "latent_dim": layout["latent_ch"],
         "num_frames": layout["num_frames"],
@@ -206,7 +229,6 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
         sampler_weights = {
             "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
             "num_frames": np.array([cfg.num_frames], dtype=np.int32),
-            "frame_linear.weight": sampler_sd["frame_linear.weight"].detach().cpu().numpy(),
         }
         for key, value in sampler_sd.items():
             if key.startswith("mlp."):
@@ -216,7 +238,8 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
             preview_dir / "sampler_weights.bin",
             sampler_weights,
             input_dim=cfg.latent_ch + 3,
-            output_dim=10,
+            output_dim=9,
+            has_frame_linear=False,
         )
         save_sampler_metadata(preview_dir / "sampler_metadata.json", sampler_weights, latent_ch=cfg.latent_ch)
 

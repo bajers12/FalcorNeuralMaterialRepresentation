@@ -74,6 +74,90 @@ class ImportanceSamplingDecoder(nn.Module):
         out = v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
+    def _split_and_activate_params(
+        self, pred: torch.Tensor
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        if pred.ndim != 2 or pred.shape[-1] != 9:
+            raise ValueError(f"Expected pred with shape [B, 9], got {tuple(pred.shape)}")
+
+        wd = pred[..., 0]
+        mu_dx = pred[..., 1]
+        mu_dy = pred[..., 2]
+        ws = pred[..., 3]
+        ax_raw = pred[..., 4]
+        ay_raw = pred[..., 5]
+        rho_raw = pred[..., 6]
+        mus_x = pred[..., 7]
+        mu_sy = pred[..., 8]
+
+        # Keep weights normalized even if pred is externally provided.
+        w = torch.softmax(torch.stack([wd, ws], dim=-1), dim=-1)
+        wd = w[..., 0]
+        ws = w[..., 1]
+
+        ax = self.ALPHA_MIN + (self.ALPHA_MAX - self.ALPHA_MIN) * torch.sigmoid(ax_raw)
+        ay = self.ALPHA_MIN + (self.ALPHA_MAX - self.ALPHA_MIN) * torch.sigmoid(ay_raw)
+        rho = torch.tanh(rho_raw).clamp(min=-0.999, max=0.999)
+
+        return wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy
+
+    def _build_basis_from_normal(
+        self, n: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        z_axis = torch.zeros_like(n)
+        z_axis[..., 2] = 1.0
+        x_axis = torch.zeros_like(n)
+        x_axis[..., 0] = 1.0
+        up = torch.where((n[..., 2:3].abs() > 0.999), x_axis, z_axis)
+
+        t = self._safe_normalize(torch.cross(up, n, dim=-1))
+        b = self._safe_normalize(torch.cross(n, t, dim=-1))
+        return t, b
+
+    def _sample_cosine_hemisphere(
+        self,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        u1 = torch.rand(batch_size, device=device, dtype=dtype)
+        u2 = torch.rand(batch_size, device=device, dtype=dtype)
+
+        r = torch.sqrt(u1.clamp(min=0.0, max=1.0))
+        phi = 2.0 * math.pi * u2
+
+        x = r * torch.cos(phi)
+        y = r * torch.sin(phi)
+        z = torch.sqrt((1.0 - u1).clamp_min(0.0))
+        return torch.stack([x, y, z], dim=-1)
+
+    @staticmethod
+    def _build_M(
+        ax: torch.Tensor,
+        ay: torch.Tensor,
+        rho: torch.Tensor,
+        mus_x: torch.Tensor,
+        mu_sy: torch.Tensor,
+    ) -> torch.Tensor:
+        zero = torch.zeros_like(ax)
+        one = torch.ones_like(ax)
+        s = torch.sqrt((1.0 - rho * rho).clamp_min(1e-8))
+
+        row0 = torch.stack([ax, zero, -mus_x], dim=-1)
+        row1 = torch.stack([ay * rho, ay * s, -mu_sy], dim=-1)
+        row2 = torch.stack([zero, zero, one], dim=-1)
+        return torch.stack([row0, row1, row2], dim=-2)
+
 
     def loss(
         self,
@@ -96,9 +180,7 @@ class ImportanceSamplingDecoder(nn.Module):
                         directly as the unnormalised weight.
         """
 
-        wo_sampled, pdf_q = self.sample(
-            z, wi
-        )
+        wo_sampled, pdf_q = self.sample(z, wi, pred)
         pdf_q = torch.nan_to_num(pdf_q, nan=eps, posinf=1e6, neginf=eps).clamp(min=eps, max=1e6)
         log_q = torch.log(pdf_q)  # [B], has grad through wo_sampled -> frames/alpha
 
@@ -128,8 +210,10 @@ class ImportanceSamplingDecoder(nn.Module):
         return loss_terms[finite_mask].mean()
 
     def sample(
-        self, z: torch.Tensor, wi: torch.Tensor,
-        pred: torch.Tensor
+        self,
+        z: torch.Tensor,
+        wi: torch.Tensor,
+        pred: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Draw one wo sample per batch element via the two-lobe GGX mixture.
@@ -138,12 +222,56 @@ class ImportanceSamplingDecoder(nn.Module):
             pdf : [B]     probability density of wo under the mixture
         """
 
-        pdf = self.eval_pdf()
+        if pred is None:
+            pred = self(z, wi)
+
+        wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy = self._split_and_activate_params(pred)
+
+        bsz = wi.shape[0]
+        device = wi.device
+        dtype = wi.dtype
+
+        # Mixture sampling (Eq. 5): choose diffuse vs specular component.
+        choose_spec = torch.rand(bsz, device=device, dtype=dtype) < ws
+
+        # Diffuse branch (Eq. 6): cosine hemisphere sample tilted by n_d.
+        nd = self._safe_normalize(
+            torch.stack([-mu_dx, -mu_dy, torch.ones_like(mu_dx)], dim=-1)
+        )
+        td, bd = self._build_basis_from_normal(nd)
+        wo_local = self._sample_cosine_hemisphere(bsz, device, dtype)
+        wo_d = (
+            td * wo_local[..., 0:1]
+            + bd * wo_local[..., 1:2]
+            + nd * wo_local[..., 2:3]
+        )
+        wo_d = self._safe_normalize(wo_d)
+
+        # Specular branch (Eq. 9): sample h via transformed isotropic alpha=1 GGX,
+        # then reflect wi around h.
+        w_std = self._sample_cosine_hemisphere(bsz, device, dtype)
+        M = self._build_M(ax, ay, rho, mus_x, mu_sy)
+        wh = torch.matmul(M, w_std.unsqueeze(-1)).squeeze(-1)
+        wh = self._safe_normalize(wh)
+        wh = torch.where(wh[..., 2:3] < 0.0, -wh, wh)
+
+        wi_dot_wh = (wi * wh).sum(dim=-1, keepdim=True)
+        wo_s = 2.0 * wi_dot_wh * wh - wi
+        wo_s = self._safe_normalize(wo_s)
+
+        wo = torch.where(choose_spec.unsqueeze(-1), wo_s, wo_d)
+
+        pdf = self.eval_pdf(
+            wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy,
+            wi=wi,
+            wo=wo,
+        )
+        pdf = torch.nan_to_num(pdf, nan=1e-8, posinf=1e6, neginf=1e-8).clamp_min(1e-8)
         return wo, pdf
 
     def eval_pdf(
         self,
-        z: torch.Tensor,
+        wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy,
         wi: torch.Tensor,
         wo: torch.Tensor,
     ) -> torch.Tensor:
@@ -152,17 +280,52 @@ class ImportanceSamplingDecoder(nn.Module):
         p(wo) = sum_i  weight_i * p_i(wo)
         m is halfvector
         """
+        eps = 1e-8
 
-        wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy = self.forward(z, wi)
+        # Ensure constraints if caller passes external values.
+        w = torch.softmax(torch.stack([wd, ws], dim=-1), dim=-1)
+        wd = w[..., 0]
+        ws = w[..., 1]
+        ax = ax.clamp(min=self.ALPHA_MIN, max=self.ALPHA_MAX)
+        ay = ay.clamp(min=self.ALPHA_MIN, max=self.ALPHA_MAX)
+        rho = rho.clamp(min=-0.999, max=0.999)
 
-        # Half-vector m = normalize(wi + wo) in local frame
-        m_local = self._safe_normalize(wi + wo)
-        # Ensure m is on the upper hemisphere
-        m_local = torch.where(
-            m_local[..., 2:3] < 0.0, -m_local, m_local
+        # Diffuse lobe: cosine-weighted around tilted normal n_d.
+        nd = self._safe_normalize(
+            torch.stack([-mu_dx, -mu_dy, torch.ones_like(mu_dx)], dim=-1)
         )
+        pd = (wo * nd).sum(dim=-1).clamp_min(0.0) / math.pi
 
-                             # p(wo)
+        # Specular lobe (Eq. 7): evaluate transformed unit-roughness GGX density.
+        wh = self._safe_normalize(wi + wo)
+        wh = torch.where(wh[..., 2:3] < 0.0, -wh, wh)
+
+        M = self._build_M(ax, ay, rho, mus_x, mu_sy)
+        invM = torch.linalg.inv(M)
+
+        v = torch.matmul(invM, wh.unsqueeze(-1)).squeeze(-1)
+        v_len = v.norm(dim=-1).clamp_min(eps)
+        v_hat = v / v_len.unsqueeze(-1)
+
+        # For alpha=1 GGX: projected normal distribution equals cos(theta)/pi.
+        D_std = v_hat[..., 2].clamp_min(0.0) / math.pi
+
+        det_inv = torch.linalg.det(invM).abs().clamp_min(eps)
+        p_wh = D_std * det_inv / (v_len ** 3)
+
+        jac = (4.0 * (wo * wh).sum(dim=-1).abs()).clamp_min(eps)
+        ps = p_wh / jac
+
+        valid = (
+            (wi[..., 2] > 0.0)
+            & (wo[..., 2] > 0.0)
+            & ((wi * wh).sum(dim=-1) > 0.0)
+            & ((wo * wh).sum(dim=-1) > 0.0)
+        )
+        ps = torch.where(valid, ps, torch.zeros_like(ps))
+
+        p = wd * pd + ws * ps
+        return torch.nan_to_num(p, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
 
 
 

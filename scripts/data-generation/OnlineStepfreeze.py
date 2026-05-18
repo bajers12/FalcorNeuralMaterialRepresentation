@@ -198,11 +198,9 @@ class NeuralMaterialModel(nn.Module):
         )
         self.importance_sampler = ImportanceSamplingDecoder(
             latent_ch=cfg.latent_ch,
-            num_frames=cfg.num_frames,
             mlp_width=cfg.sampler_mlp_width,
             mlp_depth=cfg.sampler_mlp_depth,
             use_bias_in_mlp=cfg.use_bias_in_mlp,
-            frame_linear_bias=cfg.frame_linear_bias,
         )
         self.encoder = MaterialEncoder(
             input_ch=get_encoder_input_dim(cfg),
@@ -1164,7 +1162,8 @@ def main():
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )
-
+            if epoch%10==0:
+                print(f"[best] epoch {epoch:03d} val_loss={metrics['brdf_val_loss']:.6f}")
             if metrics["brdf_val_loss"] < best_brdf_val_loss:
                 best_brdf_val_loss = metrics["brdf_val_loss"]
                 best_epoch = epoch
