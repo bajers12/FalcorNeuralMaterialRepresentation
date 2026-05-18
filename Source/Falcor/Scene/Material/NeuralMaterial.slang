@@ -433,21 +433,26 @@ float evalCosinePdf(const float3 woLocal)
 
 struct NeuralSamplerParams
 {
-    float wd;
-    float muDx;
-    float muDy;
-    float ws;
-    float ax;
-    float ay;
+    float wDiff;
+    float slopeDiffX;
+    float slopeDiffY;
+    float wSpec;
+    float alphaX;
+    float alphaY;
     float rho;
-    float musX;
-    float musY;
+    float slopeSpecX;
+    float slopeSpecY;
     uint valid;
 };
 
-float neuralSigmoid(float x)
+float tanhApprox(float x)
 {
-    return 1.f / (1.f + exp(-x));
+    return x / sqrt(1.f + x * x);
+}
+
+float sinhApprox(float x)
+{
+    return x * sqrt(1.f + x * x);
 }
 
 float3 sampleCosineHemisphere(float2 u)
@@ -546,10 +551,10 @@ void evalSamplerMLPWithDepth(
 NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], float3 wiLocal)
 {
     NeuralSamplerParams p = (NeuralSamplerParams)0;
-    p.wd = 0.5f;
-    p.ws = 0.5f;
-    p.ax = 0.5f;
-    p.ay = 0.5f;
+    p.wDiff = 0.5f;
+    p.wSpec = 0.5f;
+    p.alphaX = 0.5f;
+    p.alphaY = 0.5f;
     p.valid = 0;
 
     if (wiLocal.z <= 0.f)
@@ -568,25 +573,27 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     float raw[9];
     evalSamplerMLPWithDepth(decoderBuf, md.samplerWeightOffsets, md.samplerMlpWidth, md.samplerMlpDepth, x, raw);
 
-    float m = max(raw[0], raw[3]);
-    float e0 = exp(raw[0] - m);
-    float e1 = exp(raw[3] - m);
-    float wsum = max(e0 + e1, 1e-8f);
-    p.wd = e0 / wsum;
-    p.ws = e1 / wsum;
+    p.alphaX = 1e-4f + 0.5f * (1.f + tanhApprox(raw[0]));
+    p.alphaY = 1e-4f + 0.5f * (1.f + tanhApprox(raw[1]));
+    p.rho = clamp(tanhApprox(raw[2]), -0.999f, 0.999f);
+    p.slopeSpecX = sinhApprox(raw[3]);
+    p.slopeSpecY = sinhApprox(raw[4]);
+    p.slopeDiffX = sinhApprox(raw[5]);
+    p.slopeDiffY = sinhApprox(raw[6]);
 
-    p.muDx = raw[1];
-    p.muDy = raw[2];
-
-    const float alphaMin = 0.01f;
-    const float alphaMax = 1.f;
-    p.ax = clamp(lerp(alphaMin, alphaMax, neuralSigmoid(raw[4])), alphaMin, alphaMax);
-    p.ay = clamp(lerp(alphaMin, alphaMax, neuralSigmoid(raw[5])), alphaMin, alphaMax);
-    p.rho = clamp(tanh(raw[6]), -0.999f, 0.999f);
-    p.musX = raw[7];
-    p.musY = raw[8];
+    float wSpecRaw = exp(raw[7]);
+    float wDiffRaw = exp(raw[8]);
+    float invW = 1.f / max(wSpecRaw + wDiffRaw, 1e-8f);
+    p.wSpec = wSpecRaw * invW;
+    p.wDiff = wDiffRaw * invW;
     p.valid = 1;
     return p;
+}
+
+float evalNeuralDiffusePdfFromParams(const NeuralSamplerParams p, const float3 woLocal)
+{
+    float3 nd = neuralSafeNormalize(float3(-p.slopeDiffX, -p.slopeDiffY, 1.f));
+    return max(dot(woLocal, nd), 0.f) * kInvPi;
 }
 
 float evalNeuralSpecularPdfFromParams(const NeuralSamplerParams p, const float3 wiLocal, const float3 woLocal)
@@ -595,30 +602,28 @@ float evalNeuralSpecularPdfFromParams(const NeuralSamplerParams p, const float3 
         return 0.f;
 
     float3 wh = neuralSafeNormalize(wiLocal + woLocal);
-    if (wh.z < 0.f)
-        wh = -wh;
+    wh *= (wh.z >= 0.f) ? 1.f : -1.f;
 
-    float s = sqrt(max(1.f - p.rho * p.rho, 1e-8f));
-    float ax = max(p.ax, 1e-6f);
-    float ay = max(p.ay, 1e-6f);
+    float cosTheta = wh.z;
+    if (cosTheta <= 1e-4f)
+        return 0.f;
 
-    float vx = (wh.x + p.musX * wh.z) / ax;
-    float vy = (wh.y + p.musY * wh.z - ay * p.rho * vx) / max(ay * s, 1e-8f);
-    float vz = wh.z;
+    float sx = -wh.x / cosTheta;
+    float sy = -wh.y / cosTheta;
+    sx -= p.slopeSpecX;
+    sy -= p.slopeSpecY;
 
-    float3 v = float3(vx, vy, vz);
-    float vLen = max(length(v), 1e-8f);
-    float3 vHat = v / vLen;
+    float sxStd = sx / max(p.alphaX, 1e-6f);
+    float sqrtOneMinusRho = sqrt(max(1.f - p.rho * p.rho, 1e-8f));
+    float normalization = 1.f / max(p.alphaX * p.alphaY * sqrtOneMinusRho, 1e-8f);
+    float syStd = (p.alphaX * sy - p.rho * p.alphaY * sx) * normalization;
 
-    float dStd = max(vHat.z, 0.f) * kInvPi;
-    float detInv = 1.f / max(ax * ay * s, 1e-8f);
-    float pWh = dStd * detInv / max(vLen * vLen * vLen, 1e-8f);
-
-    float jac = max(4.f * abs(dot(woLocal, wh)), 1e-8f);
-    float ps = pWh / jac;
-
-    bool valid = dot(wiLocal, wh) > 0.f && dot(woLocal, wh) > 0.f;
-    return valid ? max(ps, 0.f) : 0.f;
+    float r2 = sxStd * sxStd + syStd * syStd;
+    float p22Std = 1.f / (kPi * (1.f + r2) * (1.f + r2));
+    float p22 = p22Std * normalization;
+    float pdfH = p22 / max(cosTheta * cosTheta * cosTheta, 1e-8f);
+    float Jh = 4.f * abs(dot(wiLocal, wh));
+    return pdfH / max(Jh, 1e-8f);
 }
 
 float evalNeuralPdfFromParams(const NeuralMaterialData md, const NeuralSamplerParams p, const float3 wiLocal, const float3 woLocal)
@@ -628,11 +633,10 @@ float evalNeuralPdfFromParams(const NeuralMaterialData md, const NeuralSamplerPa
     if (p.valid == 0)
         return evalCosinePdf(woLocal);
 
-    float3 nd = neuralSafeNormalize(float3(-p.muDx, -p.muDy, 1.f));
-    float pd = max(dot(woLocal, nd), 0.f) * kInvPi;
+    float pd = evalNeuralDiffusePdfFromParams(p, woLocal);
     float ps = evalNeuralSpecularPdfFromParams(p, wiLocal, woLocal);
 
-    float pdf = p.wd * pd + p.ws * ps;
+    float pdf = p.wDiff * pd + p.wSpec * ps;
     return max(pdf, 1e-10f);
 }
 
@@ -653,15 +657,15 @@ float3 sampleNeuralDirectionFromParams(const NeuralMaterialData md, const Neural
     if (p.valid == 0)
         return sampleCosineHemisphere(u);
 
-    bool chooseSpec = u.x < p.ws;
-    float selectDenom = chooseSpec ? max(p.ws, 1e-6f) : max(p.wd, 1e-6f);
-    float uSelect = chooseSpec ? (u.x / selectDenom) : ((u.x - p.ws) / selectDenom);
+    bool chooseSpec = u.x < p.wSpec;
+    float selectDenom = chooseSpec ? max(p.wSpec, 1e-6f) : max(p.wDiff, 1e-6f);
+    float uSelect = chooseSpec ? (u.x / selectDenom) : ((u.x - p.wSpec) / selectDenom);
     uSelect = clamp(uSelect, 1e-6f, 1.f - 1e-6f);
     float uAux = clamp(frac(u.y * 0.754877666f + 0.569840296f), 1e-6f, 1.f - 1e-6f);
 
     if (!chooseSpec)
     {
-        float3 nd = neuralSafeNormalize(float3(-p.muDx, -p.muDy, 1.f));
+        float3 nd = neuralSafeNormalize(float3(-p.slopeDiffX, -p.slopeDiffY, 1.f));
         float3 td;
         float3 bd;
         buildBasisFromNormal(nd, td, bd);
@@ -671,21 +675,19 @@ float3 sampleNeuralDirectionFromParams(const NeuralMaterialData md, const Neural
         return wo;
     }
 
-    float s = sqrt(max(1.f - p.rho * p.rho, 1e-8f));
-    float3 wStd = sampleCosineHemisphere(float2(uSelect, uAux));
-    float3 wh = float3(
-        p.ax * wStd.x - p.musX * wStd.z,
-        p.ay * p.rho * wStd.x + p.ay * s * wStd.y - p.musY * wStd.z,
-        wStd.z
-    );
-    wh = neuralSafeNormalize(wh);
-    if (wh.z < 0.f)
-        wh = -wh;
+    float sqrtOneMinusRho = sqrt(max(1.f - p.rho * p.rho, 1e-8f));
+    float s = sqrt(uSelect) / max(sqrt(1.f - uSelect), 1e-6f);
+    float phi = 2.f * kPi * uAux;
+    float sxStd = s * cos(phi);
+    float syStd = s * sin(phi);
 
-    float3 wo = neuralSafeNormalize(2.f * dot(wiLocal, wh) * wh - wiLocal);
-    if (wo.z <= 0.f)
-        return sampleCosineHemisphere(u);
-    return wo;
+    float sx = p.alphaX * sxStd;
+    float sy = p.alphaY * (p.rho * sxStd + sqrtOneMinusRho * syStd);
+    sx += p.slopeSpecX;
+    sy += p.slopeSpecY;
+
+    float3 wh = neuralSafeNormalize(float3(-sx, -sy, 1.f));
+    return neuralSafeNormalize(2.f * dot(wiLocal, wh) * wh - wiLocal);
 }
 
 float3 sampleNeuralDirection(const MaterialSystem materials, const NeuralMaterialData md, const float z[8], const float3 wiLocal, float2 u)
