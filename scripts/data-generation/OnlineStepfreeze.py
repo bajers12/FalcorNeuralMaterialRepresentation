@@ -1162,8 +1162,7 @@ def main():
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )
-            if epoch%10==0:
-                print(f"[best] epoch {epoch:03d} val_loss={metrics['brdf_val_loss']:.6f}")
+
             if metrics["brdf_val_loss"] < best_brdf_val_loss:
                 best_brdf_val_loss = metrics["brdf_val_loss"]
                 best_epoch = epoch
