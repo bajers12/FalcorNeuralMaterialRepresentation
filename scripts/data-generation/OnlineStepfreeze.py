@@ -1013,9 +1013,6 @@ def main():
 
     sampler_opt = None
     sampler_scheduler = None
-    if cfg.train_importance_sampler:
-        sampler_opt = make_sampler_optimizer(model, cfg)
-        sampler_scheduler = make_sampler_scheduler(sampler_opt, cfg)
 
     best_brdf_val_loss = float("inf")
     best_model_state: Optional[Dict[str, torch.Tensor]] = None
@@ -1091,6 +1088,17 @@ def main():
                     )
                     for p in model.encoder.parameters():
                         p.requires_grad_(False)
+
+                    post_mean = model.latent.Z.mean().item()
+                    post_std = model.latent.Z.std().item()
+                    print(f"[train] latent post-init mean={post_mean:.6e} std={post_std:.6e}")
+
+
+                    # Recreate sampler optimizer/scheduler so Adam moments don't slow adaptation
+                    if cfg.train_importance_sampler:
+                        sampler_opt = make_sampler_optimizer(model, cfg)
+                        sampler_scheduler = make_sampler_scheduler(sampler_opt, cfg)
+                        print("[train] reinitialized sampler optimizer and scheduler after latent bootstrap")
                 current_phase = phase
 
             maybe_freeze_parts(model, cfg, epoch=epoch)
