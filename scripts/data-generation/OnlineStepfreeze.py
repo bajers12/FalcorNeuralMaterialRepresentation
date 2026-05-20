@@ -263,7 +263,29 @@ def build_material_features(
 ) -> torch.Tensor:
     if "features" not in batch:
         raise ValueError("Configured bootstrap features are missing from the generated batch.")
-    return batch["features"].to(device, non_blocking=True)
+    features = batch["features"].to(device, non_blocking=True)
+    mean = getattr(cfg, "_bootstrap_feature_mean", None)
+    std = getattr(cfg, "_bootstrap_feature_std", None)
+    if mean is not None and std is not None:
+        features = (features - mean) / std
+    return features
+
+
+def fit_bootstrap_feature_normalization(
+    batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
+) -> None:
+    if "features" not in batch:
+        return
+    features = batch["features"].to(device, non_blocking=True)
+    mean = features.mean(dim=0)
+    std = features.std(dim=0, unbiased=False).clamp_min(1e-6)
+    cfg._bootstrap_feature_mean = mean
+    cfg._bootstrap_feature_std = std
+    print(
+        "[bootstrap] normalized encoder features: "
+        f"mean_range=[{mean.min().item():.3e}, {mean.max().item():.3e}], "
+        f"std_range=[{std.min().item():.3e}, {std.max().item():.3e}]"
+    )
 
 
 def get_training_phase(cfg: TrainConfig, epoch: int) -> str:
@@ -1093,6 +1115,7 @@ def main():
             ).copy()
             bootstrap_validation_generator.release_data()
             bootstrap_validation_tensor = tensorize_batch(data_to_dict(bootstrap_validation_batch, cfg.material_feature_dim))
+            fit_bootstrap_feature_normalization(bootstrap_validation_tensor, cfg, device)
             print_first_sample(bootstrap_validation_tensor, "bootstrap validation batch")
 
         validation_generator = DataGenerator(
