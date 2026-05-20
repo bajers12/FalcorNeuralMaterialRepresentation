@@ -25,6 +25,7 @@ struct BsdfSampleData
     float3 wo;
     float3 wi;
     float3 f;
+    float mipLevel;
 #if SAMPLE_FEATURES_ENABLED
     float4 bootstrapFeature0;
     float4 bootstrapFeature1;
@@ -46,6 +47,13 @@ uniform uint gUvGridFullWidth;
 uniform uint gUvGridFullHeight;
 uniform float gMollificationConeAngleRad;
 uniform uint gMollificationSampleCount;
+uniform bool gHierarchicalFilteringEnabled;
+uniform uint gHierarchicalMipCount;
+uniform uint2 gFinestTextureSize;
+uniform float gMipExponentialRate;
+uniform uint gMinFilterSampleCount;
+uniform uint gMaxFilterSampleCount;
+uniform float gGaussianFilterStdScale;
 
 uint hash(uint x)
 {
@@ -63,6 +71,56 @@ float rand(inout uint seed)
 {
     seed = hash(seed);
     return float(seed) / 4294967296.0;
+}
+
+uint sampleTrainingMip(inout uint seed)
+{
+    uint mipCount = max(1u, gHierarchicalMipCount);
+    if (!gHierarchicalFilteringEnabled || mipCount <= 1u)
+        return 0u;
+
+    float total = 0.f;
+    [loop]
+    for (uint mip = 0u; mip < mipCount; ++mip)
+        total += exp(-gMipExponentialRate * float(mip));
+
+    float target = rand(seed) * total;
+    float accum = 0.f;
+    [loop]
+    for (uint mip = 0u; mip < mipCount; ++mip)
+    {
+        accum += exp(-gMipExponentialRate * float(mip));
+        if (target <= accum)
+            return mip;
+    }
+    return mipCount - 1u;
+}
+
+uint spatialFilterSampleCount(uint mipLevel)
+{
+    if (!gHierarchicalFilteringEnabled || mipLevel == 0u)
+        return 1u;
+
+    uint count = 1u << min(30u, 2u * mipLevel);
+    return clamp(count, max(1u, gMinFilterSampleCount), max(gMinFilterSampleCount, gMaxFilterSampleCount));
+}
+
+float gaussian01(inout uint seed)
+{
+    float u1 = max(rand(seed), 1e-6f);
+    float u2 = rand(seed);
+    return sqrt(-2.f * log(u1)) * cos(M_2PI * u2);
+}
+
+float2 sampleFilteredUv(float2 centerUv, uint mipLevel, inout uint seed)
+{
+    if (!gHierarchicalFilteringEnabled || mipLevel == 0u || gGaussianFilterStdScale <= 0.f)
+        return centerUv;
+
+    float footprint = exp2(float(mipLevel));
+    float2 sigma = gGaussianFilterStdScale * footprint / max(float2(gFinestTextureSize), 1.f.xx);
+    float2 offset = float2(gaussian01(seed), gaussian01(seed)) * sigma;
+    return frac(centerUv + offset);
 }
 
 uint mixSeed(uint a, uint b)
@@ -144,6 +202,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
     uint wiSeed = makeSampleSeed(idx, 2u);
     uint sgSeed = makeSampleSeed(idx, 3u);
     uint mollificationSeed = makeSampleSeed(idx, 4u);
+    uint mipSeed = makeSampleSeed(idx, 5u);
+    uint filterSeed = makeSampleSeed(idx, 6u);
 
     float2 uv = float2(rand(uvSeed), rand(uvSeed));
     if (gUseUvGrid)
@@ -207,49 +267,61 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
     // Keep independent sample streams for UVs, BSDF directions, and any
     // additional material sampling performed through the Falcor interfaces.
-    UniformSampleGenerator sg = UniformSampleGenerator(sgSeed, 0);
+    uint trainingMip = sampleTrainingMip(mipSeed);
+    uint spatialSampleCount = spatialFilterSampleCount(trainingMip);
+    // Filtering is owned by this pass through spatial footprint samples. Keep
+    // the material's own texture sampling at its existing default LOD behavior.
     let lod = ExplicitLodTextureSampler(0.f);
-
-    VertexData v = {};
-    v.posW        = float3((uv[0]-0.5f)*2, (uv[1]-0.5f)*2, 0.f);
-    v.normalW     = float3(0.f, 0.f, 1.f);         // flat geometric normal
-    v.tangentW    = float4(1.f, 0.f, 0.f, 1.f);
-    v.faceNormalW = v.normalW;
-    v.texC        = uv;
-
-    ShadingData sd = gScene.materials.prepareShadingData(v, gMaterialId, wi);
-
     const uint materialHints = (uint)MaterialInstanceHints::AdjustShadingNormal;
-    let mi = gScene.materials.getMaterialInstance(sd, lod, materialHints);
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
     float3 f = float3(0.f);
-    if (gMollificationConeAngleRad > 0.f && gMollificationSampleCount > 1u)
+    uint validSpatialSampleCount = 0u;
+    [loop]
+    for (uint spatialSample = 0u; spatialSample < spatialSampleCount; ++spatialSample)
     {
-        float cosTheta = cos(min(gMollificationConeAngleRad, M_PI));
-        uint validSampleCount = 0u;
+        float2 filteredUv = sampleFilteredUv(uv, trainingMip, filterSeed);
+        VertexData v = {};
+        v.posW        = float3((filteredUv[0]-0.5f)*2, (filteredUv[1]-0.5f)*2, 0.f);
+        v.normalW     = float3(0.f, 0.f, 1.f);         // flat geometric normal
+        v.tangentW    = float4(1.f, 0.f, 0.f, 1.f);
+        v.faceNormalW = v.normalW;
+        v.texC        = filteredUv;
 
-        for (uint i = 0u; i < gMollificationSampleCount; ++i)
+        ShadingData sd = gScene.materials.prepareShadingData(v, gMaterialId, wi);
+        let mi = gScene.materials.getMaterialInstance(sd, lod, materialHints);
+        UniformSampleGenerator sg = UniformSampleGenerator(sgSeed, spatialSample);
+
+        if (gMollificationConeAngleRad > 0.f && gMollificationSampleCount > 1u)
         {
-            float3 mollifiedWo = sampleConeAround(wo, float2(rand(mollificationSeed), rand(mollificationSeed)), cosTheta);
-            if (mollifiedWo.z > 0.f)
-            {
-                f += mi.eval(sd, mollifiedWo, sg);
-                validSampleCount++;
-            }
-        }
+            float cosTheta = cos(min(gMollificationConeAngleRad, M_PI));
+            uint validSampleCount = 0u;
+            float3 mollifiedF = 0.f.xxx;
 
-        // Fix 3: require at least half the cone samples to be valid before trusting
-        // the mollified average. When wo is near the horizon the surviving samples
-        // are biased toward the upper side of the cone, producing a brighter-than-
-        // correct average. Fall back to the unmollified evaluation in that case.
-        float validFraction = float(validSampleCount) / float(gMollificationSampleCount);
-        f = (validFraction >= 0.5f) ? f / float(validSampleCount) : mi.eval(sd, wo, sg);
+            for (uint i = 0u; i < gMollificationSampleCount; ++i)
+            {
+                float3 mollifiedWo = sampleConeAround(wo, float2(rand(mollificationSeed), rand(mollificationSeed)), cosTheta);
+                if (mollifiedWo.z > 0.f)
+                {
+                    mollifiedF += mi.eval(sd, mollifiedWo, sg);
+                    validSampleCount++;
+                }
+            }
+
+            // Fix 3: require at least half the cone samples to be valid before trusting
+            // the mollified average. When wo is near the horizon the surviving samples
+            // are biased toward the upper side of the cone, producing a brighter-than-
+            // correct average. Fall back to the unmollified evaluation in that case.
+            float validFraction = float(validSampleCount) / float(gMollificationSampleCount);
+            f += (validFraction >= 0.5f) ? mollifiedF / float(validSampleCount) : mi.eval(sd, wo, sg);
+        }
+        else
+        {
+            f += mi.eval(sd, wo, sg);
+        }
+        validSpatialSampleCount++;
     }
-    else
-    {
-        f = mi.eval(sd, wo, sg);
-    }
+    f /= float(max(1u, validSpatialSampleCount));
     float pdf = 0.0f;
 
     // Save results
@@ -258,17 +330,27 @@ void main(uint3 threadId : SV_DispatchThreadID)
     data.wi       = wi;   // incident/view direction, towards viewer
     data.wo       = wo;   // sampled light direction, away from surface
     data.f        = f;
+    data.mipLevel = float(trainingMip);
 
     #if SAMPLE_FEATURES_ENABLED
         clearBootstrapFeatures(data);
 
+        VertexData featureV = {};
+        featureV.posW        = float3((uv[0]-0.5f)*2, (uv[1]-0.5f)*2, 0.f);
+        featureV.normalW     = float3(0.f, 0.f, 1.f);
+        featureV.tangentW    = float4(1.f, 0.f, 0.f, 1.f);
+        featureV.faceNormalW = featureV.normalW;
+        featureV.texC        = uv;
+        ShadingData featureSd = gScene.materials.prepareShadingData(featureV, gMaterialId, wi);
+        let featureMi = gScene.materials.getMaterialInstance(featureSd, lod, materialHints);
+
         #if LEGACY_FEATURES_ENABLED
-            BSDFProperties props = mi.getProperties(sd);
+            BSDFProperties props = featureMi.getProperties(featureSd);
             writeLegacyBootstrapFeatures(props, pdf, data);
         #endif
 
         #if MATERIAL_FEATURES_ENABLED
-            writeMaterialBootstrapFeatures(sd, data);
+            writeMaterialBootstrapFeatures(featureSd, data);
         #endif
     #endif
 

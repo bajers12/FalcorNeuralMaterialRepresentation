@@ -13,7 +13,7 @@ namespace Falcor
      * Minimal neural material for Falcor's material system.
      *
         * Notes:
-        * - No latent MIP levels are used; the shader samples mip 0 explicitly.
+        * - Hierarchical latent textures are loaded from latent*_mipN.exr when present.
         * - Importance sampling uses a dedicated decoder when sampler_weights.bin is available.
      * - It reuses MaterialType::RGL as a temporary material type slot. If your branch already uses RGL,
      *   add a dedicated MaterialType::Neural in your registry/enum files and replace the type below.
@@ -42,7 +42,7 @@ namespace Falcor
 
         size_t getMaxTextureCount() const override { return 2; }
         size_t getMaxBufferCount() const override { return 16; }
-        size_t getMaterialInstanceByteSize() const override { return 128; }
+        size_t getMaterialInstanceByteSize() const override { return 192; }
 
         void setDefaultTextureSampler(const ref<Sampler>& pSampler) override { mpSampler = pSampler; }
         ref<Sampler> getDefaultTextureSampler() const override { return mpSampler; }
@@ -65,6 +65,7 @@ namespace Falcor
 
             TextureHandle texLatent0;
             TextureHandle texLatent1;
+            uint32_t latentMipControl = 1;
 
             uint32_t brdfDecoderBufferID = uint32_t(-1);
             uint32_t samplerDecoderBufferID = uint32_t(-1);
@@ -80,6 +81,8 @@ namespace Falcor
         static_assert(sizeof(Data) <= sizeof(MaterialPayload), "NeuralMaterial payload must fit in MaterialPayload");
 
         void loadAssets();
+        ref<Sampler> createLatentSampler() const;
+        uint32_t packLatentMipControl() const;
         static std::vector<float> readFloatArray(std::ifstream& f, size_t count);
         uint32_t uploadBuffer(MaterialSystem* pOwner, const ref<Buffer>& pBuffer, uint32_t& id);
 
@@ -87,6 +90,11 @@ namespace Falcor
         ref<Texture> mpLatent0;
         ref<Texture> mpLatent1;
         ref<Sampler> mpSampler;
+        uint32_t mLatentMipCount = 1;
+        bool mForceLatentMip = false;
+        uint32_t mForcedLatentMip = 0;
+        uint32_t mLatentMipDebugMode = 0;
+        float mLatentLodBias = 0.f;
 
         ref<Buffer> mpBrdfDecoderBuffer;
         ref<Buffer> mpSamplerDecoderBuffer;

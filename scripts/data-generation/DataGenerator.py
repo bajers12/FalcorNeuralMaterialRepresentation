@@ -12,6 +12,14 @@ class DataGenerator():
         scene_path = 'media/LayeredMaterial/ThreeLayeredGGXPreview.pyscene',
         sampleCount = 10000,
         bootstrap_feature_layout = "auto",
+        hierarchical_filtering_enabled = False,
+        hierarchical_mip_count = 1,
+        finest_texture_width = 1,
+        finest_texture_height = 1,
+        mip_exponential_rate = 0.7,
+        min_filter_sample_count = 1,
+        max_filter_sample_count = 64,
+        gaussian_filter_std_scale = 0.5,
     ):
         # Construct path relative to project root
         project_root = Path(__file__).parent.parent.parent
@@ -27,6 +35,14 @@ class DataGenerator():
                 "materialId": materialId,
                 "sampleCount": sampleCount,
                 "bootstrapFeatureLayout": bootstrap_feature_layout,
+                "hierarchicalFilteringEnabled": hierarchical_filtering_enabled,
+                "hierarchicalMipCount": hierarchical_mip_count,
+                "finestTextureWidth": finest_texture_width,
+                "finestTextureHeight": finest_texture_height,
+                "mipExponentialRate": mip_exponential_rate,
+                "minFilterSampleCount": min_filter_sample_count,
+                "maxFilterSampleCount": max_filter_sample_count,
+                "gaussianFilterStdScale": gaussian_filter_std_scale,
             },
         )
         self.graph.mark_output("OnlineDataGenerationPass.output")

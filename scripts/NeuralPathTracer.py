@@ -6,7 +6,8 @@ def render_graph_NeuralPathTracer():
     VBufferRT = createPass("VBufferRT", {
         'samplePattern': 'Stratified',
         'sampleCount': 16,
-        'useAlphaTest': True
+        'useAlphaTest': True,
+        'texLOD': 'RayDiffs'
     })
 
     PathTracer = createPass("PathTracer", {
@@ -14,6 +15,7 @@ def render_graph_NeuralPathTracer():
         'useNEE': True,
         'useMIS': True,
         'useBSDFSampling': True,
+        'primaryLodMode': 'RayDiffs',
 
         'useNeuralMaterial': True,
         'neuralMaterialID': 0,

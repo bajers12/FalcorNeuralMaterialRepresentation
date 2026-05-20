@@ -2,6 +2,7 @@
 #include "MaterialSystem.h"
 #include "Core/API/Device.h"
 #include "Utils/Logger.h"
+#include <algorithm>
 #include <fstream>
 
 namespace Falcor
@@ -42,7 +43,47 @@ namespace Falcor
     {
         bool dirty = Material::renderUI(widget);
         widget.text("Neural asset path: " + mBasePath.string());
+        widget.text("Latent mip levels: " + std::to_string(mLatentMipCount));
+        dirty |= widget.checkbox("Force latent mip", mForceLatentMip);
+        uint32_t maxMip = mLatentMipCount > 0 ? mLatentMipCount - 1 : 0;
+        dirty |= widget.var("Forced latent mip", mForcedLatentMip, 0u, maxMip);
+        dirty |= widget.var("Latent mip debug mode", mLatentMipDebugMode, 0u, 3u);
+        bool samplerDirty = widget.var("Latent LOD bias", mLatentLodBias, -16.f, 16.f, 0.01f);
+        dirty |= samplerDirty;
+        if (dirty)
+        {
+            mForcedLatentMip = std::min(mForcedLatentMip, maxMip);
+            mLatentMipDebugMode = std::min(mLatentMipDebugMode, 3u);
+            mData.latentMipControl = packLatentMipControl();
+            markUpdates(UpdateFlags::DataChanged);
+            if (samplerDirty)
+            {
+                mpSampler = createLatentSampler();
+                markUpdates(UpdateFlags::ResourcesChanged);
+            }
+        }
         return dirty;
+    }
+
+    ref<Sampler> NeuralMaterial::createLatentSampler() const
+    {
+        Sampler::Desc desc;
+        desc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
+        desc.setMaxAnisotropy(8);
+        desc.setLodParams(-1000.f, 1000.f, mLatentLodBias);
+        return mpDevice->createSampler(desc);
+    }
+
+    uint32_t NeuralMaterial::packLatentMipControl() const
+    {
+        uint32_t mipCount = std::clamp(mLatentMipCount, 1u, 255u);
+        uint32_t forcedMip = std::clamp(mForcedLatentMip, 0u, mipCount - 1u);
+        uint32_t debugMode = std::clamp(mLatentMipDebugMode, 0u, 3u);
+
+        return (mForceLatentMip ? (1u << 31) : 0u) |
+               (debugMode << 16) |
+               (forcedMip << 8) |
+               mipCount;
     }
 
     std::vector<float> NeuralMaterial::readFloatArray(std::ifstream& f, size_t count)
@@ -60,11 +101,35 @@ namespace Falcor
         const auto weightsPath = mBasePath / "decoder_weights.bin";
         const auto samplerWeightsPath = mBasePath / "sampler_weights.bin";
 
-        mpLatent0 = Texture::createFromFile(mpDevice, latent0Path.string(), false, false);
-        mpLatent1 = Texture::createFromFile(mpDevice, latent1Path.string(), false, false);
+        std::vector<std::filesystem::path> latent0MipPaths;
+        std::vector<std::filesystem::path> latent1MipPaths;
+        for (uint32_t mip = 0; mip < 255; ++mip)
+        {
+            auto p0 = mBasePath / ("latent0_mip" + std::to_string(mip) + ".exr");
+            auto p1 = mBasePath / ("latent1_mip" + std::to_string(mip) + ".exr");
+            if (!std::filesystem::exists(p0) || !std::filesystem::exists(p1))
+                break;
+            latent0MipPaths.push_back(p0);
+            latent1MipPaths.push_back(p1);
+        }
+
+        if (!latent0MipPaths.empty())
+        {
+            mpLatent0 = Texture::createMippedFromFiles(mpDevice, latent0MipPaths, false);
+            mpLatent1 = Texture::createMippedFromFiles(mpDevice, latent1MipPaths, false);
+            mLatentMipCount = static_cast<uint32_t>(latent0MipPaths.size());
+        }
+        else
+        {
+            mpLatent0 = Texture::createFromFile(mpDevice, latent0Path.string(), false, false);
+            mpLatent1 = Texture::createFromFile(mpDevice, latent1Path.string(), false, false);
+            mLatentMipCount = 1;
+        }
 
         if (!mpLatent0) FALCOR_THROW("Failed to load latent texture: {}", latent0Path.string());
         if (!mpLatent1) FALCOR_THROW("Failed to load latent texture: {}", latent1Path.string());
+        mForcedLatentMip = std::min(mForcedLatentMip, mLatentMipCount - 1);
+        mData.latentMipControl = packLatentMipControl();
 
         auto makeStructured = [&](const std::vector<float>& data) -> ref<Buffer>
         {
@@ -217,10 +282,7 @@ namespace Falcor
 
         if (!mpSampler)
         {
-            Sampler::Desc desc;
-            desc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
-            desc.setMaxAnisotropy(8);
-            mpSampler = mpDevice->createSampler(desc);
+            mpSampler = createLatentSampler();
         }
 
     }
@@ -240,10 +302,7 @@ namespace Falcor
 
         if (!mpSampler)
         {
-            Sampler::Desc desc;
-            desc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
-            desc.setMaxAnisotropy(8);
-            mpSampler = mpDevice->createSampler(desc);
+            mpSampler = createLatentSampler();
             updates |= UpdateFlags::ResourcesChanged;
         }
 
@@ -269,6 +328,7 @@ namespace Falcor
                mpLatent0 == p->mpLatent0 &&
                mpLatent1 == p->mpLatent1 &&
                mpSampler == p->mpSampler &&
+               mLatentLodBias == p->mLatentLodBias &&
                mpBrdfDecoderBuffer == p->mpBrdfDecoderBuffer &&
                mpSamplerDecoderBuffer == p->mpSamplerDecoderBuffer;
     }

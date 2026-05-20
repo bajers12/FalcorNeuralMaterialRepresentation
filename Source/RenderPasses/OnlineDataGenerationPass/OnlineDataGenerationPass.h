@@ -42,6 +42,7 @@ struct BsdfSampleData
     float3 wo;
     float3 wi;
     float3 f;
+    float mipLevel;
 };
 
 struct BsdfFeatureSampleData
@@ -50,6 +51,7 @@ struct BsdfFeatureSampleData
     float3 wo;
     float3 wi;
     float3 f;
+    float mipLevel;
     float4 bootstrapFeature0;
     float4 bootstrapFeature1;
     float4 bootstrapFeature2;
@@ -86,6 +88,7 @@ public:
     void setUvGrid(uint32_t width, uint32_t height);
     void clearUvGrid();
     void setMollification(float coneAngleRadians, uint32_t sampleCount);
+    void setHierarchicalFiltering(bool enabled, uint32_t mipCount);
     uint32_t getBootstrapFeatureDim() const;
     std::vector<std::string> getBootstrapFeatureNames() const;
     static void registerBindings(pybind11::module& m);
@@ -122,6 +125,14 @@ private:
     uint32_t mUvGridFullHeight = 0;
     float mMollificationConeAngleRad = 0.f;
     uint32_t mMollificationSampleCount = 1;
+    bool mHierarchicalFilteringEnabled = false;
+    uint32_t mHierarchicalMipCount = 1;
+    uint32_t mFinestTextureWidth = 1;
+    uint32_t mFinestTextureHeight = 1;
+    float mMipExponentialRate = 0.7f;
+    uint32_t mMinFilterSampleCount = 1;
+    uint32_t mMaxFilterSampleCount = 64;
+    float mGaussianFilterStdScale = 0.5f;
     BootstrapFeatureLayout mRequestedBootstrapFeatureLayout = BootstrapFeatureLayout::Auto;
     BootstrapFeatureLayout mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::None;
     std::vector<std::string> mBootstrapFeatureNames;

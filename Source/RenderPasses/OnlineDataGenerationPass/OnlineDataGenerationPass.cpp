@@ -30,6 +30,14 @@
 
 const char kShaderFile[] = "RenderPasses/OnlineDataGenerationPass/OnlineDataGenerationPass.cs.slang";
 const char kBootstrapFeatureLayout[] = "bootstrapFeatureLayout";
+const char kHierarchicalFilteringEnabled[] = "hierarchicalFilteringEnabled";
+const char kHierarchicalMipCount[] = "hierarchicalMipCount";
+const char kFinestTextureWidth[] = "finestTextureWidth";
+const char kFinestTextureHeight[] = "finestTextureHeight";
+const char kMipExponentialRate[] = "mipExponentialRate";
+const char kMinFilterSampleCount[] = "minFilterSampleCount";
+const char kMaxFilterSampleCount[] = "maxFilterSampleCount";
+const char kGaussianFilterStdScale[] = "gaussianFilterStdScale";
 const uint32_t kBootstrapFeatureCapacity = 24;
 
 namespace
@@ -64,6 +72,7 @@ void OnlineDataGenerationPass::registerBindings(pybind11::module& m)
     pass.def("setUvGrid", &OnlineDataGenerationPass::setUvGrid);
     pass.def("clearUvGrid", &OnlineDataGenerationPass::clearUvGrid);
     pass.def("setMollification", &OnlineDataGenerationPass::setMollification);
+    pass.def("setHierarchicalFiltering", &OnlineDataGenerationPass::setHierarchicalFiltering);
     pass.def("getBootstrapFeatureDim", &OnlineDataGenerationPass::getBootstrapFeatureDim);
     pass.def("getBootstrapFeatureNames", &OnlineDataGenerationPass::getBootstrapFeatureNames);
     pass.def("getData", &OnlineDataGenerationPass::getData);
@@ -84,6 +93,14 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
     mUvGridFullHeight = 0;
     mMollificationConeAngleRad = 0.f;
     mMollificationSampleCount = 1;
+    mHierarchicalFilteringEnabled = false;
+    mHierarchicalMipCount = 1;
+    mFinestTextureWidth = 1;
+    mFinestTextureHeight = 1;
+    mMipExponentialRate = 0.7f;
+    mMinFilterSampleCount = 1;
+    mMaxFilterSampleCount = 64;
+    mGaussianFilterStdScale = 0.5f;
     mpMappedData = nullptr;
 
     parseProperties(props);
@@ -101,7 +118,16 @@ void OnlineDataGenerationPass::parseProperties(const Properties& props)
         if (key == "materialId") mMaterialId = value;
         else if (key == "sampleCount") mSampleCount = value;
         else if (key == kBootstrapFeatureLayout) mRequestedBootstrapFeatureLayout = parseBootstrapFeatureLayout(value);
+        else if (key == kHierarchicalFilteringEnabled) mHierarchicalFilteringEnabled = value;
+        else if (key == kHierarchicalMipCount) mHierarchicalMipCount = std::max(1u, (uint32_t)value);
+        else if (key == kFinestTextureWidth) mFinestTextureWidth = std::max(1u, (uint32_t)value);
+        else if (key == kFinestTextureHeight) mFinestTextureHeight = std::max(1u, (uint32_t)value);
+        else if (key == kMipExponentialRate) mMipExponentialRate = std::max(1e-6f, (float)value);
+        else if (key == kMinFilterSampleCount) mMinFilterSampleCount = std::max(1u, (uint32_t)value);
+        else if (key == kMaxFilterSampleCount) mMaxFilterSampleCount = std::max(1u, (uint32_t)value);
+        else if (key == kGaussianFilterStdScale) mGaussianFilterStdScale = std::max(0.f, (float)value);
     }
+    mMaxFilterSampleCount = std::max(mMinFilterSampleCount, mMaxFilterSampleCount);
 }
 
 Properties OnlineDataGenerationPass::getProperties() const
@@ -110,6 +136,14 @@ Properties OnlineDataGenerationPass::getProperties() const
     props["materialId"] = mMaterialId;
     props["sampleCount"] = mSampleCount;
     props[kBootstrapFeatureLayout] = bootstrapFeatureLayoutToString(mRequestedBootstrapFeatureLayout);
+    props[kHierarchicalFilteringEnabled] = mHierarchicalFilteringEnabled;
+    props[kHierarchicalMipCount] = mHierarchicalMipCount;
+    props[kFinestTextureWidth] = mFinestTextureWidth;
+    props[kFinestTextureHeight] = mFinestTextureHeight;
+    props[kMipExponentialRate] = mMipExponentialRate;
+    props[kMinFilterSampleCount] = mMinFilterSampleCount;
+    props[kMaxFilterSampleCount] = mMaxFilterSampleCount;
+    props[kGaussianFilterStdScale] = mGaussianFilterStdScale;
 
     return props;
 }
@@ -173,6 +207,13 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gUvGridFullHeight"] = mUvGridFullHeight;
     var["gMollificationConeAngleRad"] = mMollificationConeAngleRad;
     var["gMollificationSampleCount"] = mMollificationSampleCount;
+    var["gHierarchicalFilteringEnabled"] = mHierarchicalFilteringEnabled;
+    var["gHierarchicalMipCount"] = mHierarchicalMipCount;
+    var["gFinestTextureSize"] = uint2(mFinestTextureWidth, mFinestTextureHeight);
+    var["gMipExponentialRate"] = mMipExponentialRate;
+    var["gMinFilterSampleCount"] = mMinFilterSampleCount;
+    var["gMaxFilterSampleCount"] = mMaxFilterSampleCount;
+    var["gGaussianFilterStdScale"] = mGaussianFilterStdScale;
 
     mpPass->execute(pRenderContext, mSampleCount, 1, 1);
     pRenderContext->uavBarrier(mpGpuSampleBuffer.get());
@@ -251,6 +292,12 @@ void OnlineDataGenerationPass::setMollification(float coneAngleRadians, uint32_t
 {
     mMollificationConeAngleRad = std::max(0.f, coneAngleRadians);
     mMollificationSampleCount = std::max(1u, sampleCount);
+}
+
+void OnlineDataGenerationPass::setHierarchicalFiltering(bool enabled, uint32_t mipCount)
+{
+    mHierarchicalFilteringEnabled = enabled;
+    mHierarchicalMipCount = std::max(1u, mipCount);
 }
 
 uint32_t OnlineDataGenerationPass::getBootstrapFeatureDim() const

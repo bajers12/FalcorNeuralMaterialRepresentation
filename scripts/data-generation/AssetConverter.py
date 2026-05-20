@@ -166,6 +166,8 @@ def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
         "mlp_depth": layout["mlp_depth"],
         "weight_file_format": "NMDLWT02",
         "decoder_layout": layout["decoder_layout"],
+        "mip_count": 1,
+        "mip_shapes": [[int(h), int(w)]],
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
@@ -201,15 +203,26 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
         )
         return
 
-    latent = model.latent.Z.detach().cpu().numpy()[0]
-    rgba0 = latent[0:4].transpose(1, 2, 0).copy()
-    rgba1 = latent[4:8].transpose(1, 2, 0).copy()
+    for old_path in list(preview_dir.glob("latent0_mip*.exr")) + list(preview_dir.glob("latent1_mip*.exr")):
+        old_path.unlink(missing_ok=True)
+    for old_path in list(preview_dir.glob("latent0_mip*.npy")) + list(preview_dir.glob("latent1_mip*.npy")):
+        old_path.unlink(missing_ok=True)
 
-    write_exr(preview_dir / "latent0.exr", rgba0)
-    write_exr(preview_dir / "latent1.exr", rgba1)
+    latent_levels = [level.detach().cpu().numpy()[0] for level in model.latent.levels]
+    for mip, latent in enumerate(latent_levels):
+        rgba0 = latent[0:4].transpose(1, 2, 0).copy()
+        rgba1 = latent[4:8].transpose(1, 2, 0).copy()
 
-    np.save(preview_dir / "latent0.npy", rgba0)
-    np.save(preview_dir / "latent1.npy", rgba1)
+        write_exr(preview_dir / f"latent0_mip{mip}.exr", rgba0)
+        write_exr(preview_dir / f"latent1_mip{mip}.exr", rgba1)
+        np.save(preview_dir / f"latent0_mip{mip}.npy", rgba0)
+        np.save(preview_dir / f"latent1_mip{mip}.npy", rgba1)
+
+        if mip == 0:
+            write_exr(preview_dir / "latent0.exr", rgba0)
+            write_exr(preview_dir / "latent1.exr", rgba1)
+            np.save(preview_dir / "latent0.npy", rgba0)
+            np.save(preview_dir / "latent1.npy", rgba1)
 
     sd = model.decoder.state_dict()
     weights = {
@@ -222,7 +235,15 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
             weights[key] = value.detach().cpu().numpy()
 
     save_weights_bin(preview_dir / "decoder_weights.bin", weights)
-    save_metadata(preview_dir / "metadata.json", latent, weights)
+    save_metadata(preview_dir / "metadata.json", latent_levels[0], weights)
+    metadata_path = preview_dir / "metadata.json"
+    with open(metadata_path, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+    metadata["mip_count"] = len(latent_levels)
+    metadata["mip_shapes"] = [[int(level.shape[1]), int(level.shape[2])] for level in latent_levels]
+    metadata["latent_file_pattern"] = "latent{0,1}_mip{mip}.exr"
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
 
     if cfg.train_importance_sampler:
         sampler_sd = model.importance_sampler.state_dict()

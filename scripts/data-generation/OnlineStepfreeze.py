@@ -65,6 +65,11 @@ class TrainConfig:
     tex_h: int = 512
     tex_w: int = 512
     latent_ch: int = 8
+    hierarchical_mip_count: int = 1
+    mip_exponential_rate: float = 0.7
+    min_filter_sample_count: int = 1
+    max_filter_sample_count: int = 64
+    gaussian_filter_std_scale: float = 0.5
 
     scene_path: str = 'MatXScenes/Preview/MatXScene.pyscene'
 
@@ -151,7 +156,7 @@ def tensorize_batch(data_dict: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]
 
 def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
     print(f"[debug] first sample from {label}:")
-    ordered_keys = ["uv", "wi", "wo", "y", "features"]
+    ordered_keys = ["uv", "wi", "wo", "y", "mip_level", "features"]
     for key in ordered_keys:
         if key not in batch:
             continue
@@ -186,7 +191,7 @@ class NeuralMaterialModel(nn.Module):
 
     def __init__(self, cfg: TrainConfig):
         super().__init__()
-        self.latent = LatentTexture(cfg.tex_h, cfg.tex_w, cfg.latent_ch)
+        self.latent = LatentTexture(cfg.tex_h, cfg.tex_w, cfg.latent_ch, cfg.hierarchical_mip_count)
         self.decoder = Decoder(
             latent_ch=cfg.latent_ch,
             num_frames=cfg.num_frames,
@@ -217,15 +222,15 @@ class NeuralMaterialModel(nn.Module):
         return y_hat, raw
 
     def forward_with_raw(
-        self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+        self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor, mip_level: torch.Tensor | None = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        z = self.latent.sample(uv)
+        z = self.latent.sample(uv, mip_level)
         return self.decode_with_raw(z, wi, wo)
 
     def forward(
-        self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+        self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor, mip_level: torch.Tensor | None = None
     ) -> torch.Tensor:
-        y_hat, _raw = self.forward_with_raw(uv, wi, wo)
+        y_hat, _raw = self.forward_with_raw(uv, wi, wo, mip_level)
         return y_hat
 
 
@@ -293,41 +298,45 @@ def initialize_latent_texture_from_encoder(
     model.eval()
 
     print(
-        f"[bootstrap] Initializing latent texture from encoder on a full "
-        f"{cfg.tex_w}x{cfg.tex_h} UV grid in a single batch"
-    )
-    sample_count = cfg.tex_w * cfg.tex_h
-    grid_generator = DataGenerator(
-        sampleCount=sample_count,
-        bootstrap_feature_layout=cfg.bootstrap_feature_layout,
-        scene_path=cfg.scene_path
-    )
-    try:
-        grid_batch = grid_generator.generate_grid_data(
-            cfg.tex_w,
-            cfg.tex_h,
-            cfg.seed,
-            SEED_DOMAIN_BOOTSTRAP,
-            generation_index,
-        ).copy()
-    finally:
-        grid_generator.release_data()
-
-    grid_tensor = tensorize_batch(data_to_dict(grid_batch, cfg.material_feature_dim))
-    latent_chunks = []
-
-    for start in range(0, sample_count, cfg.latent_init_batch_size):
-        end = min(start + cfg.latent_init_batch_size, sample_count)
-        chunk = {key: value[start:end] for key, value in grid_tensor.items()}
-        features = build_material_features(chunk, cfg, device)
-        latent_chunks.append(model.encoder(features).cpu())
-
-    latent_image = torch.cat(latent_chunks, dim=0).view(
-        cfg.tex_h, cfg.tex_w, cfg.latent_ch
+        f"[bootstrap] Initializing {cfg.hierarchical_mip_count} latent mip(s) "
+        f"from encoder, finest grid={cfg.tex_w}x{cfg.tex_h}"
     )
 
-    z_image = latent_image.permute(2, 0, 1).unsqueeze(0).contiguous()
-    model.latent.Z.copy_(z_image.to(device))
+    for mip_level, latent_level in enumerate(model.latent.levels):
+        level_h, level_w = model.latent.level_shape(mip_level)
+        sample_count = level_w * level_h
+        grid_generator = DataGenerator(
+            sampleCount=sample_count,
+            bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+            scene_path=cfg.scene_path,
+            hierarchical_filtering_enabled=False,
+        )
+        try:
+            grid_batch = grid_generator.generate_grid_data(
+                level_w,
+                level_h,
+                cfg.seed,
+                SEED_DOMAIN_BOOTSTRAP,
+                generation_index + mip_level,
+            ).copy()
+        finally:
+            grid_generator.release_data()
+
+        grid_tensor = tensorize_batch(data_to_dict(grid_batch, cfg.material_feature_dim))
+        latent_chunks = []
+
+        for start in range(0, sample_count, cfg.latent_init_batch_size):
+            end = min(start + cfg.latent_init_batch_size, sample_count)
+            chunk = {key: value[start:end] for key, value in grid_tensor.items()}
+            features = build_material_features(chunk, cfg, device)
+            latent_chunks.append(model.encoder(features).cpu())
+
+        latent_image = torch.cat(latent_chunks, dim=0).view(
+            level_h, level_w, cfg.latent_ch
+        )
+
+        z_image = latent_image.permute(2, 0, 1).unsqueeze(0).contiguous()
+        latent_level.copy_(z_image.to(device))
 
 
 # =============================================================================
@@ -580,7 +589,9 @@ def train_one_epoch(
         material_features_dec = build_material_features(batch_decoder, cfg, device)
         z_dec = model.encoder(material_features_dec)
     else:
-        z_dec = model.latent.sample(uv_dec)
+        mip_dec = batch_decoder.get("mip_level")
+        mip_dec = mip_dec.to(device, non_blocking=True) if mip_dec is not None else None
+        z_dec = model.latent.sample(uv_dec, mip_dec)
 
     y_hat_dec, raw_dec = model.decode_with_raw(z_dec, wi_dec, wo_dec)
     bsdf_loss = Decoder.log_l1_loss(raw_dec, y_dec, model.decoder.exp_offset, cfg.log_eps)
@@ -616,7 +627,9 @@ def train_one_epoch(
         wi_sam, _ = _maybe_transform_dirs_with_normals(sampler_batch, cfg, device)
         sampler_opt.zero_grad(set_to_none=True)
 
-        z_sam = model.latent.sample(uv_sam).detach()
+        mip_sam = sampler_batch.get("mip_level")
+        mip_sam = mip_sam.to(device, non_blocking=True) if mip_sam is not None else None
+        z_sam = model.latent.sample(uv_sam, mip_sam).detach()
 
         # KL-divergence loss (paper Section 4.3).
         # z_sam is detached: latent has no grad w.r.t. sampler (paper stability trick).
@@ -676,7 +689,9 @@ def validate(
         material_features = build_material_features(batch, cfg, device)
         z = model.encoder(material_features)
     else:
-        z = model.latent.sample(uv)
+        mip = batch.get("mip_level")
+        mip = mip.to(device, non_blocking=True) if mip is not None else None
+        z = model.latent.sample(uv, mip)
 
     y_hat, raw = model.decode_with_raw(z, wi, wo)
     loss = Decoder.log_l1_loss(raw, y, model.decoder.exp_offset, cfg.log_eps)
@@ -752,6 +767,26 @@ def parse_args() -> TrainConfig:
     p.add_argument("--tex_h", type=int, default=4096)
     p.add_argument("--tex_w", type=int, default=4096)
     p.add_argument("--latent_ch", type=int, default=8)
+    p.add_argument(
+        "--hierarchical_mip_count",
+        type=int,
+        default=1,
+        help="Number of independently trained latent mip levels, starting from tex_w/tex_h.",
+    )
+    p.add_argument(
+        "--mip_exponential_rate",
+        type=float,
+        default=0.7,
+        help="Truncated exponential rate used to randomize training mip levels.",
+    )
+    p.add_argument("--min_filter_sample_count", type=int, default=1)
+    p.add_argument("--max_filter_sample_count", type=int, default=64)
+    p.add_argument(
+        "--gaussian_filter_std_scale",
+        type=float,
+        default=0.5,
+        help="Spatial Gaussian footprint sigma in texels, scaled by the selected mip footprint.",
+    )
 
     p.add_argument("--num_frames", type=int, default=2)
     p.add_argument("--brdf_mlp_width", type=int, default=64)
@@ -875,6 +910,11 @@ def parse_args() -> TrainConfig:
     cfg.tex_h = args.tex_h
     cfg.tex_w = args.tex_w
     cfg.latent_ch = args.latent_ch
+    cfg.hierarchical_mip_count = max(1, args.hierarchical_mip_count)
+    cfg.mip_exponential_rate = max(1e-6, args.mip_exponential_rate)
+    cfg.min_filter_sample_count = max(1, args.min_filter_sample_count)
+    cfg.max_filter_sample_count = max(cfg.min_filter_sample_count, args.max_filter_sample_count)
+    cfg.gaussian_filter_std_scale = max(0.0, args.gaussian_filter_std_scale)
 
     cfg.num_frames = args.num_frames
     cfg.brdf_mlp_width = args.brdf_mlp_width
@@ -930,15 +970,18 @@ def data_to_dict(data: np.ndarray, material_feature_dim: int = 0):
     wo = data[:, 2:5]
     wi = data[:, 5:8]
     f = data[:, 8:11]
+    has_mip_column = data.shape[1] >= (12 + material_feature_dim)
+    mip_level = data[:, 11:12] if has_mip_column else np.zeros((data.shape[0], 1), dtype=data.dtype)
 
     batch = {
         "uv": uv,
         "wo": wo,
         "wi": wi,
         "y": f,
+        "mip_level": mip_level.reshape(-1),
     }
     if material_feature_dim > 0:
-        feature_start = 11
+        feature_start = 12 if has_mip_column else 11
         feature_end = feature_start + material_feature_dim
         if data.shape[1] < feature_end:
             raise ValueError(
@@ -976,7 +1019,8 @@ def main():
         bootstrap_validation_generator = DataGenerator(
             sampleCount=cfg.validation_n,
             bootstrap_feature_layout=cfg.bootstrap_feature_layout,
-            scene_path=cfg.scene_path
+            scene_path=cfg.scene_path,
+            hierarchical_filtering_enabled=False,
         )
         cfg.material_feature_names = tuple(bootstrap_validation_generator.get_bootstrap_feature_names())
         cfg.material_feature_dim = bootstrap_validation_generator.get_bootstrap_feature_dim()
@@ -1021,6 +1065,14 @@ def main():
     best_metrics: Optional[Dict[str, float]] = None
     best_epoch: Optional[int] = None
     best_phase: Optional[str] = None
+    best_bootstrap_val_loss = float("inf")
+    best_bootstrap_state: Optional[Dict[str, torch.Tensor]] = None
+    best_bootstrap_metrics: Optional[Dict[str, float]] = None
+    best_bootstrap_epoch: Optional[int] = None
+    best_finetune_val_loss = float("inf")
+    best_finetune_state: Optional[Dict[str, torch.Tensor]] = None
+    best_finetune_metrics: Optional[Dict[str, float]] = None
+    best_finetune_epoch: Optional[int] = None
     last_epoch: Optional[int] = None
     last_metrics: Optional[Dict[str, float]] = None
     run_status = "completed"
@@ -1048,7 +1100,15 @@ def main():
         validation_generator = DataGenerator(
             sampleCount=cfg.validation_n,
             bootstrap_feature_layout="none",
-            scene_path=cfg.scene_path
+            scene_path=cfg.scene_path,
+            hierarchical_filtering_enabled=cfg.hierarchical_mip_count > 1,
+            hierarchical_mip_count=cfg.hierarchical_mip_count,
+            finest_texture_width=cfg.tex_w,
+            finest_texture_height=cfg.tex_h,
+            mip_exponential_rate=cfg.mip_exponential_rate,
+            min_filter_sample_count=cfg.min_filter_sample_count,
+            max_filter_sample_count=cfg.max_filter_sample_count,
+            gaussian_filter_std_scale=cfg.gaussian_filter_std_scale,
         )
         if cfg.encoder_bootstrap_epochs > 0 and not validation_generator.supports_uv_grid():
             raise RuntimeError(
@@ -1067,12 +1127,21 @@ def main():
             bootstrap_data_generator = DataGenerator(
                 sampleCount=cfg.training_n,
                 bootstrap_feature_layout=cfg.bootstrap_feature_layout,
-                scene_path=cfg.scene_path
+                scene_path=cfg.scene_path,
+                hierarchical_filtering_enabled=False,
             )
         finetune_data_generator = DataGenerator(
             sampleCount=cfg.training_n,
             bootstrap_feature_layout="none",
-            scene_path=cfg.scene_path
+            scene_path=cfg.scene_path,
+            hierarchical_filtering_enabled=cfg.hierarchical_mip_count > 1,
+            hierarchical_mip_count=cfg.hierarchical_mip_count,
+            finest_texture_width=cfg.tex_w,
+            finest_texture_height=cfg.tex_h,
+            mip_exponential_rate=cfg.mip_exponential_rate,
+            min_filter_sample_count=cfg.min_filter_sample_count,
+            max_filter_sample_count=cfg.max_filter_sample_count,
+            gaussian_filter_std_scale=cfg.gaussian_filter_std_scale,
         )
         if cfg.train_importance_sampler:
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
@@ -1085,6 +1154,13 @@ def main():
             if phase_changed:
                 print(f"[train] switching phase: {current_phase} -> {phase} at epoch {epoch:03d}")
                 if phase == "finetune":
+                    if best_bootstrap_state is not None:
+                        model.load_state_dict(best_bootstrap_state)
+                        print(
+                            f"[bootstrap] restored best bootstrap state from epoch "
+                            f"{best_bootstrap_epoch:03d} before latent initialization "
+                            f"(val_loss={best_bootstrap_val_loss:.6f})"
+                        )
                     initialize_latent_texture_from_encoder(
                         model, cfg, epoch
                     )
@@ -1163,12 +1239,18 @@ def main():
                     f"elapsed={elapsed:.1f}s"
                 )
 
-            if metrics["brdf_val_loss"] < best_brdf_val_loss:
-                best_brdf_val_loss = metrics["brdf_val_loss"]
-                best_epoch = epoch
-                best_phase = phase
-                best_metrics = dict(metrics)
-                best_model_state = snapshot_model_state(model)
+            if phase == "bootstrap" and metrics["brdf_val_loss"] < best_bootstrap_val_loss:
+                best_bootstrap_val_loss = metrics["brdf_val_loss"]
+                best_bootstrap_epoch = epoch
+                best_bootstrap_metrics = dict(metrics)
+                best_bootstrap_state = snapshot_model_state(model)
+                print(f"[best-bootstrap] epoch {epoch:03d} val_loss={best_bootstrap_val_loss:.6f}")
+
+            if phase == "finetune" and metrics["brdf_val_loss"] < best_finetune_val_loss:
+                best_finetune_val_loss = metrics["brdf_val_loss"]
+                best_finetune_epoch = epoch
+                best_finetune_metrics = dict(metrics)
+                best_finetune_state = snapshot_model_state(model)
                 # Keep the sampler that was trained against this same decoder
                 if cfg.train_importance_sampler and 'sampler_loss' in metrics:
                     best_sampler_state = {
@@ -1176,7 +1258,20 @@ def main():
                         for k, v in model.importance_sampler.state_dict().items()
                     }
                     best_sampler_loss = metrics["sampler_loss"]
-                print(f"[best] epoch {epoch:03d} val_loss={best_brdf_val_loss:.6f} and sampler_loss={best_sampler_loss:.6f}")
+                print(f"[best-finetune] epoch {epoch:03d} val_loss={best_finetune_val_loss:.6f} and sampler_loss={best_sampler_loss:.6f}")
+
+            if best_finetune_state is not None:
+                best_brdf_val_loss = best_finetune_val_loss
+                best_epoch = best_finetune_epoch
+                best_phase = "finetune"
+                best_metrics = best_finetune_metrics
+                best_model_state = best_finetune_state
+            elif best_bootstrap_state is not None:
+                best_brdf_val_loss = best_bootstrap_val_loss
+                best_epoch = best_bootstrap_epoch
+                best_phase = "bootstrap"
+                best_metrics = best_bootstrap_metrics
+                best_model_state = best_bootstrap_state
 
             if run_logger.should_log_progress(
                 epoch=epoch,
