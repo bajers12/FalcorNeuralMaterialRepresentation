@@ -562,7 +562,6 @@ def train_one_epoch(
 ):
     model.train()
     device = torch.device(cfg.device)
-    decoder_frozen_logged = False
     latent_frozen_logged = False
 
     opt, scheduler = maybe_rebuild_optimizer_and_scheduler(
@@ -608,6 +607,7 @@ def train_one_epoch(
         )
 
     opt.step()
+    scheduler.step()
 
     # ------------------------------------------------------------------ #
     #  Importance sampler step (separate optimizer)                        #
@@ -617,8 +617,8 @@ def train_one_epoch(
     should_train_sampler = (
         cfg.train_importance_sampler
         and sampler_opt is not None
-        and (epoch < cfg.sampler_epochs)
-        and phase == "finetune"
+        and (epoch < cfg.sampler_epochs + cfg.encoder_bootstrap_epochs)
+        and (epoch >= cfg.encoder_bootstrap_epochs)
     )
     if should_train_sampler:
         sampler_batch = batch_decoder if batch_sampler is None else batch_sampler
@@ -647,6 +647,7 @@ def train_one_epoch(
             )
 
         sampler_opt.step()
+        sampler_scheduler.step()
 
     with torch.no_grad():
         stats = compute_basic_stats(y_hat_dec, y_dec)
@@ -1056,9 +1057,6 @@ def main():
 
     sampler_opt = None
     sampler_scheduler = None
-    if cfg.train_importance_sampler:
-        sampler_opt = make_sampler_optimizer(model, cfg)
-        sampler_scheduler = make_sampler_scheduler(sampler_opt, cfg)
 
     best_brdf_val_loss = float("inf")
     best_model_state: Optional[Dict[str, torch.Tensor]] = None
@@ -1166,6 +1164,17 @@ def main():
                     )
                     for p in model.encoder.parameters():
                         p.requires_grad_(False)
+
+                    post_mean = model.latent.Z.mean().item()
+                    post_std = model.latent.Z.std().item()
+                    print(f"[train] latent post-init mean={post_mean:.6e} std={post_std:.6e}")
+
+
+                    # Recreate sampler optimizer/scheduler so Adam moments don't slow adaptation
+                    if cfg.train_importance_sampler:
+                        sampler_opt = make_sampler_optimizer(model, cfg)
+                        sampler_scheduler = make_sampler_scheduler(sampler_opt, cfg)
+                        print("[train] reinitialized sampler optimizer and scheduler after latent bootstrap")
                 current_phase = phase
 
             maybe_freeze_parts(model, cfg, epoch=epoch)
@@ -1211,9 +1220,6 @@ def main():
                 sampler_scheduler=sampler_scheduler,
             )
 
-            scheduler.step()
-            if sampler_opt is not None and epoch < cfg.sampler_epochs:
-                sampler_scheduler.step()
 
             metrics = dict(train_metrics)
 
