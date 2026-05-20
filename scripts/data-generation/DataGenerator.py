@@ -55,6 +55,11 @@ class DataGenerator():
             self.generation_pass, "clearUvGrid"
         )
 
+    def supports_uv_samples(self):
+        return hasattr(self.generation_pass, "setUvSamples") and hasattr(
+            self.generation_pass, "clearUvSamples"
+        )
+
     def supports_mollification(self):
         return hasattr(self.generation_pass, "setMollification")
 
@@ -119,6 +124,35 @@ class DataGenerator():
             np_data = self.generation_pass.getData()
         finally:
             self.generation_pass.clearUvGrid()
+        return np_data
+
+    def generate_uv_data(
+        self,
+        uv_samples,
+        run_seed: int,
+        seed_domain: int,
+        generation_index: int = 0,
+        mollification_cone_angle_rad: float = 0.0,
+        mollification_sample_count: int = 1,
+    ):
+        if not self.supports_uv_samples():
+            raise RuntimeError(
+                "The loaded OnlineDataGenerationPass plugin does not expose setUvSamples/clearUvSamples. "
+                "Rebuild Falcor so the updated render pass bindings are available."
+            )
+
+        import numpy as np
+
+        uv_samples = np.ascontiguousarray(uv_samples, dtype=np.float32)
+        self.generation_pass.setUvSamples(uv_samples)
+        try:
+            self._set_mollification(mollification_cone_angle_rad, mollification_sample_count)
+            self.generation_pass.setSeedState(run_seed, seed_domain, generation_index)
+            self.generation_pass.generate()
+            self.testbed.frame()
+            np_data = self.generation_pass.getData()
+        finally:
+            self.generation_pass.clearUvSamples()
         return np_data
 
     def release_data(self):

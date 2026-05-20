@@ -33,6 +33,20 @@ def _safe_int(value):
         return None
 
 
+def _safe_metrics(metrics: Optional[Dict[str, float]]) -> Optional[Dict[str, object]]:
+    if metrics is None:
+        return None
+    out = {}
+    for key, value in metrics.items():
+        if isinstance(value, str):
+            out[str(key)] = value
+        elif isinstance(value, bool):
+            out[str(key)] = bool(value)
+        else:
+            out[str(key)] = _safe_float(value)
+    return out
+
+
 def _git_commit(cwd: str) -> Optional[str]:
     try:
         result = subprocess.run(
@@ -79,8 +93,8 @@ class TrainingRunLogger:
         return {
             "epoch": int(epoch),
             "phase": str(phase),
-            "train_loss": _safe_float(metrics.get("loss")),
-            "val_loss": _safe_float(metrics.get("val_loss")),
+            "train_loss": _safe_float(metrics.get("brdf_loss", metrics.get("loss"))),
+            "val_loss": _safe_float(metrics.get("brdf_val_loss", metrics.get("val_loss"))),
             "yhat_mean": _safe_float(metrics.get("yhat_mean")),
             "elapsed_seconds": time.time() - self.start_time,
         }
@@ -140,14 +154,24 @@ class TrainingRunLogger:
                 "features": self._feature_flags(),
             },
             "best_epoch": _safe_int(best_epoch),
-            "best_val_loss": _safe_float(None if best_metrics is None else best_metrics.get("val_loss")),
-            "best_train_loss": _safe_float(None if best_metrics is None else best_metrics.get("loss")),
+            "best_val_loss": _safe_float(
+                None if best_metrics is None else best_metrics.get("brdf_val_loss", best_metrics.get("val_loss"))
+            ),
+            "best_train_loss": _safe_float(
+                None if best_metrics is None else best_metrics.get("brdf_loss", best_metrics.get("loss"))
+            ),
             "best_yhat_mean": _safe_float(None if best_metrics is None else best_metrics.get("yhat_mean")),
+            "best_metrics": _safe_metrics(best_metrics),
             "exported_epoch": _safe_int(best_epoch),
             "last_epoch": _safe_int(last_epoch),
-            "last_train_loss": _safe_float(None if last_metrics is None else last_metrics.get("loss")),
-            "last_val_loss": _safe_float(None if last_metrics is None else last_metrics.get("val_loss")),
+            "last_train_loss": _safe_float(
+                None if last_metrics is None else last_metrics.get("brdf_loss", last_metrics.get("loss"))
+            ),
+            "last_val_loss": _safe_float(
+                None if last_metrics is None else last_metrics.get("brdf_val_loss", last_metrics.get("val_loss"))
+            ),
             "last_yhat_mean": _safe_float(None if last_metrics is None else last_metrics.get("yhat_mean")),
+            "last_metrics": _safe_metrics(last_metrics),
         }
         with open(self.summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)

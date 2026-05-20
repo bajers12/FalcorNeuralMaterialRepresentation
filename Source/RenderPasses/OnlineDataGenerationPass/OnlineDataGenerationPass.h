@@ -87,6 +87,8 @@ public:
     void setSeedState(uint32_t runSeed, uint32_t seedDomain, uint32_t generationIndex);
     void setUvGrid(uint32_t width, uint32_t height);
     void clearUvGrid();
+    void setUvSamples(pybind11::array uvSamples);
+    void clearUvSamples();
     void setMollification(float coneAngleRadians, uint32_t sampleCount);
     void setHierarchicalFiltering(bool enabled, uint32_t mipCount);
     uint32_t getBootstrapFeatureDim() const;
@@ -116,6 +118,7 @@ private:
     bool mbShouldGenerate;
     bool mIsMapped;
     bool mUseUvGrid = false;
+    bool mUseUvSamples = false;
     uint32_t mRunSeed;
     uint32_t mSeedDomain;
     uint32_t mGenerationIndex;
@@ -123,6 +126,8 @@ private:
     uint32_t mSampleCount;
     uint32_t mUvGridFullWidth = 0;
     uint32_t mUvGridFullHeight = 0;
+    std::vector<float2> mUvSamples;
+    ref<Buffer> mpUvSampleBuffer;
     float mMollificationConeAngleRad = 0.f;
     uint32_t mMollificationSampleCount = 1;
     bool mHierarchicalFilteringEnabled = false;

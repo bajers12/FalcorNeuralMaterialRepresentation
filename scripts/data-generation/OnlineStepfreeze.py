@@ -258,6 +258,34 @@ def compute_raw_stats(raw: torch.Tensor) -> Dict[str, float]:
     }
 
 
+def compute_mip_validation_losses(
+    raw: torch.Tensor,
+    y: torch.Tensor,
+    mip: Optional[torch.Tensor],
+    cfg: TrainConfig,
+    exp_offset: float,
+) -> Dict[str, float]:
+    if mip is None or cfg.hierarchical_mip_count <= 1:
+        return {}
+
+    mip_index = mip.reshape(-1).long().clamp(0, cfg.hierarchical_mip_count - 1)
+    out: Dict[str, float] = {}
+    for mip_level in range(cfg.hierarchical_mip_count):
+        mask = mip_index == mip_level
+        sample_count = int(mask.sum().item())
+        out[f"brdf_val_count_mip{mip_level}"] = float(sample_count)
+        if sample_count == 0:
+            continue
+        mip_loss = Decoder.log_l1_loss(
+            raw[mask],
+            y[mask],
+            exp_offset,
+            cfg.log_eps,
+        )
+        out[f"brdf_val_loss_mip{mip_level}"] = mip_loss.item()
+    return out
+
+
 def build_material_features(
     batch: Dict[str, torch.Tensor], cfg: TrainConfig, device: torch.device
 ) -> torch.Tensor:
@@ -309,6 +337,59 @@ def get_mollification_cone_angle_rad(cfg: TrainConfig, iteration: int) -> float:
     return math.radians(angle_deg)
 
 
+def latent_init_filter_sample_count(cfg: TrainConfig, mip_level: int) -> int:
+    if cfg.hierarchical_mip_count <= 1 or mip_level == 0:
+        return 1
+    count = 1 << min(30, 2 * mip_level)
+    return int(
+        max(
+            cfg.min_filter_sample_count,
+            min(count, max(cfg.min_filter_sample_count, cfg.max_filter_sample_count)),
+        )
+    )
+
+
+def make_latent_init_uv_samples(
+    level_w: int,
+    level_h: int,
+    mip_level: int,
+    start_texel: int,
+    texel_count: int,
+    filter_sample_count: int,
+    cfg: TrainConfig,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    texel_indices = np.arange(start_texel, start_texel + texel_count, dtype=np.int64)
+    texel_x = texel_indices % level_w
+    texel_y = texel_indices // level_w
+    centers = np.stack(
+        [
+            (texel_x.astype(np.float32) + 0.5) / float(level_w),
+            (texel_y.astype(np.float32) + 0.5) / float(level_h),
+        ],
+        axis=1,
+    )
+
+    if mip_level == 0 or filter_sample_count <= 1 or cfg.gaussian_filter_std_scale <= 0.0:
+        return centers.astype(np.float32, copy=False)
+
+    centers = np.repeat(centers[:, None, :], filter_sample_count, axis=1)
+    footprint = float(2**mip_level)
+    sigma = np.array(
+        [
+            cfg.gaussian_filter_std_scale * footprint / max(float(cfg.tex_w), 1.0),
+            cfg.gaussian_filter_std_scale * footprint / max(float(cfg.tex_h), 1.0),
+        ],
+        dtype=np.float32,
+    )
+    offsets = rng.normal(
+        loc=0.0,
+        scale=1.0,
+        size=(texel_count, filter_sample_count, 2),
+    ).astype(np.float32)
+    return np.mod(centers + offsets * sigma, 1.0).reshape(-1, 2).astype(np.float32, copy=False)
+
+
 @torch.no_grad()
 def initialize_latent_texture_from_encoder(
     model: NeuralMaterialModel, cfg: TrainConfig, generation_index: int
@@ -327,33 +408,80 @@ def initialize_latent_texture_from_encoder(
     for mip_level, latent_level in enumerate(model.latent.levels):
         level_h, level_w = model.latent.level_shape(mip_level)
         sample_count = level_w * level_h
+        filter_sample_count = latent_init_filter_sample_count(cfg, mip_level)
+        texels_per_chunk = max(1, cfg.latent_init_batch_size // filter_sample_count)
+        uv_sample_capacity = texels_per_chunk * filter_sample_count
+        rng = np.random.default_rng(
+            (
+                int(cfg.seed)
+                ^ (0x9E3779B9 * (generation_index + 1))
+                ^ (0x85EBCA6B * (mip_level + 1))
+            )
+            & 0xFFFFFFFF
+        )
+        print(
+            f"[bootstrap] mip {mip_level}: grid={level_w}x{level_h}, "
+            f"feature_samples_per_texel={filter_sample_count}"
+        )
         grid_generator = DataGenerator(
-            sampleCount=sample_count,
+            sampleCount=uv_sample_capacity,
             bootstrap_feature_layout=cfg.bootstrap_feature_layout,
             scene_path=cfg.scene_path,
             hierarchical_filtering_enabled=False,
         )
         try:
-            grid_batch = grid_generator.generate_grid_data(
-                level_w,
-                level_h,
-                cfg.seed,
-                SEED_DOMAIN_BOOTSTRAP,
-                generation_index + mip_level,
-            ).copy()
+            if not grid_generator.supports_uv_samples():
+                raise RuntimeError(
+                    "Coarse latent initialization requires OnlineDataGenerationPass.setUvSamples. "
+                    "Rebuild Falcor/plugin binaries so arbitrary bootstrap UV sampling is available."
+                )
+
+            latent_image_flat = torch.empty((sample_count, cfg.latent_ch), dtype=torch.float32)
+            for start_texel in range(0, sample_count, texels_per_chunk):
+                texel_count = min(texels_per_chunk, sample_count - start_texel)
+                uv_samples = make_latent_init_uv_samples(
+                    level_w,
+                    level_h,
+                    mip_level,
+                    start_texel,
+                    texel_count,
+                    filter_sample_count,
+                    cfg,
+                    rng,
+                )
+                actual_uv_count = uv_samples.shape[0]
+                if actual_uv_count < uv_sample_capacity:
+                    pad_count = uv_sample_capacity - actual_uv_count
+                    uv_samples = np.concatenate(
+                        [uv_samples, np.repeat(uv_samples[-1:], pad_count, axis=0)],
+                        axis=0,
+                    )
+
+                grid_batch = grid_generator.generate_uv_data(
+                    uv_samples,
+                    cfg.seed,
+                    SEED_DOMAIN_BOOTSTRAP,
+                    generation_index + mip_level,
+                ).copy()
+                grid_generator.release_data()
+
+                grid_tensor = tensorize_batch(data_to_dict(grid_batch[:actual_uv_count], cfg.material_feature_dim))
+                latent_chunks = []
+
+                for start in range(0, actual_uv_count, cfg.latent_init_batch_size):
+                    end = min(start + cfg.latent_init_batch_size, actual_uv_count)
+                    chunk = {key: value[start:end] for key, value in grid_tensor.items()}
+                    features = build_material_features(chunk, cfg, device)
+                    latent_chunks.append(model.encoder(features).cpu())
+
+                latent_values = torch.cat(latent_chunks, dim=0)
+                if filter_sample_count > 1:
+                    latent_values = latent_values.view(texel_count, filter_sample_count, cfg.latent_ch).mean(dim=1)
+                latent_image_flat[start_texel : start_texel + texel_count] = latent_values
         finally:
             grid_generator.release_data()
 
-        grid_tensor = tensorize_batch(data_to_dict(grid_batch, cfg.material_feature_dim))
-        latent_chunks = []
-
-        for start in range(0, sample_count, cfg.latent_init_batch_size):
-            end = min(start + cfg.latent_init_batch_size, sample_count)
-            chunk = {key: value[start:end] for key, value in grid_tensor.items()}
-            features = build_material_features(chunk, cfg, device)
-            latent_chunks.append(model.encoder(features).cpu())
-
-        latent_image = torch.cat(latent_chunks, dim=0).view(
+        latent_image = latent_image_flat.view(
             level_h, level_w, cfg.latent_ch
         )
 
@@ -708,21 +836,28 @@ def validate(
     if cfg.clamp_min_target > 0.0:
         y = y.clamp_min(cfg.clamp_min_target)
 
+    mip = batch.get("mip_level")
+    mip = mip.to(device, non_blocking=True) if mip is not None else None
+
     if phase == "bootstrap":
         material_features = build_material_features(batch, cfg, device)
         z = model.encoder(material_features)
     else:
-        mip = batch.get("mip_level")
-        mip = mip.to(device, non_blocking=True) if mip is not None else None
         z = model.latent.sample(uv, mip)
 
     y_hat, raw = model.decode_with_raw(z, wi, wo)
     loss = Decoder.log_l1_loss(raw, y, model.decoder.exp_offset, cfg.log_eps)
     stats = compute_basic_stats(y_hat, y)
     raw_stats = compute_raw_stats(raw)
+    mip_metrics = (
+        compute_mip_validation_losses(raw, y, mip, cfg, model.decoder.exp_offset)
+        if phase != "bootstrap"
+        else {}
+    )
 
     out = {
         "phase": phase,
+        "val_loss": loss.item(),
         "brdf_val_loss": loss.item(),
         "val_mae": stats["mae"],
         "val_yhat_mean": stats["yhat_mean"],
@@ -730,6 +865,7 @@ def validate(
         "val_raw_mean": raw_stats["raw_mean"],
         "val_raw_std": raw_stats["raw_std"],
     }
+    out.update(mip_metrics)
     return out
 
 
@@ -1259,11 +1395,18 @@ def main():
                     if "sampler_loss" in metrics
                     else ""
                 )
+                mip_val_parts = [
+                    f"{mip_level}:{metrics[f'brdf_val_loss_mip{mip_level}']:.4f}"
+                    for mip_level in range(cfg.hierarchical_mip_count)
+                    if f"brdf_val_loss_mip{mip_level}" in metrics
+                ]
+                mip_val_log = f" mip_val=[{' '.join(mip_val_parts)}]" if mip_val_parts else ""
                 print(
                     f"[train] epoch {epoch:03d} "
                     f"phase={phase} brdf_loss={metrics['brdf_loss']:.6f}" \
                     f"{sampler_log} "
                     f"val_loss={metrics['brdf_val_loss']:.6f} "
+                    f"{mip_val_log} "
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
                     f"elapsed={elapsed:.1f}s"
                 )

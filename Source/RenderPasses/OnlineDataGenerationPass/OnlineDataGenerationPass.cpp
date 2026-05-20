@@ -71,6 +71,8 @@ void OnlineDataGenerationPass::registerBindings(pybind11::module& m)
     pass.def("setSeedState", &OnlineDataGenerationPass::setSeedState);
     pass.def("setUvGrid", &OnlineDataGenerationPass::setUvGrid);
     pass.def("clearUvGrid", &OnlineDataGenerationPass::clearUvGrid);
+    pass.def("setUvSamples", &OnlineDataGenerationPass::setUvSamples);
+    pass.def("clearUvSamples", &OnlineDataGenerationPass::clearUvSamples);
     pass.def("setMollification", &OnlineDataGenerationPass::setMollification);
     pass.def("setHierarchicalFiltering", &OnlineDataGenerationPass::setHierarchicalFiltering);
     pass.def("getBootstrapFeatureDim", &OnlineDataGenerationPass::getBootstrapFeatureDim);
@@ -203,8 +205,10 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gSeedDomain"] = mSeedDomain;
     var["gGenerationIndex"] = mGenerationIndex;
     var["gUseUvGrid"] = mUseUvGrid;
+    var["gUseUvSamples"] = mUseUvSamples;
     var["gUvGridFullWidth"] = mUvGridFullWidth;
     var["gUvGridFullHeight"] = mUvGridFullHeight;
+    if (mUseUvSamples) var["gUvSampleBuffer"] = mpUvSampleBuffer;
     var["gMollificationConeAngleRad"] = mMollificationConeAngleRad;
     var["gMollificationSampleCount"] = mMollificationSampleCount;
     var["gHierarchicalFilteringEnabled"] = mHierarchicalFilteringEnabled;
@@ -286,6 +290,57 @@ void OnlineDataGenerationPass::clearUvGrid()
     mUseUvGrid = false;
     mUvGridFullWidth = 0;
     mUvGridFullHeight = 0;
+}
+
+void OnlineDataGenerationPass::setUvSamples(pybind11::array uvSamples)
+{
+    pybind11::buffer_info info = uvSamples.request();
+    if (info.ndim != 2 || info.shape[1] != 2)
+    {
+        FALCOR_THROW("OnlineDataGenerationPass::setUvSamples expects a float array with shape [N, 2].");
+    }
+
+    const uint32_t sampleCount = (uint32_t)info.shape[0];
+    if (sampleCount != mSampleCount)
+    {
+        FALCOR_THROW(
+            "OnlineDataGenerationPass::setUvSamples received {} UVs, but this pass was created with sampleCount={}.",
+            sampleCount,
+            mSampleCount
+        );
+    }
+
+    mUvSamples.resize(sampleCount);
+    const float* data = static_cast<const float*>(info.ptr);
+    const size_t stride0 = (size_t)info.strides[0] / sizeof(float);
+    const size_t stride1 = (size_t)info.strides[1] / sizeof(float);
+    for (uint32_t i = 0; i < sampleCount; ++i)
+    {
+        mUvSamples[i] = float2(data[i * stride0 + 0 * stride1], data[i * stride0 + 1 * stride1]);
+    }
+
+    if (!mpUvSampleBuffer || mpUvSampleBuffer->getElementCount() != sampleCount)
+    {
+        mpUvSampleBuffer = mpDevice->createStructuredBuffer(
+            sizeof(float2),
+            sampleCount,
+            ResourceBindFlags::ShaderResource,
+            MemoryType::DeviceLocal,
+            mUvSamples.data(),
+            false
+        );
+    }
+    else
+    {
+        mpUvSampleBuffer->setBlob(mUvSamples.data(), 0, mUvSamples.size() * sizeof(float2));
+    }
+    mUseUvSamples = true;
+}
+
+void OnlineDataGenerationPass::clearUvSamples()
+{
+    mUseUvSamples = false;
+    mUvSamples.clear();
 }
 
 void OnlineDataGenerationPass::setMollification(float coneAngleRadians, uint32_t sampleCount)

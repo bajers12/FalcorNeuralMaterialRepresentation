@@ -37,12 +37,14 @@ struct BsdfSampleData
 };
 
 RWStructuredBuffer<BsdfSampleData> gSampleOutputBuffer;
+StructuredBuffer<float2> gUvSampleBuffer;
 uniform uint gSampleCount;
 uniform uint gMaterialId;
 uniform uint gRunSeed;
 uniform uint gSeedDomain;
 uniform uint gGenerationIndex;
 uniform bool gUseUvGrid;
+uniform bool gUseUvSamples;
 uniform uint gUvGridFullWidth;
 uniform uint gUvGridFullHeight;
 uniform float gMollificationConeAngleRad;
@@ -206,7 +208,11 @@ void main(uint3 threadId : SV_DispatchThreadID)
     uint filterSeed = makeSampleSeed(idx, 6u);
 
     float2 uv = float2(rand(uvSeed), rand(uvSeed));
-    if (gUseUvGrid)
+    if (gUseUvSamples)
+    {
+        uv = gUvSampleBuffer[idx];
+    }
+    else if (gUseUvGrid)
     {
         uint2 texel = uint2(idx % gUvGridFullWidth, idx / gUvGridFullWidth);
         uv = (float2(texel) + 0.5f) / float2(gUvGridFullWidth, gUvGridFullHeight);
