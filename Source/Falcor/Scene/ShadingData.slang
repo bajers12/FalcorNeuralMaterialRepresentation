@@ -60,6 +60,8 @@ struct ShadingData : IDifferentiable
     MaterialHeader mtl;                 ///< Material header data.
     uint    materialID;                 ///< Material ID at shading location.
     float   IoR;                        ///< Index of refraction for the medium on the front-facing side (i.e. "outside" the material at the hit).
+    no_diff float textureLodValue;      ///< Texture LOD value or texture-independent LOD term computed before material dispatch.
+    no_diff uint  textureLodMode;       ///< 0: value is complete LOD, 1: add 0.5*log2(texture width*height).
 
     uint materialGradOffset;            ///< Offset to the material gradient in the gradient buffer.
     uint geometryGradOffset;            ///< Offset to the geometry gradient in the gradient buffer.

@@ -48,12 +48,14 @@ namespace Falcor
         uint32_t maxMip = mLatentMipCount > 0 ? mLatentMipCount - 1 : 0;
         dirty |= widget.var("Forced latent mip", mForcedLatentMip, 0u, maxMip);
         dirty |= widget.var("Latent mip debug mode", mLatentMipDebugMode, 0u, 3u);
+        dirty |= widget.var("Latent filtering mode", mLatentFilteringMode, 0u, 1u);
         bool samplerDirty = widget.var("Latent LOD bias", mLatentLodBias, -16.f, 16.f, 0.01f);
         dirty |= samplerDirty;
         if (dirty)
         {
             mForcedLatentMip = std::min(mForcedLatentMip, maxMip);
             mLatentMipDebugMode = std::min(mLatentMipDebugMode, 3u);
+            mLatentFilteringMode = std::min(mLatentFilteringMode, 1u);
             mData.latentMipControl = packLatentMipControl();
             markUpdates(UpdateFlags::DataChanged);
             if (samplerDirty)
@@ -79,8 +81,10 @@ namespace Falcor
         uint32_t mipCount = std::clamp(mLatentMipCount, 1u, 255u);
         uint32_t forcedMip = std::clamp(mForcedLatentMip, 0u, mipCount - 1u);
         uint32_t debugMode = std::clamp(mLatentMipDebugMode, 0u, 3u);
+        uint32_t filteringMode = std::clamp(mLatentFilteringMode, 0u, 3u);
 
         return (mForceLatentMip ? (1u << 31) : 0u) |
+               (filteringMode << 18) |
                (debugMode << 16) |
                (forcedMip << 8) |
                mipCount;

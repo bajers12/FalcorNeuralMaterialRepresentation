@@ -26,6 +26,34 @@
  # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  **************************************************************************/
 
+static const uint kTextureLodFull = 0u;
+static const uint kTextureLodNeedsTextureDims = 1u;
+
+struct TextureLodInfo
+{
+    float value;
+    uint mode;
+};
+
+TextureLodInfo makeTextureLodInfo(float value, uint mode)
+{
+    TextureLodInfo info;
+    info.value = value;
+    info.mode = mode;
+    return info;
+}
+
+float computeTextureFootprintLodWithoutDims(float2 dUVdx, float2 dUVdy)
+{
+    return 0.5f * log2(max(length(dUVdx) * length(dUVdy), 1e-16f));
+}
+
+float addTextureDimsToFootprintLod(float lodWithoutDims, uint txw, uint txh)
+{
+    float textureArea = max(float(txw) * float(txh), 1.f);
+    return lodWithoutDims + 0.5f * log2(textureArea);
+}
+
 /** Interface for texture sampling techniques.
     Types implementing this interface support sampling using different LOD computation techniques
 */
@@ -35,6 +63,11 @@ interface ITextureSampler
     /** Sample from a 2D texture using the level of detail computed by this method
     */
     float4 sampleTexture(Texture2D t, SamplerState s, float2 uv);
+
+    /** Return the texture-independent part of the LOD.
+        If mode is kTextureLodNeedsTextureDims, add 0.5*log2(width*height) before using it.
+    */
+    TextureLodInfo computeTextureLodInfo(float2 uv);
 };
 
 /** Texture sampling using implicit gradients from finite differences within quads.
@@ -56,6 +89,11 @@ struct ImplicitLodTextureSampler : ITextureSampler
     {
         return t.Sample(s, uv);
     }
+
+    TextureLodInfo computeTextureLodInfo(float2 uv)
+    {
+        return makeTextureLodInfo(0.f, kTextureLodFull);
+    }
 };
 
 /** Texture sampling using an explicit scalar level of detail.
@@ -72,6 +110,11 @@ struct ExplicitLodTextureSampler : ITextureSampler
     float4 sampleTexture(Texture2D t, SamplerState s, float2 uv)
     {
         return t.SampleLevel(s, uv, lod);
+    }
+
+    TextureLodInfo computeTextureLodInfo(float2 uv)
+    {
+        return makeTextureLodInfo(lod, kTextureLodFull);
     }
 };
 
@@ -91,8 +134,13 @@ struct ExplicitRayConesLodTextureSampler : ITextureSampler
     {
         uint txw, txh;
         t.GetDimensions(txw, txh);
-        float lambda = 0.5 * log2(txw * txh) + rayconesLODWithoutTexDims;
+        float lambda = 0.5f * log2(float(txw) * float(txh)) + rayconesLODWithoutTexDims;
         return t.SampleLevel(s, uv, lambda);
+    }
+
+    TextureLodInfo computeTextureLodInfo(float2 uv)
+    {
+        return makeTextureLodInfo(rayconesLODWithoutTexDims, kTextureLodNeedsTextureDims);
     }
 };
 
@@ -141,6 +189,23 @@ struct ExplicitRayDiffsIsotropicTextureSampler : ITextureSampler
 
         return float4(0.f);
     }
+
+    TextureLodInfo computeTextureLodInfo(float2 uv)
+    {
+        switch (kMode)
+        {
+        case Mode::IsotropicOpenGLStyle:
+            {
+                return makeTextureLodInfo(computeTextureFootprintLodWithoutDims(dUVdx, dUVdy), kTextureLodNeedsTextureDims);
+            }
+        case Mode::IsotropicPBRTStyle:
+            {
+                return makeTextureLodInfo(0.f, kTextureLodFull);
+            }
+        }
+
+        return makeTextureLodInfo(0.f, kTextureLodFull);
+    }
 };
 
 /** Texture sampling using explicit screen-space gradients.
@@ -159,6 +224,11 @@ struct ExplicitGradientTextureSampler : ITextureSampler
     float4 sampleTexture(Texture2D t, SamplerState s, float2 uv)
     {
         return t.SampleGrad(s, uv, gradX, gradY);
+    }
+
+    TextureLodInfo computeTextureLodInfo(float2 uv)
+    {
+        return makeTextureLodInfo(computeTextureFootprintLodWithoutDims(gradX, gradY), kTextureLodNeedsTextureDims);
     }
 };
 
@@ -217,5 +287,10 @@ struct StochasticTextureSampler : ITextureSampler
         uv = (floor(uv) + 0.5) / dim;        
 
         return t.SampleLevel(s, uv, lod);
+    }
+
+    TextureLodInfo computeTextureLodInfo(float2 uv)
+    {
+        return makeTextureLodInfo(computeTextureFootprintLodWithoutDims(gradX, gradY) + lodJitter, kTextureLodNeedsTextureDims);
     }
 };

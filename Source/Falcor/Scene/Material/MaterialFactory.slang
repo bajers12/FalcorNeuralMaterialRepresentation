@@ -65,8 +65,12 @@ extension MaterialSystem
     */
     IMaterialInstance getMaterialInstance<L:ITextureSampler>(const ShadingData sd, L lod, const uint hints = (uint)MaterialInstanceHints::None)
     {
+        ShadingData sdWithLod = sd;
+        TextureLodInfo lodInfo = lod.computeTextureLodInfo(sd.uv);
+        sdWithLod.textureLodValue = lodInfo.value;
+        sdWithLod.textureLodMode = lodInfo.mode;
         let material = getMaterial(sd.materialID);
-        return material.setupMaterialInstance(this, sd, lod, hints);
+        return material.setupMaterialInstance(this, sdWithLod, lod, hints);
     }
 
     /** Prepares shading data at a hit point.

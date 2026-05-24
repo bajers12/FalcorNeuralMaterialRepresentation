@@ -54,10 +54,18 @@ uint neuralDebugMode(const NeuralMaterialData md)
     return (md.latentMipControl >> 16) & 0x3u;
 }
 
+uint neuralFilteringMode(const NeuralMaterialData md)
+{
+    return (md.latentMipControl >> 18) & 0x3u;
+}
+
 bool neuralForceMipEnabled(const NeuralMaterialData md)
 {
     return (md.latentMipControl & (1u << 31)) != 0u;
 }
+
+static const uint kNeuralFilteringHardware = 0u;
+static const uint kNeuralFilteringPaperStochastic = 1u;
 
 struct NeuralMipPair
 {
@@ -377,13 +385,27 @@ float3 evalMLP64x3(
     return y;
 }
 
-void fetchNeuralLatents(const MaterialSystem materials, const NeuralMaterialData md, const uint samplerID, const float2 uv, const uint mipLevel, out float z[8])
+void fetchNeuralLatentPairAtMip(
+    const MaterialSystem materials,
+    const NeuralMaterialData md,
+    const uint samplerID,
+    const float2 uv,
+    const uint mipLevel,
+    out float4 z0,
+    out float4 z1
+)
 {
     SamplerState s = materials.getTextureSampler(samplerID);
     ExplicitLodTextureSampler lod = { float(mipLevel) };
-    float4 z0 = materials.sampleTexture(md.texLatent0, s, uv, 0.f.xxxx, lod);
-    float4 z1 = materials.sampleTexture(md.texLatent1, s, uv, 0.f.xxxx, lod);
+    z0 = materials.sampleTexture(md.texLatent0, s, uv, 0.f.xxxx, lod);
+    z1 = materials.sampleTexture(md.texLatent1, s, uv, 0.f.xxxx, lod);
+}
 
+void fetchNeuralLatents(const MaterialSystem materials, const NeuralMaterialData md, const uint samplerID, const float2 uv, const uint mipLevel, out float z[8])
+{
+    float4 z0;
+    float4 z1;
+    fetchNeuralLatentPairAtMip(materials, md, samplerID, uv, mipLevel, z0, z1);
     z[0] = z0.x;
     z[1] = z0.y;
     z[2] = z0.z;
@@ -404,6 +426,33 @@ void unpackNeuralLatents(const float4 z0, const float4 z1, out float z[8])
     z[5] = z1.y;
     z[6] = z1.z;
     z[7] = z1.w;
+}
+
+float computeNeuralLatentLod(
+    const MaterialSystem materials,
+    const NeuralMaterialData md,
+    const ShadingData sd
+)
+{
+    float value = sd.textureLodValue;
+    if (sd.textureLodMode == kTextureLodNeedsTextureDims)
+    {
+        float2 resolvedUv = sd.uv;
+        TextureHandle handle = materials.getResolvedTextureHandle(md.texLatent0, resolvedUv);
+        if (handle.getMode() != TextureHandle::Mode::Texture)
+            return 0.f;
+
+        uint txw, txh;
+        materials.materialTextures[handle.getTextureID()].GetDimensions(txw, txh);
+        value = addTextureDimsToFootprintLod(value, txw, txh);
+    }
+    return clamp(value, 0.f, float(neuralMipCount(md) - 1u));
+}
+
+uint chooseNeuralMipStochastic(const NeuralMaterialData md, float lod, float u)
+{
+    NeuralMipPair p = neuralMipPair(md, lod);
+    return (u < p.w1) ? p.mip1 : p.mip0;
 }
 
 float neuralLatentDistance(const float4 a0, const float4 a1, const float4 b0, const float4 b1)
@@ -868,21 +917,48 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 {
     NeuralMaterialData data = {};
     uint defaultSamplerID = 0;
+    float2 uv = float2(0.f);
+    float neuralLod = 0.f;
     float4 latent0 = float4(0.f);
     float4 latent1 = float4(0.f);
     float debugLod = 0.f;
+
+    bool usePaperStochasticFiltering()
+    {
+        return !neuralForceMipEnabled(data) && neuralFilteringMode(data) == kNeuralFilteringPaperStochastic;
+    }
+
+    void fetchLatentsForShading<S : ISampleGenerator>(inout S sg, out float4 z0, out float4 z1, out float selectedMip)
+    {
+        if (!usePaperStochasticFiltering())
+        {
+            z0 = latent0;
+            z1 = latent1;
+            selectedMip = debugLod;
+            return;
+        }
+
+        uint mip = chooseNeuralMipStochastic(data, neuralLod, sampleNext1D(sg));
+        fetchNeuralLatentPairAtMip(gScene.materials, data, defaultSamplerID, uv, mip, z0, z1);
+        selectedMip = float(mip);
+    }
 
     float3 eval<S : ISampleGenerator>(const ShadingData sd, const float3 wo, inout S sg)
     {
         float3 wiLocal = sd.frame.toLocal(sd.V);
         float3 woLocal = sd.frame.toLocal(wo);
+        float4 z0;
+        float4 z1;
+        float selectedMip;
+        fetchLatentsForShading(sg, z0, z1, selectedMip);
+
         if (neuralDebugMode(data) != 0u)
         {
-            return neuralMipDebugColor(data, debugLod, latent0, latent1) * kInvPi;
+            return neuralMipDebugColor(data, selectedMip, z0, z1) * kInvPi;
         }
 
         float z[8];
-        unpackNeuralLatents(latent0, latent1, z);
+        unpackNeuralLatents(z0, z1, z);
         return evalNeuralBRDFFromLatents(gScene.materials, data, z, wiLocal, woLocal);
     }
 
@@ -897,6 +973,10 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         result = (BSDFSample)0;
 
         float3 wiLocal = sd.frame.toLocal(sd.V);
+        float4 z0;
+        float4 z1;
+        float selectedMip;
+        fetchLatentsForShading(sg, z0, z1, selectedMip);
         float2 u = sampleNext2D(sg);
 
         if (neuralDebugMode(data) != 0u)
@@ -906,13 +986,13 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
             if (debugPdf <= 0.f) return false;
             result.wo = sd.frame.fromLocal(woLocalDebug);
             result.pdf = debugPdf;
-            result.weight = neuralMipDebugColor(data, debugLod, latent0, latent1);
+            result.weight = neuralMipDebugColor(data, selectedMip, z0, z1);
             result.lobeType = uint(LobeType::DiffuseReflection);
             return true;
         }
 
         float z[8];
-        unpackNeuralLatents(latent0, latent1, z);
+        unpackNeuralLatents(z0, z1, z);
 
         float3 woLocal;
         float pdf;
@@ -933,6 +1013,34 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 
         float3 fcos = evalNeuralBRDFFromLatents(gScene.materials, data, z, wiLocal, woLocal);
 
+        if (usePaperStochasticFiltering() && useImportanceSampling)
+        {
+            NeuralMipPair p = neuralMipPair(data, neuralLod);
+            float zMip0[8];
+            fetchNeuralLatents(gScene.materials, data, defaultSamplerID, uv, p.mip0, zMip0);
+
+            float pdf0 = evalNeuralPdf(gScene.materials, data, zMip0, wiLocal, woLocal);
+            float3 f0 = evalNeuralBRDFFromLatents(gScene.materials, data, zMip0, wiLocal, woLocal);
+
+            if (p.w1 > 0.f)
+            {
+                float zMip1[8];
+                fetchNeuralLatents(gScene.materials, data, defaultSamplerID, uv, p.mip1, zMip1);
+                float pdf1 = evalNeuralPdf(gScene.materials, data, zMip1, wiLocal, woLocal);
+                float3 f1 = evalNeuralBRDFFromLatents(gScene.materials, data, zMip1, wiLocal, woLocal);
+                pdf = lerp(pdf0, pdf1, p.w1);
+                fcos = lerp(f0, f1, p.w1);
+            }
+            else
+            {
+                pdf = pdf0;
+                fcos = f0;
+            }
+        }
+
+        if (pdf <= 0.f)
+            return false;
+
         result.wo = sd.frame.fromLocal(woLocal);
         result.pdf = pdf;
         result.weight = fcos / pdf;
@@ -949,6 +1057,23 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         float3 wiLocal = sd.frame.toLocal(sd.V);
         if (neuralDebugMode(data) != 0u)
             return evalCosinePdf(woLocal);
+
+        if (usePaperStochasticFiltering())
+        {
+            NeuralMipPair p = neuralMipPair(data, neuralLod);
+            float zMip0[8];
+            fetchNeuralLatents(gScene.materials, data, defaultSamplerID, uv, p.mip0, zMip0);
+            float pdf0 = evalNeuralPdf(gScene.materials, data, zMip0, wiLocal, woLocal);
+
+            if (p.w1 <= 0.f)
+                return pdf0;
+
+            float zMip1[8];
+            fetchNeuralLatents(gScene.materials, data, defaultSamplerID, uv, p.mip1, zMip1);
+            float pdf1 = evalNeuralPdf(gScene.materials, data, zMip1, wiLocal, woLocal);
+            return lerp(pdf0, pdf1, p.w1);
+        }
+
         float z[8];
         unpackNeuralLatents(latent0, latent1, z);
         return evalNeuralPdf(gScene.materials, data, z, wiLocal, woLocal);
@@ -983,6 +1108,8 @@ struct NeuralMaterial : MaterialBase, IMaterial
         NeuralMaterialInstance m = {};
         m.data = data;
         m.defaultSamplerID = header.getDefaultTextureSamplerID();
+        m.uv = sd.uv;
+        m.neuralLod = computeNeuralLatentLod(ms, data, sd);
         SamplerState s = ms.getTextureSampler(m.defaultSamplerID);
         if (neuralForceMipEnabled(data))
         {
@@ -991,6 +1118,10 @@ struct NeuralMaterial : MaterialBase, IMaterial
             m.latent0 = ms.sampleTexture(data.texLatent0, s, sd.uv, 0.f.xxxx, forcedLod);
             m.latent1 = ms.sampleTexture(data.texLatent1, s, sd.uv, 0.f.xxxx, forcedLod);
             m.debugLod = float(mip);
+        }
+        else if (neuralFilteringMode(data) == kNeuralFilteringPaperStochastic)
+        {
+            m.debugLod = m.neuralLod;
         }
         else
         {
