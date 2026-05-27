@@ -73,7 +73,7 @@ class TrainConfig:
     brdf_mlp_width: int = 32
     brdf_mlp_depth: int = 2  # number of hidden layers
     use_bias_in_mlp: bool = True
-    frame_linear_bias: bool = True
+    frame_linear_bias: bool = False
 
     # Importance sampling decoder architecture
     sampler_mlp_width: int = 32
@@ -783,6 +783,18 @@ def parse_args() -> TrainConfig:
         help="Enable or disable latent texture training.",
     )
     p.add_argument(
+        "--frame_linear_bias",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable bias term if frame predictor training.",
+    )
+    p.add_argument(
+        "--use_bias_in_mlp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable bias term if frame predictor training.",
+    )
+    p.add_argument(
         "--train_decoder",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -897,6 +909,9 @@ def parse_args() -> TrainConfig:
 
     cfg.log_eps = args.log_eps
     cfg.clamp_min_target = args.clamp_min_target
+
+    cfg.frame_linear_bias = args.frame_linear_bias
+    cfg.use_bias_in_mlp = args.use_bias_in_mlp
 
     cfg.print_every_epochs = max(0, args.print_every_epochs)
     cfg.train_latent_texture = args.train_latent_texture
