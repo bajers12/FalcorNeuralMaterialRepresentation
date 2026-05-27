@@ -1169,7 +1169,7 @@ def main():
                     f"elapsed={elapsed:.1f}s"
                 )
 
-            if metrics["brdf_val_loss"] < best_brdf_val_loss:
+            if metrics["brdf_val_loss"] < best_brdf_val_loss and current_phase=='finetune':
                 best_brdf_val_loss = metrics["brdf_val_loss"]
                 best_epoch = epoch
                 best_phase = phase
