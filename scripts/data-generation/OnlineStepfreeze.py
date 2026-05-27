@@ -785,7 +785,7 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--frame_linear_bias",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Enable or disable bias term if frame predictor training.",
     )
     p.add_argument(
