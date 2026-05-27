@@ -45,24 +45,20 @@ class Decoder(nn.Module):
         out = v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
-    def _predict_frames(
-        self, z: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        z [B,C] -> T, Bv, N  each [B, num_frames, 3]
-        """
-        Bsz = z.shape[0]
-        ft = self.frame_linear(z).view(Bsz, self.num_frames, 6)
+    def _predict_frames(self, z):
+        ft = self.frame_linear(z).view(z.shape[0], self.num_frames, 6)
 
-        N = self._safe_normalize(ft[..., 0:3])  # [B, F, 3]
+        # Add residual offsets matching the paper's initialization
+        N_raw = ft[..., 0:3].clone()
+        N_raw[..., 2] += 1.0  # bias N toward (0,0,1)
+        N = self._safe_normalize(N_raw)
 
-        # Re-orthogonalise T against N (Gram-Schmidt), then normalise
-        T_raw = ft[..., 3:6]  # [B, F, 3]
-        T_raw = T_raw - (T_raw * N).sum(dim=-1, keepdim=True) * N
-        T = self._safe_normalize(T_raw)  # [B, F, 3]
+        T_raw = ft[..., 3:6].clone()
+        T_raw[..., 0] += 1.0  # bias T toward (1,0,0)
+        T = self._safe_normalize(T_raw)
 
-        # Bitangent: N × T is already unit length because N and T are orthonormal
-        Bv = torch.cross(N, T, dim=-1)  # [B, F, 3]
+        # No Gram-Schmidt — paper leaves T/B non-orthogonal
+        Bv = torch.cross(N, T, dim=-1)
 
         return T, Bv, N
 

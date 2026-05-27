@@ -73,7 +73,7 @@ class TrainConfig:
     brdf_mlp_width: int = 32
     brdf_mlp_depth: int = 2  # number of hidden layers
     use_bias_in_mlp: bool = True
-    frame_linear_bias: bool = False
+    frame_linear_bias: bool = True
 
     # Importance sampling decoder architecture
     sampler_mlp_width: int = 32

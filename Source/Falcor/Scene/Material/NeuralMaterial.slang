@@ -390,11 +390,10 @@ float3 evalNeuralBRDFFromLatents(
         s5 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 5) * 8 + 4), z4b);
         sf[sfBase + 5] = s5;
 
-        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
-        float3 Traw = float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]);
-        float3 T = neuralSafeNormalize(Traw - dot(Traw, N) * N);
+        // NEW — residual offsets + no Gram-Schmidt, matching paper pseudocode
+        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2] + 1.0f));
+        float3 T = neuralSafeNormalize(float3(sf[sfBase + 3] + 1.0f, sf[sfBase + 4], sf[sfBase + 5]));
         float3 B = cross(N, T);
-
         float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
         float3 woPred = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
 
