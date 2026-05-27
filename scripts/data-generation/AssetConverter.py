@@ -43,7 +43,6 @@ def save_weights_bin(path: Path, weights: dict) -> None:
     return save_network_weights_bin(
         path=path,
         weights=weights,
-        input_dim=20,
         output_dim=3,
         has_frame_linear=True,
     )
@@ -52,22 +51,31 @@ def save_weights_bin(path: Path, weights: dict) -> None:
 def _infer_network_layout(
     weights: dict,
     *,
-    input_dim: int,
     output_dim: int,
     has_frame_linear: bool = True,
 ) -> dict:
     linear_layers = []
     decoder_layout = {}
+    latent_ch = int(np.asarray(weights.get("latent_ch", np.array([8], dtype=np.int32))).reshape(-1)[0])
+    num_frames = int(np.asarray(weights.get("num_frames", np.array([2], dtype=np.int32))).reshape(-1)[0])
 
     if has_frame_linear:
         frame_weight = np.asarray(weights["frame_linear.weight"], dtype=np.float32)
-        if frame_weight.shape != (12, 8):
-            raise ValueError(f"frame_linear.weight expected shape (12, 8), got {frame_weight.shape}")
+        if frame_weight.ndim != 2:
+            raise ValueError(f"frame_linear.weight must be 2D, got {frame_weight.shape}")
+        if frame_weight.shape[1] != latent_ch:
+            raise ValueError(
+                f"frame_linear.weight expected latent dimension {latent_ch}, got {frame_weight.shape[1]}"
+            )
+        if frame_weight.shape[0] % 6 != 0:
+            raise ValueError(f"frame_linear.weight row count must be a multiple of 6, got {frame_weight.shape[0]}")
+        inferred_frames = frame_weight.shape[0] // 6
+        if inferred_frames not in (2, 3):
+            raise ValueError(f"Unsupported num_frames={inferred_frames}. Expected 2 or 3.")
+        if num_frames != inferred_frames:
+            raise ValueError(f"num_frames metadata mismatch: expected {inferred_frames}, got {num_frames}")
         linear_layers.append("frame_linear")
-        decoder_layout["frame_linear.weight"] = [12, 8]
-
-    latent_ch = int(np.asarray(weights.get("latent_ch", np.array([8], dtype=np.int32))).reshape(-1)[0])
-    num_frames = int(np.asarray(weights.get("num_frames", np.array([2], dtype=np.int32))).reshape(-1)[0])
+        decoder_layout["frame_linear.weight"] = [int(frame_weight.shape[0]), int(frame_weight.shape[1])]
 
     layer_indices = sorted(
         int(k.split(".")[1]) for k in weights.keys() if k.startswith("mlp.") and k.endswith(".weight")
@@ -82,8 +90,9 @@ def _infer_network_layout(
 
     first_w = np.asarray(weights[f"mlp.{layer_indices[0]}.weight"], dtype=np.float32)
     mlp_width = int(first_w.shape[0])
-
-    expected_prev = input_dim
+    expected_prev = latent_ch + (6 * num_frames if has_frame_linear else 0)
+    if not has_frame_linear:
+        expected_prev = int(first_w.shape[1])
     for idx in layer_indices:
         w_name = f"mlp.{idx}.weight"
         b_name = f"mlp.{idx}.bias"
@@ -102,8 +111,6 @@ def _infer_network_layout(
 
     if latent_ch != 8:
         raise ValueError(f"Only latent_ch=8 is supported for runtime export, got {latent_ch}")
-    if has_frame_linear and num_frames != 2:
-        raise ValueError(f"Only num_frames=2 is supported for runtime export, got {num_frames}")
     if mlp_width not in (16, 32, 64):
         raise ValueError(f"Unsupported mlp_width={mlp_width}. Expected one of 16, 32, 64.")
 
@@ -121,13 +128,11 @@ def save_network_weights_bin(
     path: Path,
     weights: dict,
     *,
-    input_dim: int,
     output_dim: int,
     has_frame_linear: bool = True,
 ) -> dict:
     layout = _infer_network_layout(
         weights,
-        input_dim=input_dim,
         output_dim=output_dim,
         has_frame_linear=has_frame_linear,
     )
@@ -155,7 +160,7 @@ def save_network_weights_bin(
 
 def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
     _, h, w = latent.shape
-    layout = _infer_network_layout(weights, input_dim=20, output_dim=3, has_frame_linear=True)
+    layout = _infer_network_layout(weights, output_dim=3, has_frame_linear=True)
     metadata = {
         "width": int(w),
         "height": int(h),
@@ -175,7 +180,6 @@ def save_sampler_metadata(path: Path, weights: dict, *, latent_ch: int) -> None:
     # Sampler head outputs {wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy} = 9 channels.
     layout = _infer_network_layout(
         weights,
-        input_dim=latent_ch + 3,
         output_dim=9,
         has_frame_linear=False,
     )
@@ -237,7 +241,6 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
         save_network_weights_bin(
             preview_dir / "sampler_weights.bin",
             sampler_weights,
-            input_dim=cfg.latent_ch + 3,
             output_dim=9,
             has_frame_linear=False,
         )

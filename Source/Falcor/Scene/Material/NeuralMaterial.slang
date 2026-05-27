@@ -31,6 +31,7 @@ struct NeuralMaterialData
 
     uint brdfMlpWidth = 32;
     uint brdfMlpDepth = 2;
+    uint brdfNumFrames = 2;
     DecoderWeightOffsets brdfWeightOffsets = {};
 
     uint samplerMlpWidth = 32;
@@ -66,25 +67,18 @@ float3 neuralSafeNormalize(float3 v)
 float3 evalMLP16x2(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
-    const float x[20]
+    const uint inputDim,
+    const float x[26]
 )
 {
-    float4 x4[5];
-    [unroll]
-    for (uint i = 0; i < 5; ++i)
-    {
-        uint base = 4 * i;
-        x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
-    }
-
     float h0[16];
     [unroll]
     for (uint r = 0; r < 16; ++r)
     {
         float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
-        [unroll]
-        for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
+        [loop]
+        for (uint c = 0; c < inputDim; ++c)
+            s += neuralBufferLoadWithOffset(buf, offsets.w0Offset, r * inputDim + c) * x[c];
         h0[r] = max(s, 0.f);
     }
 
@@ -128,25 +122,18 @@ float3 evalMLP16x2(
 float3 evalMLP32x2(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
-    const float x[20]
+    const uint inputDim,
+    const float x[26]
 )
 {
-    float4 x4[5];
-    [unroll]
-    for (uint i = 0; i < 5; ++i)
-    {
-        uint base = 4 * i;
-        x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
-    }
-
     float h0[32];
     [unroll]
     for (uint r = 0; r < 32; ++r)
     {
         float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
-        [unroll]
-        for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
+        [loop]
+        for (uint c = 0; c < inputDim; ++c)
+            s += neuralBufferLoadWithOffset(buf, offsets.w0Offset, r * inputDim + c) * x[c];
         h0[r] = max(s, 0.f);
     }
 
@@ -190,25 +177,18 @@ float3 evalMLP32x2(
 float3 evalMLP64x2(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
-    const float x[20]
+    const uint inputDim,
+    const float x[26]
 )
 {
-    float4 x4[5];
-    [unroll]
-    for (uint i = 0; i < 5; ++i)
-    {
-        uint base = 4 * i;
-        x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
-    }
-
     float h0[64];
     [unroll]
     for (uint r = 0; r < 64; ++r)
     {
         float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
-        [unroll]
-        for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
+        [loop]
+        for (uint c = 0; c < inputDim; ++c)
+            s += neuralBufferLoadWithOffset(buf, offsets.w0Offset, r * inputDim + c) * x[c];
         h0[r] = max(s, 0.f);
     }
 
@@ -252,25 +232,18 @@ float3 evalMLP64x2(
 float3 evalMLP64x3(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
-    const float x[20]
+    const uint inputDim,
+    const float x[26]
 )
 {
-    float4 x4[5];
-    [unroll]
-    for (uint i = 0; i < 5; ++i)
-    {
-        uint base = 4 * i;
-        x4[i] = float4(x[base + 0], x[base + 1], x[base + 2], x[base + 3]);
-    }
-
     float h0[64];
     [unroll]
     for (uint r = 0; r < 64; ++r)
     {
         float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
-        [unroll]
-        for (uint g = 0; g < 5; ++g)
-            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 20 + g * 4), x4[g]);
+        [loop]
+        for (uint c = 0; c < inputDim; ++c)
+            s += neuralBufferLoadWithOffset(buf, offsets.w0Offset, r * inputDim + c) * x[c];
         h0[r] = max(s, 0.f);
     }
 
@@ -354,6 +327,8 @@ float3 evalNeuralBRDFFromLatents(
     // both wi and wo are local directions pointing away from the surface.
     if (wiLocal.z <= 0.f || woLocal.z <= 0.f)
         return 0.f.xxx;
+    if (md.brdfNumFrames != 2 && md.brdfNumFrames != 3)
+        return 0.f.xxx;
 
     ByteAddressBuffer decoderBuf = materials.getBuffer(md.brdfDecoderBufferID);
 
@@ -365,32 +340,55 @@ float3 evalNeuralBRDFFromLatents(
     float4 z4a = float4(z[0], z[1], z[2], z[3]);
     float4 z4b = float4(z[4], z[5], z[6], z[7]);
 
-    float sf[12];
+    float sf[18];
     [unroll]
-    for (uint r = 0; r < 12; ++r)
-    {
-        float s = 0.f;
-        s += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, r * 8 + 0), z4a);
-        s += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, r * 8 + 4), z4b);
-        sf[r] = s;
-    }
+    for (uint i = 0; i < 18; ++i)
+        sf[i] = 0.f;
 
-    float x[20];
+    float x[26];
+    [unroll]
+    for (uint i = 0; i < 26; ++i)
+        x[i] = 0.f;
 
-    // Trainer contract:
-    //   - frame_linear(z) -> (Nxyz, Txyz) per frame, no +1 offsets
-    //   - B = normalize(cross(N, T))
-    //   - MLP input is [z, dir_feats]
-    //   - dir_feats flatten as [frame0(wi_TBN, wo_TBN), frame1(...)]
     [unroll]
     for (uint i = 0; i < 8; ++i)
         x[i] = z[i];
 
-    [unroll]
-    for (uint f = 0; f < 2; ++f)
+    [loop]
+    for (uint f = 0; f < md.brdfNumFrames; ++f)
     {
         uint sfBase = 6 * f;
         uint xBase = 8 + 6 * f;
+
+        float s0 = 0.f;
+        s0 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, sfBase * 8 + 0), z4a);
+        s0 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, sfBase * 8 + 4), z4b);
+        sf[sfBase + 0] = s0;
+
+        float s1 = 0.f;
+        s1 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 1) * 8 + 0), z4a);
+        s1 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 1) * 8 + 4), z4b);
+        sf[sfBase + 1] = s1;
+
+        float s2 = 0.f;
+        s2 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 2) * 8 + 0), z4a);
+        s2 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 2) * 8 + 4), z4b);
+        sf[sfBase + 2] = s2;
+
+        float s3 = 0.f;
+        s3 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 3) * 8 + 0), z4a);
+        s3 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 3) * 8 + 4), z4b);
+        sf[sfBase + 3] = s3;
+
+        float s4 = 0.f;
+        s4 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 4) * 8 + 0), z4a);
+        s4 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 4) * 8 + 4), z4b);
+        sf[sfBase + 4] = s4;
+
+        float s5 = 0.f;
+        s5 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 5) * 8 + 0), z4a);
+        s5 += dot(neuralBufferLoad4WithOffset(decoderBuf, md.brdfWeightOffsets.frameLinearOffset, (sfBase + 5) * 8 + 4), z4b);
+        sf[sfBase + 5] = s5;
 
         float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
         float3 Traw = float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]);
@@ -408,15 +406,16 @@ float3 evalNeuralBRDFFromLatents(
         x[xBase + 5] = woPred.z;
     }
 
+    uint inputDim = 8 + 6 * md.brdfNumFrames;
     float3 y = 0.f.xxx;
     if (md.brdfMlpWidth == 16 && md.brdfMlpDepth == 2)
-        y = evalMLP16x2(decoderBuf, md.brdfWeightOffsets, x);
+        y = evalMLP16x2(decoderBuf, md.brdfWeightOffsets, inputDim, x);
     else if (md.brdfMlpWidth == 32 && md.brdfMlpDepth == 2)
-        y = evalMLP32x2(decoderBuf, md.brdfWeightOffsets, x);
+        y = evalMLP32x2(decoderBuf, md.brdfWeightOffsets, inputDim, x);
     else if (md.brdfMlpWidth == 64 && md.brdfMlpDepth == 2)
-        y = evalMLP64x2(decoderBuf, md.brdfWeightOffsets, x);
+        y = evalMLP64x2(decoderBuf, md.brdfWeightOffsets, inputDim, x);
     else if (md.brdfMlpWidth == 64 && md.brdfMlpDepth == 3)
-        y = evalMLP64x3(decoderBuf, md.brdfWeightOffsets, x);
+        y = evalMLP64x3(decoderBuf, md.brdfWeightOffsets, inputDim, x);
     else
         return 0.f.xxx;
 

@@ -79,7 +79,7 @@ namespace Falcor
             );
         };
 
-        auto loadDecoderWeights = [&](const std::filesystem::path& path, uint32_t expectedInputDim, uint32_t expectedOutputDim, bool hasFrameLinear)
+        auto loadDecoderWeights = [&](const std::filesystem::path& path, uint32_t expectedOutputDim, bool hasFrameLinear)
         {
             std::ifstream f(path, std::ios::binary);
             if (!f) FALCOR_THROW("Failed to open weight file: {}", path.string());
@@ -105,17 +105,19 @@ namespace Falcor
             if (!f) FALCOR_THROW("Failed reading weight file header: {}", path.string());
 
             if (latentCh != 8) FALCOR_THROW("Expected latentCh == 8, got {} in {}", latentCh, path.string());
-            if (hasFrameLinear && numFrames != 2)
-                FALCOR_THROW("Expected numFrames == 2 for frame-based decoder, got {} in {}", numFrames, path.string());
+            if (hasFrameLinear && numFrames != 2 && numFrames != 3)
+                FALCOR_THROW("Expected numFrames in {2, 3} for frame-based decoder, got {} in {}", numFrames, path.string());
             if (mlpWidth != 16 && mlpWidth != 32 && mlpWidth != 64)
                 FALCOR_THROW("Expected mlpWidth in {16, 32, 64}, got {} in {}", mlpWidth, path.string());
             if (mlpDepth != 2 && mlpDepth != 3)
                 FALCOR_THROW("Expected mlpDepth in {2, 3}, got {} in {}", mlpDepth, path.string());
 
+            const uint32_t inputDim = hasFrameLinear ? static_cast<uint32_t>(latentCh + 6 * numFrames) : 11u;
+
             std::vector<float> frameLinear;
             if (hasFrameLinear)
-                frameLinear = readFloatArray(f, 12 * 8);
-            auto w0 = readFloatArray(f, static_cast<size_t>(mlpWidth) * expectedInputDim);
+                frameLinear = readFloatArray(f, static_cast<size_t>(6 * numFrames) * static_cast<size_t>(latentCh));
+            auto w0 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(inputDim));
             auto b0 = readFloatArray(f, static_cast<size_t>(mlpWidth));
             auto w1 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
             auto b1 = readFloatArray(f, static_cast<size_t>(mlpWidth));
@@ -180,6 +182,7 @@ namespace Falcor
             {
                 int32_t mlpWidth = 0;
                 int32_t mlpDepth = 0;
+                int32_t numFrames = 0;
                 ref<Buffer> decoderBuffer;
                 Data::DecoderWeightOffsets offsets;
             };
@@ -187,6 +190,7 @@ namespace Falcor
             LoadedDecoder loaded;
             loaded.mlpWidth = mlpWidth;
             loaded.mlpDepth = mlpDepth;
+            loaded.numFrames = numFrames;
             loaded.offsets = offsets;
             loaded.decoderBuffer = make_ref<Buffer>(
                 mpDevice,
@@ -200,15 +204,16 @@ namespace Falcor
             return loaded;
         };
 
-        auto brdf = loadDecoderWeights(weightsPath, 20, 3, true);
+        auto brdf = loadDecoderWeights(weightsPath, 3, true);
         mpBrdfDecoderBuffer = brdf.decoderBuffer;
 
         mData.brdfMlpWidth = static_cast<uint32_t>(brdf.mlpWidth);
         mData.brdfMlpDepth = static_cast<uint32_t>(brdf.mlpDepth);
+        mData.brdfNumFrames = static_cast<uint32_t>(brdf.numFrames);
         mData.brdfWeightOffsets = brdf.offsets;
 
 
-        auto sampler = loadDecoderWeights(samplerWeightsPath, 8 + 3, 9, false);
+        auto sampler = loadDecoderWeights(samplerWeightsPath, 9, false);
         mpSamplerDecoderBuffer = sampler.decoderBuffer;
 
         mData.samplerMlpWidth = static_cast<uint32_t>(sampler.mlpWidth);

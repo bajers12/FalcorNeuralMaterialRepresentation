@@ -71,6 +71,7 @@ namespace Falcor
 
             uint32_t brdfMlpWidth = 32;
             uint32_t brdfMlpDepth = 2;
+            uint32_t brdfNumFrames = 2;
             DecoderWeightOffsets brdfWeightOffsets = {};
 
             uint32_t samplerMlpWidth = 32;
