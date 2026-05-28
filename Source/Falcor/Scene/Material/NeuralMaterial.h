@@ -95,6 +95,7 @@ namespace Falcor
         uint32_t mForcedLatentMip = 0;
         uint32_t mLatentMipDebugMode = 0;
         uint32_t mLatentFilteringMode = 1;
+        uint32_t mSamplingMode = 0;
         float mLatentLodBias = 0.f;
 
         ref<Buffer> mpBrdfDecoderBuffer;

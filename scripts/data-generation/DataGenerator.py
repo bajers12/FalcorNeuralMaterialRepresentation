@@ -18,7 +18,7 @@ class DataGenerator():
         finest_texture_height = 1,
         mip_exponential_rate = 0.7,
         min_filter_sample_count = 1,
-        max_filter_sample_count = 64,
+        max_filter_sample_count = 8,
         gaussian_filter_std_scale = 0.5,
     ):
         # Construct path relative to project root

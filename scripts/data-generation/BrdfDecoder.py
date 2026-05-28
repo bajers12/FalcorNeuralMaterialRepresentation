@@ -6,7 +6,7 @@ import torch.nn as nn
 class Decoder(nn.Module):
     """
     Decoder:
-      - frame extractor: Linear(C -> 6*num_frames) producing (Nxyz, Txyz) per frame
+      - frame extractor: Linear(C -> 6*num_frames) producing residual (Nxyz, Txyz) per frame
       - transform wi/wo into each predicted frame (T,B,N coords)
       - MLP on [z, dir_features] -> raw RGB
       - output = exp(raw - exp_offset)
@@ -54,14 +54,14 @@ class Decoder(nn.Module):
         Bsz = z.shape[0]
         ft = self.frame_linear(z).view(Bsz, self.num_frames, 6)
 
-        N = self._safe_normalize(ft[..., 0:3])  # [B, F, 3]
+        # T is intentionally not orthogonalized before forming B = cross(N, T).
+        n_raw = ft[..., 0:3].clone()
+        t_raw = ft[..., 3:6].clone()
+        n_raw[..., 2] = n_raw[..., 2] + 1.0
+        t_raw[..., 0] = t_raw[..., 0] + 1.0
+        N = self._safe_normalize(n_raw)  # [B, F, 3]
+        T = self._safe_normalize(t_raw)  # [B, F, 3]
 
-        # Re-orthogonalise T against N (Gram-Schmidt), then normalise
-        T_raw = ft[..., 3:6]  # [B, F, 3]
-        T_raw = T_raw - (T_raw * N).sum(dim=-1, keepdim=True) * N
-        T = self._safe_normalize(T_raw)  # [B, F, 3]
-
-        # Bitangent: N × T is already unit length because N and T are orthonormal
         Bv = torch.cross(N, T, dim=-1)  # [B, F, 3]
 
         return T, Bv, N

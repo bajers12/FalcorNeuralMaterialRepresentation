@@ -65,10 +65,10 @@ class TrainConfig:
     tex_h: int = 512
     tex_w: int = 512
     latent_ch: int = 8
-    hierarchical_mip_count: int = 1
+    hierarchical_mip_count: int = 5
     mip_exponential_rate: float = 0.7
     min_filter_sample_count: int = 1
-    max_filter_sample_count: int = 64
+    max_filter_sample_count: int = 8
     gaussian_filter_std_scale: float = 0.5
 
     scene_path: str = 'MatXScenes/Preview/MatXScene.pyscene'
@@ -929,7 +929,7 @@ def parse_args() -> TrainConfig:
     p.add_argument(
         "--hierarchical_mip_count",
         type=int,
-        default=1,
+        default=5,
         help="Number of independently trained latent mip levels, starting from tex_w/tex_h.",
     )
     p.add_argument(
@@ -939,7 +939,7 @@ def parse_args() -> TrainConfig:
         help="Truncated exponential rate used to randomize training mip levels.",
     )
     p.add_argument("--min_filter_sample_count", type=int, default=1)
-    p.add_argument("--max_filter_sample_count", type=int, default=64)
+    p.add_argument("--max_filter_sample_count", type=int, default=8)
     p.add_argument(
         "--gaussian_filter_std_scale",
         type=float,

@@ -59,6 +59,11 @@ uint neuralFilteringMode(const NeuralMaterialData md)
     return (md.latentMipControl >> 18) & 0x3u;
 }
 
+uint neuralSamplingMode(const NeuralMaterialData md)
+{
+    return (md.latentMipControl >> 20) & 0x3u;
+}
+
 bool neuralForceMipEnabled(const NeuralMaterialData md)
 {
     return (md.latentMipControl & (1u << 31)) != 0u;
@@ -66,6 +71,13 @@ bool neuralForceMipEnabled(const NeuralMaterialData md)
 
 static const uint kNeuralFilteringHardware = 0u;
 static const uint kNeuralFilteringPaperStochastic = 1u;
+static const uint kNeuralSamplingLearned = 0u;
+static const uint kNeuralSamplingCosine = 1u;
+
+bool neuralHasLearnedSampler(const NeuralMaterialData md)
+{
+    return md.samplerMlpWidth != 0u && (md.samplerMlpDepth == 2u || md.samplerMlpDepth == 3u);
+}
 
 struct NeuralMipPair
 {
@@ -541,9 +553,10 @@ float3 evalNeuralBRDFFromLatents(
         uint sfBase = 6 * f;
         uint xBase = 8 + 6 * f;
 
-        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
-        float3 Traw = float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]);
-        float3 T = neuralSafeNormalize(Traw - dot(Traw, N) * N);
+        // Match the trainer and paper supplemental. The frame extractor predicts
+        // residuals around N=(0,0,1), T=(1,0,0), and T is not orthogonalized.
+        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2] + 1.f));
+        float3 T = neuralSafeNormalize(float3(sf[sfBase + 3] + 1.f, sf[sfBase + 4], sf[sfBase + 5]));
         float3 B = cross(N, T);
 
         float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
@@ -996,9 +1009,17 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 
         float3 woLocal;
         float pdf;
-        if (useImportanceSampling)
+        uint sampledLobeType = uint(LobeType::DiffuseReflection);
+        bool useLearnedSampler =
+            useImportanceSampling &&
+            neuralSamplingMode(data) == kNeuralSamplingLearned &&
+            neuralHasLearnedSampler(data);
+        if (useLearnedSampler)
         {
             NeuralSamplerParams p = evalNeuralSamplerParams(gScene.materials, data, z, wiLocal);
+            sampledLobeType = (p.valid != 0u && u.x < p.wSpec) ?
+                uint(LobeType::SpecularReflection) :
+                uint(LobeType::DiffuseReflection);
             woLocal = sampleNeuralDirectionFromParams(data, p, wiLocal, u);
             pdf = evalNeuralPdfFromParams(data, p, wiLocal, woLocal);
         }
@@ -1013,7 +1034,7 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 
         float3 fcos = evalNeuralBRDFFromLatents(gScene.materials, data, z, wiLocal, woLocal);
 
-        if (usePaperStochasticFiltering() && useImportanceSampling)
+        if (usePaperStochasticFiltering() && useLearnedSampler)
         {
             NeuralMipPair p = neuralMipPair(data, neuralLod);
             float zMip0[8];
@@ -1044,7 +1065,7 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         result.wo = sd.frame.fromLocal(woLocal);
         result.pdf = pdf;
         result.weight = fcos / pdf;
-        result.lobeType = uint(LobeType::DiffuseReflection);
+        result.lobeType = sampledLobeType;
         return true;
     }
 
@@ -1056,6 +1077,8 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 
         float3 wiLocal = sd.frame.toLocal(sd.V);
         if (neuralDebugMode(data) != 0u)
+            return evalCosinePdf(woLocal);
+        if (neuralSamplingMode(data) == kNeuralSamplingCosine || !neuralHasLearnedSampler(data))
             return evalCosinePdf(woLocal);
 
         if (usePaperStochasticFiltering())
@@ -1083,18 +1106,18 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
     {
         BSDFProperties p = {};
         p.emission = 0.f.xxx;
-        p.roughness = 1.f;
+        p.roughness = 0.25f;
         p.guideNormal = sd.frame.N;
         p.flags = 0;
         p.diffuseReflectionAlbedo = 0.5.xxx;
         p.diffuseTransmissionAlbedo = 0.f.xxx;
-        p.specularReflectionAlbedo = 0.f.xxx;
+        p.specularReflectionAlbedo = 0.08.xxx;
         p.specularTransmissionAlbedo = 0.f.xxx;
-        p.specularReflectance = 0.04.xxx;
+        p.specularReflectance = 0.08.xxx;
         return p;
     }
 
-    uint getLobeTypes(const ShadingData sd) { return uint(LobeType::DiffuseReflection); }
+    uint getLobeTypes(const ShadingData sd) { return uint(LobeType::DiffuseReflection) | uint(LobeType::SpecularReflection); }
 };
 
 struct NeuralMaterial : MaterialBase, IMaterial

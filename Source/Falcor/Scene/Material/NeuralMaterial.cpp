@@ -49,6 +49,7 @@ namespace Falcor
         dirty |= widget.var("Forced latent mip", mForcedLatentMip, 0u, maxMip);
         dirty |= widget.var("Latent mip debug mode", mLatentMipDebugMode, 0u, 3u);
         dirty |= widget.var("Latent filtering mode", mLatentFilteringMode, 0u, 1u);
+        dirty |= widget.var("Neural sampling mode", mSamplingMode, 0u, 1u);
         bool samplerDirty = widget.var("Latent LOD bias", mLatentLodBias, -16.f, 16.f, 0.01f);
         dirty |= samplerDirty;
         if (dirty)
@@ -56,6 +57,7 @@ namespace Falcor
             mForcedLatentMip = std::min(mForcedLatentMip, maxMip);
             mLatentMipDebugMode = std::min(mLatentMipDebugMode, 3u);
             mLatentFilteringMode = std::min(mLatentFilteringMode, 1u);
+            mSamplingMode = std::min(mSamplingMode, 1u);
             mData.latentMipControl = packLatentMipControl();
             markUpdates(UpdateFlags::DataChanged);
             if (samplerDirty)
@@ -82,8 +84,10 @@ namespace Falcor
         uint32_t forcedMip = std::clamp(mForcedLatentMip, 0u, mipCount - 1u);
         uint32_t debugMode = std::clamp(mLatentMipDebugMode, 0u, 3u);
         uint32_t filteringMode = std::clamp(mLatentFilteringMode, 0u, 3u);
+        uint32_t samplingMode = std::clamp(mSamplingMode, 0u, 3u);
 
         return (mForceLatentMip ? (1u << 31) : 0u) |
+               (samplingMode << 20) |
                (filteringMode << 18) |
                (debugMode << 16) |
                (forcedMip << 8) |
@@ -133,7 +137,6 @@ namespace Falcor
         if (!mpLatent0) FALCOR_THROW("Failed to load latent texture: {}", latent0Path.string());
         if (!mpLatent1) FALCOR_THROW("Failed to load latent texture: {}", latent1Path.string());
         mForcedLatentMip = std::min(mForcedLatentMip, mLatentMipCount - 1);
-        mData.latentMipControl = packLatentMipControl();
 
         auto makeStructured = [&](const std::vector<float>& data) -> ref<Buffer>
         {
@@ -277,12 +280,27 @@ namespace Falcor
         mData.brdfWeightOffsets = brdf.offsets;
 
 
-        auto sampler = loadDecoderWeights(samplerWeightsPath, 8 + 3, 9, false);
-        mpSamplerDecoderBuffer = sampler.decoderBuffer;
+        if (std::filesystem::exists(samplerWeightsPath))
+        {
+            auto sampler = loadDecoderWeights(samplerWeightsPath, 8 + 3, 9, false);
+            mpSamplerDecoderBuffer = sampler.decoderBuffer;
 
-        mData.samplerMlpWidth = static_cast<uint32_t>(sampler.mlpWidth);
-        mData.samplerMlpDepth = static_cast<uint32_t>(sampler.mlpDepth);
-        mData.samplerWeightOffsets = sampler.offsets;
+            mData.samplerMlpWidth = static_cast<uint32_t>(sampler.mlpWidth);
+            mData.samplerMlpDepth = static_cast<uint32_t>(sampler.mlpDepth);
+            mData.samplerWeightOffsets = sampler.offsets;
+        }
+        else
+        {
+            logWarning("NeuralMaterial: sampler_weights.bin not found in '{}'. Falling back to cosine sampling.", mBasePath.string());
+            mpSamplerDecoderBuffer = nullptr;
+            mData.samplerDecoderBufferID = uint32_t(-1);
+            mData.samplerMlpWidth = 0;
+            mData.samplerMlpDepth = 0;
+            mData.samplerWeightOffsets = {};
+            mSamplingMode = 1;
+        }
+
+        mData.latentMipControl = packLatentMipControl();
 
         if (!mpSampler)
         {
@@ -293,7 +311,7 @@ namespace Falcor
 
     uint32_t NeuralMaterial::uploadBuffer(MaterialSystem* pOwner, const ref<Buffer>& pBuffer, uint32_t& id)
     {
-        FALCOR_ASSERT(pBuffer);
+        if (!pBuffer) return uint32_t(-1);
         if (id == uint32_t(-1)) id = pOwner->addBuffer(pBuffer);
         else pOwner->replaceBuffer(id, pBuffer);
         return id;
@@ -318,7 +336,8 @@ namespace Falcor
         uploadBuffer(pOwner, mpBrdfDecoderBuffer, mData.brdfDecoderBufferID);
 
         // Sampler Decoder
-        uploadBuffer(pOwner, mpSamplerDecoderBuffer, mData.samplerDecoderBufferID);
+        if (mpSamplerDecoderBuffer)
+            uploadBuffer(pOwner, mpSamplerDecoderBuffer, mData.samplerDecoderBufferID);
 
         return updates;
     }
@@ -332,6 +351,11 @@ namespace Falcor
                mpLatent0 == p->mpLatent0 &&
                mpLatent1 == p->mpLatent1 &&
                mpSampler == p->mpSampler &&
+               mForceLatentMip == p->mForceLatentMip &&
+               mForcedLatentMip == p->mForcedLatentMip &&
+               mLatentMipDebugMode == p->mLatentMipDebugMode &&
+               mLatentFilteringMode == p->mLatentFilteringMode &&
+               mSamplingMode == p->mSamplingMode &&
                mLatentLodBias == p->mLatentLodBias &&
                mpBrdfDecoderBuffer == p->mpBrdfDecoderBuffer &&
                mpSamplerDecoderBuffer == p->mpSamplerDecoderBuffer;
