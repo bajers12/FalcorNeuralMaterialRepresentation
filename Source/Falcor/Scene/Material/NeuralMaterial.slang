@@ -666,6 +666,74 @@ void buildBasisFromNormal(const float3 n, out float3 t, out float3 b)
     b = neuralSafeNormalize(cross(n, t));
 }
 
+void evalSamplerMLP32x3(
+    ByteAddressBuffer buf,
+    const DecoderWeightOffsets offsets,
+    const float x[11],
+    out float y[9]
+)
+{
+    float4 x4[3];
+    x4[0] = float4(x[0], x[1], x[2], x[3]);
+    x4[1] = float4(x[4], x[5], x[6], x[7]);
+    x4[2] = float4(x[8], x[9], x[10], 0.f);
+
+    float h0[32];
+    [unroll]
+    for (uint r = 0; r < 32; ++r)
+    {
+        float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
+        s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 11 + 0), x4[0]);
+        s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 11 + 4), x4[1]);
+        s += dot(neuralBufferLoad4WithOffset(buf, offsets.w0Offset, r * 11 + 8), x4[2]);
+        h0[r] = max(s, 0.f);
+    }
+
+    float h1[32];
+    [unroll]
+    for (uint r = 0; r < 32; ++r)
+    {
+        float s = neuralBufferLoadWithOffset(buf, offsets.b1Offset, r);
+        [unroll]
+        for (uint g = 0; g < 8; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h0[base + 0], h0[base + 1], h0[base + 2], h0[base + 3]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w1Offset, r * 32 + base), h);
+        }
+        h1[r] = max(s, 0.f);
+    }
+
+    float h2[32];
+    [unroll]
+    for (uint r = 0; r < 32; ++r)
+    {
+        float s = neuralBufferLoadWithOffset(buf, offsets.b2Offset, r);
+        [unroll]
+        for (uint g = 0; g < 8; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h1[base + 0], h1[base + 1], h1[base + 2], h1[base + 3]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w2Offset, r * 32 + base), h);
+        }
+        h2[r] = max(s, 0.f);
+    }
+
+    [unroll]
+    for (uint r = 0; r < 9; ++r)
+    {
+        float s = neuralBufferLoadWithOffset(buf, offsets.b3Offset, r);
+        [unroll]
+        for (uint g = 0; g < 8; ++g)
+        {
+            uint base = 4 * g;
+            float4 h = float4(h2[base + 0], h2[base + 1], h2[base + 2], h2[base + 3]);
+            s += dot(neuralBufferLoad4WithOffset(buf, offsets.w3Offset, r * 32 + base), h);
+        }
+        y[r] = s;
+    }
+}
+
 void evalSamplerMLPWithDepth(
     ByteAddressBuffer buf,
     const DecoderWeightOffsets offsets,
@@ -765,7 +833,10 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
     x[10] = wiLocal.z;
 
     float raw[9];
-    evalSamplerMLPWithDepth(decoderBuf, md.samplerWeightOffsets, md.samplerMlpWidth, md.samplerMlpDepth, x, raw);
+    if (md.samplerMlpWidth == 32u && md.samplerMlpDepth == 3u)
+        evalSamplerMLP32x3(decoderBuf, md.samplerWeightOffsets, x, raw);
+    else
+        evalSamplerMLPWithDepth(decoderBuf, md.samplerWeightOffsets, md.samplerMlpWidth, md.samplerMlpDepth, x, raw);
 
     p.alphaX = 1e-4f + 0.5f * (1.f + tanhApprox(raw[0]));
     p.alphaY = 1e-4f + 0.5f * (1.f + tanhApprox(raw[1]));
@@ -887,7 +958,7 @@ float3 sampleNeuralDirectionFromParams(const NeuralMaterialData md, const Neural
     float selectDenom = chooseSpec ? max(p.wSpec, 1e-6f) : max(p.wDiff, 1e-6f);
     float uSelect = chooseSpec ? (u.x / selectDenom) : ((u.x - p.wSpec) / selectDenom);
     uSelect = clamp(uSelect, 1e-6f, 1.f - 1e-6f);
-    float uAux = clamp(frac(u.y * 0.754877666f + 0.569840296f), 1e-6f, 1.f - 1e-6f);
+    float uAux = clamp(u.y, 1e-6f, 1.f - 1e-6f);
 
     if (!chooseSpec)
     {
@@ -1033,31 +1104,6 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
             return false;
 
         float3 fcos = evalNeuralBRDFFromLatents(gScene.materials, data, z, wiLocal, woLocal);
-
-        if (usePaperStochasticFiltering() && useLearnedSampler)
-        {
-            NeuralMipPair p = neuralMipPair(data, neuralLod);
-            float zMip0[8];
-            fetchNeuralLatents(gScene.materials, data, defaultSamplerID, uv, p.mip0, zMip0);
-
-            float pdf0 = evalNeuralPdf(gScene.materials, data, zMip0, wiLocal, woLocal);
-            float3 f0 = evalNeuralBRDFFromLatents(gScene.materials, data, zMip0, wiLocal, woLocal);
-
-            if (p.w1 > 0.f)
-            {
-                float zMip1[8];
-                fetchNeuralLatents(gScene.materials, data, defaultSamplerID, uv, p.mip1, zMip1);
-                float pdf1 = evalNeuralPdf(gScene.materials, data, zMip1, wiLocal, woLocal);
-                float3 f1 = evalNeuralBRDFFromLatents(gScene.materials, data, zMip1, wiLocal, woLocal);
-                pdf = lerp(pdf0, pdf1, p.w1);
-                fcos = lerp(f0, f1, p.w1);
-            }
-            else
-            {
-                pdf = pdf0;
-                fcos = f0;
-            }
-        }
 
         if (pdf <= 0.f)
             return false;

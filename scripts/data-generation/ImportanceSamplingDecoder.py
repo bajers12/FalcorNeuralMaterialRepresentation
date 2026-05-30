@@ -12,7 +12,7 @@ class ImportanceSamplingDecoder(nn.Module):
       - The network predicts parameters of a two-lobe anisotropic GGX (Trowbridge-Reitz)
         microfacet distribution
 
-      - Sampling follows the standard GGX visible-normal (VNDF) path:
+      - Sampling follows slope-space GGX NDF path:
           1. Sample a microfacet normal m ~ GGX-NDF in the lobe's shading frame.
           2. Reflect wi around m to get wo.
           3. Evaluate the blended two-lobe PDF at wo.
@@ -51,16 +51,16 @@ class ImportanceSamplingDecoder(nn.Module):
         Predict per-lobe GGX parameters from latent code z and incident direction wi.
 
         Returns:
-            {wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy}
-            wd and wp are diffue and specular weights
-            mu_dx and mu_dy are surface slope parameters for cosine weighted normal tilt
-            ax and ay are orthgogonal rougness values
+            {alpha_x, alpha_y, rho, slope_spec_x, slope_spec_y,
+             slope_diff_x, slope_diff_y, w_spec, w_diff}
+            slope_diff_x and slope_diff_y are surface slope parameters for cosine weighted normal tilt
+            alpha_x and alpha_y are orthogonal roughness values
             rho is correlation value for 2 above
-            mu_sx and mu_sx surface slope parameters for NDF mean offset
+            slope_spec_x and slope_spec_y are surface slope parameters for NDF mean offset
         """
 
         # Feed raw wi directly to MLP (not frame-projected)
-        # {wd, mu_dx, mu_dy, ws, ax, ay, rho, mus_x, mu_sy}
+        # {alpha_x, alpha_y, rho, slope_spec_x, slope_spec_y, slope_diff_x, slope_diff_y, w_spec, w_diff}
         return self.mlp(torch.cat([z, wi], dim=-1))  # [B, 9]
 
 
@@ -257,28 +257,48 @@ class ImportanceSamplingDecoder(nn.Module):
                         directly as the unnormalised weight.
         """
 
-        wo_sampled, pdf_q = self.sample(z, wi, pred)
+        # The paper detaches the latent from the sampler KL loss. This keeps the
+        # sampler from reshaping the latent texture while still allowing the
+        # reparameterized sample direction to receive gradients.
+        z_target = z.detach()
+
+        wo_sampled, pdf_q = self.sample(z_target, wi, pred)
         pdf_q = torch.nan_to_num(pdf_q, nan=eps, posinf=1e6, neginf=eps).clamp(min=eps, max=1e6)
         log_q = torch.log(pdf_q)  # [B], has grad through wo_sampled -> frames/alpha
 
-        # --- 3. Evaluate frozen BRDF target at sampled wo ---
-        with torch.no_grad():
-            # wo_sampled has grad but is safe to use inside no_grad for value computation;
-            # log_p_tilde is fully detached — only log_q carries the gradient.
-            y_hat = decoder.forward(z, wi, wo_sampled)  # [B, 3]  (f(wi,wo))
-            y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
+        #  Evaluate frozen BRDF target at sampled wo
+        decoder_requires_grad = [p.requires_grad for p in decoder.parameters()]
+        try:
+            for p in decoder.parameters():
+                p.requires_grad_(False)
+            # Keep decoder weights fixed, but leave the decoder differentiable
+            # with respect to wo_sampled so the sampler can follow target peaks.
+            y_hat = decoder.forward(z_target, wi, wo_sampled)  # [B, 3]  (f(wi,wo))
+        finally:
+            for p, requires_grad in zip(decoder.parameters(), decoder_requires_grad):
+                p.requires_grad_(requires_grad)
 
-            brdf_luminance = (
-                0.2126 * y_hat[..., 0]
-                + 0.7152 * y_hat[..., 1]
-                + 0.0722 * y_hat[..., 2]
-            ).clamp_min(eps)  # [B]
-            p_tilde = (brdf_luminance).clamp_min(eps)
+        y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
 
-            log_p_tilde = torch.log(p_tilde)  # fully detached
+        brdf_luminance = (
+            0.2126 * y_hat[..., 0]
+            + 0.7152 * y_hat[..., 1]
+            + 0.0722 * y_hat[..., 2]
+        )
 
-        # --- 4. Direct KL loss: E_{wo~q}[ log q - log p̃ ] ---
-        loss_terms = log_q - log_p_tilde  # [B], grad through log_q only
+        # Runtime BRDF evaluation is only valid in the upper hemisphere. Avoid
+        # training against arbitrary decoder extrapolation below it.
+        valid_hemisphere = (wi[..., 2] > 0.0) & (wo_sampled[..., 2] > 0.0)
+        p_tilde = torch.where(
+            valid_hemisphere,
+            brdf_luminance.clamp_min(eps),
+            torch.full_like(brdf_luminance, eps),
+        )
+
+        log_p_tilde = torch.log(p_tilde)
+
+        # Direct KL loss: E_{wo~q}[ log q - log p̃ ]
+        loss_terms = log_q - log_p_tilde  # [B], grad through log_q and wo_sampled
 
         finite_mask = torch.isfinite(loss_terms)
         if not finite_mask.any():
