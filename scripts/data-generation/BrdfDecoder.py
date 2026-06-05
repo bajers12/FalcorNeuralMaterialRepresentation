@@ -63,6 +63,7 @@ class Decoder(nn.Module):
         T = self._safe_normalize(t_raw)  # [B, F, 3]
 
         Bv = torch.cross(N, T, dim=-1)  # [B, F, 3]
+        Bv = self._safe_normalize(torch.cross(N, T, dim=-1))
 
         return T, Bv, N
 
