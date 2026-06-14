@@ -38,7 +38,7 @@ const char kMipExponentialRate[] = "mipExponentialRate";
 const char kMinFilterSampleCount[] = "minFilterSampleCount";
 const char kMaxFilterSampleCount[] = "maxFilterSampleCount";
 const char kGaussianFilterStdScale[] = "gaussianFilterStdScale";
-const uint32_t kBootstrapFeatureCapacity = 24;
+const uint32_t kBootstrapFeatureCapacity = 32;
 
 namespace
 {

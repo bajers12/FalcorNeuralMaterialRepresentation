@@ -440,6 +440,9 @@ target_sources(Falcor PRIVATE
     Scene/Material/ThreeLayeredGGXMaterial.cpp
     Scene/Material/ThreeLayeredGGXMaterial.h
     Scene/Material/ThreeLayeredGGXMaterial.slang
+    Scene/Material/ThreeLayeredGGXNoHeightMaterial.cpp
+    Scene/Material/ThreeLayeredGGXNoHeightMaterial.h
+    Scene/Material/ThreeLayeredGGXNoHeightMaterial.slang
     Scene/Material/MaterialXGraphMaterial.cpp
     Scene/Material/MaterialXGraphMaterial.h
     Scene/Material/MERLFile.cpp

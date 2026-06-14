@@ -1,0 +1,1349 @@
+Real-Time Neural Appearance Models
+TIZIAN ZELTNER∗ , NVIDIA, Switzerland
+FABRICE ROUSSELLE∗ , NVIDIA, Switzerland
+ANDREA WEIDLICH∗ , NVIDIA, Canada
+PETRIK CLARBERG∗ , NVIDIA, Sweden
+JAN NOVÁK∗ , NVIDIA, Czech Republic
+BENEDIKT BITTERLI∗ , NVIDIA, USA
+ALEX EVANS, NVIDIA, United Kingdom
+TOMÁŠ DAVIDOVIČ, NVIDIA, Czech Republic
+SIMON KALLWEIT, NVIDIA, Switzerland
+AARON LEFOHN, NVIDIA, USA
+
+
+
+
+Fig. 1. Close-up renderings of a Teapot asset with our neural BRDF. Our model learns the intricate details and complex multi-layered material behavior of the
+ceramic, fingerprints, smudges, and dust which are responsible for the realism of the object while being faster to evaluate than traditional non-neural models
+of similar complexity. The system we present allows us to include such high-fidelity objects in real-time renderers in a scalable way.
+
+We present a complete system for real-time rendering of scenes with complex                     By exposing hardware accelerated tensor operations to ray tracing shaders,
+appearance previously reserved for offline use. This is achieved with a                      we show that it is possible to inline and execute the neural decoders effi-
+combination of algorithmic and system level innovations.                                     ciently inside a real-time path tracer. We analyze scalability with increasing
+   Our appearance model utilizes learned hierarchical textures that are                      number of neural materials and propose to improve performance using
+interpreted using neural decoders, which produce reflectance values and                      code optimized for coherent and divergent execution. Our neural material
+importance-sampled directions. To best utilize the modeling capacity of                      shaders can be over an order of magnitude faster than non-neural layered
+the decoders, we equip the decoders with two graphics priors. The first                      materials. This opens up the door for using film-quality visuals in real-time
+prior—transformation of directions into learned shading frames—facilitates                   applications such as games and live previews.
+accurate reconstruction of mesoscale effects. The second prior—a microfacet
+sampling distribution—allows the neural decoder to perform importance                        CCS Concepts: • Computing methodologies → Reflectance modeling.
+sampling efficiently. The resulting appearance model supports anisotropic
+sampling and level-of-detail rendering, and allows baking deeply layered
+material graphs into a compact unified neural representation.                                Additional Key Words and Phrases: appearance models, neural networks,
+                                                                                             real-time rendering
+∗ Equal   contribution. Order determined by a rock-paper-scissors tournament.
+                                                                                             ACM Reference Format:
+© 2024 Copyright held by the owner/author(s).                                                Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan
+This is the author’s version of the work. It is posted here for your personal use. Not for
+redistribution. The definitive Version of Record was published in ACM Transactions on
+                                                                                             Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit,
+Graphics, https://doi.org/10.1145/3659577.                                                   and Aaron Lefohn. 2024. Real-Time Neural Appearance Models. ACM Trans.
+                                                                                             Graph. 43, 3, Article 33 (June 2024), 17 pages. https://doi.org/10.1145/3659577
+
+
+                                                                                                       ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+33:2 •
+    Stain Dust     Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit, and Aaron Lefohn
+
+
+                                 OrenNayar
+
+
+
+
+                                                                                                             Dirt
+                                                  R
+                                                                                                                                      OrenNayar      R
+
+                  OrenNayar                                                                                            Dielectric
+
+
+
+
+                                                                                                             Grease
+
+
+
+
+                                                                                                                                                                                                                           Brass Oxy Verdigris
+                                  R                                                                                                   R T
+
+
+
+
+                                                              Metal Dirt Grease
+
+
+
+
+                                                                                                                                                                  Metal Grease Dirt
+                                                                                         Conductor                     OrenNayar                                                       Lambert                                                      OrenNayar R
+                    Dielectric        R T
+                                            DielectricR                                              R
+                                                                                                                                       R
+                                                                                                                                                                                                      R
+                                                          T
+    Ceramic
+
+
+
+
+                                                                                  OrenNayar                                                                                                   Dielectric                                         Conductor        Conductor
+                      Absorption (Beer)                                                       R                        Dielectric              Dielectric                                                  R T                                           R                         R
+
+
+
+
+                                                                                                             Plastic
+                                                          T                                                                            R T                  R T
+
+                           Lambert                        R
+                                                                                         Conductor       R
+                                                                                                                                    Lambert                                           Conductor   R
+                                                                                                                                                                                                          Conductor    R
+                                                                                                                                                                                                                                                    Conductor
+                                                                                                                                                                                                                                                     R            R
+                                                                                                                                                                                                                                                                       Conductor       R
+                                                                                                                                                             R
+
+
+
+
+                     Ceramic body                                                    Metal handle                         Plastic handle                                                  Metal blade                                                    Metal body
+                                                      Teapot                                                                                         Cheese slicer                                                                                           Inkwell
+
+Fig. 2. We show rendered images of five reference materials created with a layering approach similar to [Jakob et al. 2019] that we approximate with neural
+models for representing the BRDF and importance sampling. All objects are challenging for real-time renderers due to their complex reflection behavior and
+high resolution textures (see Table 1). The corresponding shading graphs are provided in the supplementary material.
+
+
+1                INTRODUCTION                                                                                                                 Table 1. Statistics of our reference materials from Figure 2. The shading
+                                                                                                                                              graph with shading nodes (a) is programmatically converted to a number of
+Recent progress in rendering algorithms, light transport methods,                                                                             BRDF layers (b) controlled by parameters (c), which are varied spatially using
+and ray tracing hardware have pushed the limits of image quality                                                                              RGB textures (with the total number of used channels in parenthesis) (d);
+that can be achieved in real time. However, progress in real-time                                                                             the total number of RGB megatexels is reported in column (e).
+material models has noticeably lagged behind. While deeply layered
+materials and sophisticated shading graphs are commonplace in off-
+                                                                                                                                                                                       Nodes          Layers          Parameters                         Textures         MTexels
+line rendering, such approaches are often far too costly to be used in                                                                                                                    (a)            (b)                 (c)                              (d)             (e)
+real-time applications. Aside from computational cost, sophisticated
+materials pose additional challenges for importance sampling and                                                                                Teapot ceramic                              37                   5                               121          5 (11)           1174
+                                                                                                                                                Teapot handle                               41                   2                                91         11 (19)            152
+filtering: highly detailed materials will alias severely under minifi-
+                                                                                                                                                Slicer handle                               20                   5                                43           3 (7)            201
+cation, and the complex multi-lobe reflectance of layered materials                                                                             Slicer blade                                54                   3                               114         16 (40)            324
+causes high variance if not sampled properly.                                                                                                   Inkwell                                     49                   5                               143          4 (11)            201
+    Recent work in neural appearance modelling [Kuznetsov et al.
+2022; Sztrajman et al. 2021; Zheng et al. 2021] has shown that multi-
+layer perceptrons (MLPs) can be an effective tool for appearance
+modelling, importance sampling, and filtering. Nevertheless, these                                                                            to a latent space, thereby converting a set of traditional textures
+models do not support film-quality appearance and a scalable solu-                                                                            (per-layer albedo, normal map, etc.) into a single multi-channel
+tion for high-fidelity visuals in real time has yet to be demonstrated.                                                                       latent texture. Using the encoder is key to support materials with
+    In this paper, we set our goal accordingly: to render film-quality                                                                        high-resolution textures. The latent texture is decoded using two
+materials, such as those used in the VFX industry exemplified in                                                                              networks: an evaluation network that infers the BRDF value for a
+Figure 2 with statistics in Table 1, in real time. These materials                                                                            given pair of directions, and a sampling network that maps random
+prioritize realism and visual fidelity, relying on very high-resolution                                                                       numbers to sampled (outgoing) directions.
+textures. Layering of reflectance components, rather than an uber-                                                                               Our main algorithmic contributions can be characterized as em-
+shader, is used to generate material appearance yielding arbitrary                                                                            bedding fixed-function elements—graphics priors—in the two neural
+BRDF combinations with tens of parameters. Approximating such                                                                                 decoders. First, we insert a standard rotation operation between
+materials with simple analytical models is inaccurate (see Figure 3)                                                                          trainable components of the BRDF decoder to handle normal mapped
+and porting to real-time applications is therefore challenging.                                                                               surfaces. Second, we utilize a network-driven microfacet distribution
+    In order to render film-quality appearance in real time we i) care-                                                                       for importance sampling. These priors are necessary to efficiently
+fully cherry-pick components from prior works, ii) introduce algo-                                                                            utilize the (limited) expressive power of small networks.
+rithmic innovations, and iii) develop a scalable solution for inlining                                                                           On the system level, we present an efficient method for inlining
+neural networks in the innermost rendering loop, both for classical                                                                           fully fused neural networks in rendering code. To the best of our
+rasterization and path tracing. We choose to forgo editability in                                                                             knowledge, this is the first complete and scalable system for running
+favor of performance, effectively “baking” the reference material                                                                             neural material shaders inside real-time shading languages. A key
+into a neural texture interpreted by neural networks. Our model can                                                                           contribution is an execution model that utilizes tensor operations
+thus be viewed as an optimized representation for fast rendering,                                                                             whenever possible and efficiently handles divergent code paths. This
+which is baked (via optimization) after editing has taken place.                                                                              allows fast inferencing in any shader stage including ray tracing and
+    Our model consists of an encoder and two decoders, with the neural                                                                        fragment shaders, which is important for adoption in game engines
+(latent) texture in between. The encoder maps BRDF parameters                                                                                 and interactive applications.
+
+ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                                                                                                                                 Real-Time Neural Appearance Models       •   33:3
+
+
+           Numerically optimized analytical BRDF           Manually optimized analytical BRDF                         Our neural BRDF                             Reference
+         8-channel texture + diffuse & specular lobes   8-channel texture + diffuse & specular lobes       8-channel latent texture + MLP (3 × 64)        11-ch. texture + sh. graph
+View 1
+View 2
+
+
+
+
+     Fig. 3. First two columns: approximations of the multi-layer Teapot materials from Figure 2 using a simple analytical BRDF, parameterized by only 8
+     spatially-varying input channels: base color (3), specular roughness (1), specular normal map (2), specularity (1), and metallness (1). Third column: our neural
+     BRDF parameterized by an 8-channel latent texture. FLIP visualizations emphasize the perceptual differences against the reference (last column, Figure 2,
+     Table 1). The parameters for the analytic BRDF are either numerically optimized or tuned manually. In both cases, we see a much larger approximation error
+     as it lacks the expressive power to capture the complexity of the reference, e.g. the view-dependent blue color of the ceramic glazing.
+
+
+        Our neural model has a fixed evaluation cost, independent of the                      directions, and optionally a trained latent code. Latent codes are
+     material complexity, allowing us to render complex materials in                          typically stored in a texture [Thies et al. 2019] and sampled using
+     a real-time path tracer. To that end, we authored highly detailed                        classical UV mapping to support spatially varying BRDFs.
+     assets with layered materials (Figure 2) that provide visual detail                         However, we differ from prior work on a number of key axes:
+     down to a 10 cm viewing distance. We can reproduce the visual
+                                                                                                 Obtaining latent textures. Kuznetsov et al. [2019] in their NeuMIP
+     fidelity of such complex assets, with shading being up to 10× faster
+                                                                                              work employ direct optimization, updating a randomly-initialized
+     than the original, moderately optimized shading models, while also
+                                                                                              latent texture via backpropagation—a simple but costly solution for
+     providing additional sampling and filtering facilities (Figure 1).
+                                                                                              large textures with millions of texels. In contrast, Rainer et al. [2019]
+        Achieving the desired visual fidelity at real-time rates required
+                                                                                              rely on an auto-encoder architecture to encode a set of reflectance
+     innovations both in the neural model and at the system level:
+                                                                                              measurements into latent codes. We pursue a hybrid approach:
+       • a complete and scalable system for film-quality neural materials,                    we first train an encoder and, partway through training, we use
+       • tractable training for gigatexel-sized assets using an encoder,                      it to create a hierarchical latent texture, which we then finetune
+       • decoders with priors for normal mapping and sampling, and                            through direct optimization. This approach combines the speed
+       • efficient execution of neural networks in real-time shaders.                         of the encoder-decoder architecture with the flexibility of direct
+     We believe the joint evolution of models and systems to be crucial                       optimization. Contrary to Rainer et al. [2019], we do not encode the
+     to bringing neural shaders to real-time, and we built our system to                      reflectance measurements, but the set of corresponding material
+     serve as a solid foundation in this regard.                                              parameters (albedo, roughness, normal, etc.).
+
+     2     RELATED WORK                                                                          Encodings and priors. Both Zheng et al. [2021] and Sztrajman et al.
+                                                                                              [2021] reparametrize input directions into a half-angle coordinate
+     In this section, we review previous work related to neural material
+                                                                                              system [Rusinkiewicz 1998]. While this specific encoding did not
+     representation, filtering, and sampling, and refer to Pharr et al.
+                                                                                              provide much benefit in our case, we leverage the principle and
+     [2016] for a detailed overview of classical material models.
+                                                                                              incorporate a novel graphics prior—rotation to learned shading
+     2.1    Neural appearance modeling                                                        frames—to better handle normal-mapped, layered materials.
+     We focus on representing existing materials neurally and rendering                          Rendering novel BRDFs. Fan et al. [2022] are able to render novel
+     them in real time on classical geometry. We therefore do not utilize                     BRDFs not part of the training set through layering of latents. How-
+     ray marched neural fields [Baatz et al. 2022; Mildenhall et al. 2020;                    ever, this requires large neural networks unsuitable for real-time.
+     Müller et al. 2022], although these could present a viable alternative                   We focus on small networks that render only materials they were
+     in the future. Our goals generally align with prior work on neural                       trained on and do not pursue generalization. We support layered
+     BRDFs [Fan et al. 2022; Kuznetsov et al. 2019, 2021; Rainer et al.                       materials by capturing the joint effect of all layers at once, dispens-
+     2020, 2019; Sztrajman et al. 2021; Zheng et al. 2021]. Common to                         ing with the explicit layering of the original material, and avoiding
+     these methods is a conditioning of a neural network on a pair of                         any layering of neural components.
+
+                                                                                                       ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+33:4 •    Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit, and Aaron Lefohn
+
+
+                                                                                                                     Frame extraction             Decoding MLP
+              Geometry                                                                                 BRDF
+                                                                                                     evaluation
+                                                                                                                                     Shading                               BRDF 𝑔
+                                                Latent texture z                                                                       frames            
+                                                                                                                                                                             Albedo 𝛼
+                                                                              Latent code z(x)        𝝎i        𝝎o
+
+                                                                                                                        Decoding MLP                          Analytic
+                                                                                                                                                              sampler
+                                          (𝑢, 𝑣, 𝑙 )
+                                                                                                           𝝎i                                                                𝝎o
+
+
+
+
+                                                                                                                                                                 
+                                                                                                                                                               
+                                                                                                                                 
+
+
+
+
+                                                                                                                                                                     
+                                                                                                                                                    
+
+
+
+
+                                                                                                                                                                      
+                                                                                                                                                                                PDF 𝑝
+
+
+
+
+                                                                                                                                                                   
+                                                                                                     Importance
+                                                                                                      sampling
+
+Fig. 4. We use our neural BRDFs in a renderer as follows: for each ray that hits a surface with a neural BRDF, we perform standard (𝑢, 𝑣) and MIP level 𝑙
+computation, and query the latent texture of the neural material. Then we input the latent code z(x) into one or two neural decoders, depending on the needs
+of the rendering algorithm. The BRDF decoder (top box) first extracts two shading frames from z(x), transforms directions 𝝎i and 𝝎o into each of them, and
+passes the transformed directions and z(x) to an MLP that predicts the BRDF value (and optionally the directional albedo). The importance sampler (bottom
+box) extracts parameters of an analytical, two-lobe distribution, which is then sampled for an outgoing direction 𝝎o , and/or evaluated for PDF 𝑝 (x, 𝝎i , 𝝎o ).
+
+
+2.2      Neural material filtering                                                               3    OVERVIEW
+Aliasing due to shading is commonly addressed with mipmapping,                               Our goal is to reproduce the appearance of real materials that stems
+but requires special care for non-diffuse materials as their appear-                         from the interaction of light with matter. It can be described using
+ance can change significantly with linear filtering. Methods such                            the spatially varying bidirectional reflectance distribution function
+as LEAN [Olano and Baker 2010], LEADR [Dupuy et al. 2013] and                                (SVBRDF) 𝑓 (x, 𝝎i, 𝝎o ) that quantifies the amount of scattered dif-
+MIPNet [Gauthier et al. 2022] use statistical methods or neural down-                        ferential radiance d𝐿o (x, 𝝎o ) due to incident radiance 𝐿i (x, 𝝎i ):
+sampling to more closely match the prefiltered ground truth. While                                                                               d𝐿o (x, 𝝎o )
+these approaches tune the parameters of traditional BRDFs, we in-                                                    𝑓 (x, 𝝎i, 𝝎o ) =                              ,                 (1)
+                                                                                                                                            𝐿i (x, 𝝎i ) cos 𝜃𝑖 d𝝎i
+stead train neural models and hierarchical textures to represent the
+filtered appearance directly, similarly to Kuznetsov et al. [2021] and                       where x is a surface point, and 𝝎i , 𝝎o are incident and outgoing
+Bako et al. [2023], albeit with a different interpolation scheme (see                        directions, respectively. The SVBRDF can be integrated over the
+Section 4.1). However, we still leverage LEAN [Olano and Baker                               upper hemisphere 𝐻 2 to produce directional albedo 𝛼 (x, 𝝎o ):
+                                                                                                                          ∫
+2010] as a graphics prior to filter the inputs of our encoder.
+                                                                                                             𝛼 (x, 𝝎o ) =   𝑓 (x, 𝝎i, 𝝎o ) cos 𝜃𝑖 d𝝎i .     (2)
+                                                                                                                                       𝐻2
+
+2.3      Neural material importance sampling                                                     Our model represents both of these quantities; see Figure 4.
+                                                                                                    We design our model to serve as an optimized representation
+Prior work on the importance sampling of neural materials can clas-                              of existing (reference) SVBRDFs. That is, given a target material
+sified as: i) utilizing an analytical proxy distribution, ii) leveraging                         𝑓 (x, 𝝎i, 𝝎o ), we provide a function 𝑔 ≈ 𝑓 that closely approximates
+normalizing flows, and iii) warping samples with a network directly.                             the reference material and can be evaluated in real time. To be useful,
+See Xu et al. [2023] for an overview of neural materials samplers.                               our system must satisfy a number of properties:
+   We utilize the first approach, in which a network parameterizes
+an analytical distribution. In contrast to Sztrajman et al. [2021] and                             Visual fidelity. Our main goal is to faithfully reproduce a broad
+Fan et al. [2022], who use the Phong-Blinn model or an isotropic                                 range of challenging materials, including multi-layer materials with
+Gaussian, we leverage a standard microfacet model [Trowbridge                                    low-roughness dielectric coatings, conductors with glints, stains,
+and Reitz 1975; Walter et al. 2007]. The microfacet model better                                 and anisotropy. We wish to go beyond fitting to spatially uniform
+handles anisotropy that is prevalent in (filtered) realistic materials.                          measured material datasets [Dupuy and Jakob 2018; Matusik et al.
+   Normalizing flows for importance sampling [Dinh et al. 2017;                                  2003], and want to explicitly address materials with high resolution
+Müller et al. 2019] were first utilized for neural BRDFs by Zheng et al.                         textures (4k and above) with detailed normal maps.
+[2021]. With sufficiently large networks, these can accurately match
+                                                                                                    Level of detail. Unfiltered high-resolution materials tend to alias
+intricate distributions but we found it challenging to match the
+                                                                                                 under minification and properly filtered reflectance can change
+quality of the analytical proxy at comparable runtime performance.
+                                                                                                 significantly within a pixel footprint. We seek to support filtered
+   The third approach, using the network directly to warp samples,
+                                                                                                 lookups to enable level-of-detail rendering at low sample counts.
+has been recently explored by Bai et al. [2023] who aid training
+of the network with 2D optimal transport. This method has the                                       Importance sampling. In addition to representing the BRDF, we
+drawback that the learned density only approximately matches the                                 need an effective importance sampling strategy to permit deploy-
+true Jacobian determinant of their warp. This leads to potentially un-                           ment in Monte Carlo estimators, such as path tracing. This includes
+bounded bias, and we exclude this option to maintain compatibility                               the traditionally challenging problem of importance sampling fil-
+with physically based renderers.                                                                 tered versions of the material.
+
+ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                                                                                                                 Real-Time Neural Appearance Models       •   33:5
+
+
+   Performance. Our neural representation is geared towards real-              Unfiltered     Ours      Ground truth    Unfiltered       Ours      Ground truth
+
+time applications, where material evaluation may only use a small
+fraction of the total frame time. We require compatibility with path
+tracing, where materials are evaluated at random locations over
+many bounces. This precludes large networks and models relying
+on convolutions.
+   Practicality. While the optimization of our neural material hap-
+pens in an offline process, training times have to remain reasonable
+even for high material resolutions (4k and beyond) for the system
+to remain practical. Days of training time are not acceptable.
+                                                                                    (a) Cheese slicer, close                   (b) Cheese slicer, far
+   Our main focus is on developing a system that fits the afore-
+mentioned criteria. Like prior works on neural materials, we forgo           Fig. 5. Highly detailed materials will alias significantly when rendered
+explicit constraints on energy conservation and reciprocity rely-            without supersampling (left columns, unfiltered). Supersampling averages
+ing on the MLP learning these from data. We also set aside certain           high frequency glints and produces a filtered material, but at impractical
+special cases, such as BRDFs with delta components, and (rough)              sample cost for real-time (right columns, ground truth at 512 SPP). Our
+                                                                             neural material can render filtered materials without aliasing at any distance,
+refraction, although preliminary experiments show that our model
+                                                                             without supersampling (middle columns, ours).
+can handle the latter.
+   In Sections 4 and 5, we describe the architecture of our neural           latent texture stores the latent codes in a texture pyramid [Kuznetsov
+model and its training procedure, following with a comparative               et al. 2021; Thies et al. 2019]. Each level of the pyramid contains
+analysis of individual components in Section 6. Since real-time              latent codes that characterize the original material filtered with a
+performance is one of our main goals, we dedicate Section 7 to               specific filter radius. The decoder is trained to infer the properly
+the task of efficiently evaluating the neural model from inside ray          filtered BRDF value for all levels of the pyramid (Figure 5, middle
+tracing shaders. We conclude by demonstrating the quality and                columns in (a) and (b)).
+runtime performance on a number of challenging scenes in Section 8.              During rendering, we first determine the pixel footprint at the
+                                                                             intersection point, and project it into UV space [Akenine-Möller
+4     NEURAL BRDF DECODER                                                    et al. 2021]. We then determine the appropriate level of the texture
+In this section, we describe the architecture of our appearance model        pyramid to sample based on the area of the footprint.
+illustrated in Figure 4. The model consists of two main components:              The level index may be fractional and lie between two levels of
+a latent texture and two neural decoders. All these components are           the pyramid. We probabilistically select one of them using Russian
+jointly optimized to represent a specific material or a set of materials;    roulette, and fetch the latent code via bilinear interpolation within
+details of the optimization procedure (e.g., encoding of the latent          the level. This introduces a small, but bounded amount of variance.
+texture) follow in the next section.                                         We found this to yield higher quality than the more commonly used
+   The latent texture represents spatial variations of the material          method of trilinearly interpolating the latent codes. This is likely
+with a compact, eight-dimensional code denoted z. Given a query              because the latter strategy induces the additional constraint that
+location x and the corresponding latent code z(x), the BRDF value            the latent interpolation produce plausible BRDF values across levels,
+is inferred by a neural decoder 𝑔 with trainable parameters 𝜃 :              even though they may store very different content.
+               𝑓 (x, 𝝎i, 𝝎o ) ≈ 𝑔 (z(x),𝑇 · 𝝎i,𝑇 · 𝝎; 𝜃 ) ,           (3)
+                                                                             4.2    Transformation to learned shading frames
+where 𝑇 represents a transformation of incident and outgoing direc-          Our focus on real-time applications severely constrains the size
+tions to a number of learned shading frames. Next, we discuss the            of the decoder network. This makes it all the more important to
+properties of the latent texture z and then describe the procedure of        incorporate graphics priors into the architecture to handle realis-
+extracting 𝑇 .                                                               tic materials, such as those exemplified in Figure 2. These layered
+                                                                             materials produce intricate SVBRDFs, where reflection lobes shift
+4.1    Latent texture                                                        in direction as we move over the surface. Such effects are readily
+Similarly to prior works [Kuznetsov et al. 2021; Thies et al. 2019], we      modeled in classical materials via textured transformations, e.g.,
+store latent codes in a UV-mapped, hierarchical texture, where each          using normal maps, but are hard to achieve for a standard MLP.
+texel characterizes the appearance of the object at a given spatial             A material may feature as many normal maps as scattering lay-
+location and scale. To maintain the fidelity of the original material,       ers. We aim to compress the stack of layers, but still provide the
+we set the resolution of the finest level to the texture resolution of       model with enough room to represent multiple normal maps. We
+the original material, and we leverage its UV-parametrization to             therefore incorporate a transformation module into the network,
+preserve the original texel density.                                         which transforms incident and outgoing directions into a number
+   Highly detailed materials may cause severe aliasing under minifi-         of learned shading frames (mult operation in Figure 4). Specifically,
+cation (Figure 5, left columns in (a) and (b)). By default, our neural de-   we use a single trainable layer to extract a fixed number 𝑁 of nor-
+coder would reproduce such aliasing. To avoid this, the hierarchical         mals (n1 . . . n𝑁 ) and tangent vectors (t1 . . . t𝑁 ) from the latent code.
+
+                                                                                       ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+33:6 •    Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit, and Aaron Lefohn
+
+
+                                                                         Encoder
+   (𝑢, 𝑣) space                                                                                                                                                      BRDF
+                                                                                                             1                          Latent code z(x)           evaluation
+                                      Surface parameters k(x)                                              Latent texture z
+   Albedo                                                          64 64 64 64           8                                       3
+   Normal
+                                                                                                 2                                                                Importance
+   Tangent
+                                                                                                                                                                   sampling
+   Roughness                         ...
+   ...
+
+
+Fig. 6. We optimize our model by uniformly sampling the UV domain of the reference material. We start by fetching surface parameters (e.g., albedo) encoding
+them using an MLP to a latent code, and interpreting it as a BRDF value using the decoder (path marked with ○).1 Once the encoder is sufficiently trained, we
+construct the latent texture ○
+                             2 by processing all texels, and then drop the encoder. We continue “finetuning” the latent texture by sampling the UV space and
+MIP levels of the texture and optimizing the texels directly ○.
+                                                             3 We sample exponentially distributed filter footprints to optimize all levels of the latent texture,
+and train the decoder with prefiltered versions of the input material.
+
+
+Then we construct a basis (t𝑖 , b𝑖 , n𝑖 ) for each 𝑖-th pair of normalized                   [2022], we use a linear blend between a cosine-weighted hemispher-
+normals and tangents, and construct a combined transformation                                ical density and a specular reflection component, but we differ in
+matrix 𝑇 :                                                                                   the choice of the specular component.
+                                                                     ⊺                          Instead of the isotropic models proposed earlier (e.g., Blinn-Phong
+                    𝑡 1,𝑥 𝑏 1,𝑥 𝑛 1,𝑥 . . . 𝑡 𝑁 ,𝑥 𝑏 𝑁 ,𝑥 𝑛 𝑁 ,𝑥                             model [Sztrajman et al. 2021] or a 2D Gaussian [Fan et al. 2022]) we
+              𝑇 = ­ 𝑡 1,𝑦 𝑏 1,𝑦 𝑛 1,𝑦 . . . 𝑡 𝑁 ,𝑦 𝑏 𝑁 ,𝑦 𝑛 𝑁 ,𝑦 ® .               (4)
+                  ©                                              ª
+                                                                                             use the more general, state-of-the-art microfacet model based on a
+                  « 𝑡 1,𝑧 𝑏 1,𝑧 𝑛 1,𝑧 . . . 𝑡 𝑁 ,𝑧 𝑏 𝑁 ,𝑧 𝑛 𝑁 ,𝑧 ¬                           Trowbridge-Reitz (GGX) NDF [Trowbridge and Reitz 1975; Walter
+                                                                                             et al. 2007] including elliptical anisotropy and non-centered mean
+The transformation layer then computes the product 𝑇 · 𝝎𝑖 and
+                                                                                             surface slopes [Dupuy 2015]. This is well-suited both to the strongly
+𝑇 · 𝝎𝑜 , resulting in 𝑁 new incident and outgoing vectors, one pair
+                                                                                             normal-mapped materials represented in our target materials, as
+for each of the learned shading frames. The vectors are then fed
+                                                                                             well as filtered BRDFs that naturally produce anisotropic distri-
+to the decoder. The transformation allows the model to rotate the
+                                                                                             butions; we demonstrate the advantage in Section 6 and provide
+input directions into multiple, spatially varying shading frames in
+                                                                                             additional details of the sampler in Appendix A.
+a single operation, improving the representational power of the
+                                                                                                We train an additional importance sampling decoder MLP that
+network. We analyze the benefits in Section 6.
+                                                                                             infers parameters of the analytic model from the same latent code
+   Discussion. It may not be immediately obvious why a vanilla MLP                           as used for the BRDF evaluation. This is conceptually similar to
+struggles with rotating directions. This is because, even though                             Sztrajman et al. [2021], though we additionally feed 𝝎i into the de-
+MLPs are built from matrix operations, they can only perform mul-                            coder to capture Fresnel-like effects where, e.g., the diffuse-specular
+tiplicative transformations of the inputs with the (fixed) network                           mixing weights vary as a function of the incident angle.
+weights. They cannot readily multiply the input dimensions with
+each other. In our case, a decoder with a vanilla MLP cannot easily                          5       TRAINING
+multiply 𝝎i, 𝝎o with the latent code, which stores spatial variations                        We now discuss the training procedure for our decoder and latent
+of the material. The decoder is forced to approximate the multi-                             texture (see Figure 6), and how our training data is generated.
+plicative transform using its trainable layers, depleting its modeling                           One major challenge in training detailed materials is the sheer
+capacity. Our approach is conceptually similar to (self-)attention                           number of parameters to be optimized. Although the number of
+models that augment neural networks with multiplicative trans-                               network weights is small, the resolution of the latent texture matches
+forms between activations [Rebain et al. 2023; Vaswani et al. 2017].                         that of the source material and can be considerable: the ceramic
+                                                                                             body of the Teapot (Figure 2) is defined using 14 4k × 4k texture
+4.3      Importance sampling                                                                 tiles totaling 235 million texels, or 2.5 billion latent parameters.
+We focus on samplers suitable for representation by a network:                               Optimizing these parameters independently using backpropagation
+an invertible transform 𝑊 from random variates u ∈ [0, 1) 2 into                             is impractical. Instead, we make use of an encoder in the first training
+outgoing directions 𝝎o = 𝑊 (u; x, 𝝎i ), and its associated probabil-                         phase to bootstrap latent codes, which we describe next.
+ity density function (PDF) 𝑝 (𝝎o ; x, 𝝎i ). Low variance results are
+achieved whenever the shape of 𝑝 closely matches 𝑓 .                                         5.1      Encoder
+   Optimizing an MLP to perform the sample transform 𝑊 does                                  The encoder is a simple MLP that takes the parameters k(x) of
+not guarantee invertibility of 𝑊 and tractable PDF evaluations. Im-                          the original material (albedo, roughness, normal maps, etc. for all
+portance sampling thus requires a different approach than BRDF                               material layers) at a given query location x as input, and outputs
+evaluation. We draw inspiration from prior work and utilize a neu-                           the corresponding latent vector z(x). To bootstrap the filtering, we
+ral network to drive an existing analytic proxy distribution that is                         prefilter the material parameters k(x) (using LEAN [Olano and
+invertible in closed form. Like Sztrajman et al. [2021] and Fan et al.                       Baker 2010]) for coarse MIP levels of the hierarchy.
+
+ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                                                                                                                           Real-Time Neural Appearance Models                   •   33:7
+
+
+                                                                                      MIP 0 (4k × 4k)                  MIP 3 (512 × 512)                  MIP 5 (128 × 128)
+   In the first training phase, the model is trained end-to-end by
+forwarding the latent code from the encoder directly to the decoder,
+bypassing the latent texture.
+   After the decoder converges, we switch to the finetuning phase.
+The latent texture is initialized by evaluating the encoder for all
+texels, after which the encoder is dropped. The contents of the latent
+texture are then trained directly using backpropagation through the
+decoder. Because the encoder only participates in training, it has no
+impact on the evaluation cost during rendering.
+                                                                                       Latent texture distribution                         Network weight distribution
+   The encoder also improves the structure of the latent space: it         0.4
+
+
+guarantees that similar material parameters are mapped to similar                          MIP 0                                0.3             Sampling MLP
+points in the latent space. This leads to better results under interpo-    0.3
+                                                                                           MIP 3                                                Evaluation MLP
+                                                                                           MIP 5
+                                                                                                                                0.2
+lation, and makes the job of the decoder easier. In contrast, direct       0.2
+
+
+
+optimization is prone to leaving portion of the random initialization      0.1
+                                                                                                                                0.1
+noise in the latent texture, as analyzed in Section 6.2.
+                                                                                                                                0.0
+   The encoder can be optimized to encode multiple materials, or           0.0
+                                                                                 14   12    10     8   6   4   2   0   2   4          14   12    10   8   6   4   2     0   2       4
+even the full appearance space spanned by the reference BRDF (by                              log2 ( magnitude )                                   log2 ( magnitude )
+sampling its parameters uniformly). Since our latent textures have a
+                                                                          Fig. 7. Top row: Optimized latent textures (3 channels shown as RGB) for
+large memory footprint, in practice we train each one individually
+                                                                          the neural Inkwell material at three levels of the MIP hierarchy. Bottom
+along with its own encoder, unless stated otherwise.
+                                                                          row: The corresponding distribution of latent (left) and network parameter
+                                                                          magnitudes (right). All parameters lie comfortably within the (2 −14 , 216 )
+5.2   Data generation and optimization                                    numerical range of FP16 normal numbers (excluding denorms), making
+We generate training data by uniformly sampling the UV space of           quantization easy. The other materials show very similar distributions.
+the target (multi-layered) material. For each sample, we generate
+random directions 𝝎i and 𝝎o by uniformly sampling their half
+and difference vectors [Rusinkiewicz 1998; Sztrajman et al. 2021],          Albedo predictions, if enabled, are optimized using the 𝐿2 loss
+and evaluate the reference BRDF value. Each sample additionally           against one-sample MC estimates of Equation (2).
+contains: normal, tangent, albedo, roughness, and layer weight,             We optimize our models using 300k iterations, processing two
+exported for each of the layers. Depending on the layer count a           batches of 65k training samples in each iteration; one for optimizing
+single sample may require over a hundred floating point numbers.          the BRDF decoder and one for the sampler. This amounts to nearly
+We generate the samples on the GPU online during training.                40 billion (online-generated) material samples in total, with training
+                                                                          times lasting around 4–5 hours per material on a single NVIDIA
+  Filtering. We discretely sample a pyramid level for each training       GeForce RTX 4090. Further details of the training procedure are
+sample from an exponential distribution, favoring finer levels. We        provided in the supplemental document.
+average multiple sample points drawn from a Gaussian with appro-
+                                                                             Precision. We train master parameters for the BRDF decoder and
+priate footprint for the level, and choose the number of samples
+                                                                          sampler in 32-bit floating-point (FP32) precision. It is possible to
+proportional to the filter area. This sampling process is fast enough
+                                                                          make careful use of mixed precision training to further improve
+that it does not significantly impact training time.
+                                                                          training performance without losing accuracy, but due to the small
+   Mollification. Materials with very narrow peaks (e.g. the smooth       sizes of our MLPs we did not explore this option. For efficient infer-
+glaze of the Teapot) lead to large training errors early in training      encing, we use post-training quantization to convert the parameters
+and are challenging to learn for the network. To solve this, we ini-      to half precision (FP16) at load time. Figure 7 shows a representative
+tially blur the material directionally by averaging multiple samples      example of the distribution of parameters for the evaluation and
+from a small cone centered on 𝝎o . The angle of the cone decreases        sampling models. In all our example configurations, the numerical
+during training, so that the network initially learns broad features      range of network parameters lie within the normalized range of
+of the material before converging to the reference.                       FP16. In future work, we plan to explore quantization aware training
+                                                                          to further reduce runtime precision to INT8 or lower.
+   Optimization. We train the BRDF decoder and the importance
+sampler simultaneously to establish a shared latent space. The BRDF       6       MODEL ANALYSIS AND ABLATION
+prediction is optimized using the 𝐿1 loss in log space [Zheng et al.      Now that we have introduced our appearance model and its training
+2021]. The PDF of samples 𝝎o drawn from the learned sampler               procedure, we will analyze the main technical novelties: i) the trans-
+is scored using the KL divergence against the current state of the        formation into learned shading frames, ii) the anisotropic impor-
+learned BRDF. We found that training stability is improved when the       tance sampler, and iii) the use of the encoder. We also demonstrate
+latent code is detached from the KL loss computation. This way, the       the filtering capabilities and the option of inferring albedo.
+sampler MLP learns how to interpret the latents without interfering         A number of neural appearance models have been published in
+with the main BRDF evaluation decoder.                                    the past, addressing various aspects of appearance modeling, e.g.,
+
+                                                                                            ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+33:8 •   Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit, and Aaron Lefohn
+
+
+geometric level of detail [Kuznetsov et al. 2021, 2022], interpretabil-                    Table 2. Image error metrics averaged over the four images in Figure 8 for
+ity of the latent space [Zheng et al. 2021], or layering of neural                         each of the three compared variants. Material-specific statistics are included
+                                                                                           in the supplemental material.
+components [Fan et al. 2022]. These are complementary to our sys-
+tem and could be incorporated in the future. In this work, we focus
+on accommodating film-quality visuals and efficient execution on                                                               Vanilla        with     with frame
+                                                                                                                                 MLP       encoder      transform
+modern GPUs (presented in Section 7).
+   Due to the difference in focus, it is hard to compare our work to                                 Mean FLIP                 0.2390       0.1956          0.0815
+previous approaches directly. Instead, we compare to two ablated                                     Mean abs. error           0.0769       0.0652          0.0183
+                                                                                                     Mean sqr. error           0.0682      10.1933          0.0057
+variants of our model in Table 2 and Figure 8, and relate them to
+                                                                                                     Mean rel. abs. error      0.2177       0.3439          0.0656
+corresponding components in prior work.
+                                                                                                     Mean rel. sqr. error      0.0798     265.4018          0.0090
+                                                                                                     SMAPE                     0.2670       0.2397          0.0713
+   Vanilla MLP decoder with latent texture. The basic variant utilizes
+only a hierarchical latent texture and a vanilla MLP decoder. As such,
+there is no explicit rotation to shading frames in the decoder, and                        the MLP from approximating it using its non-linear layers. The qual-
+the texels of the texture are optimized directly via backpropagation.                      ity of the results improves, including effects that are not necessarily
+This variant can be viewed as the decoder of Sztrajman et al. [2021]                       related to normal mapping. This suggests that modeling capacity
+extended to handle spatial variations using a hierarchical neural                          retained by the explicit shading frame transformation is “invested”
+texture [Thies et al. 2019]. The model and the training procedure is                       in better capturing the shape and spatial variations of the BRDF.
+also conceptually close to the NeuMIP model [Kuznetsov et al. 2021],
+                                                                                           6.1    Filtering
+except that NeuMIP additionally features a UV-offsetting module
+for handling displaced surfaces. The results of this variant (Figure 8,                    We evaluate the quality of our filtering in Figure 9 by comparing
+first column) fail to correctly reproduce the spatial details of the                       individual levels of the latent pyramid to ground truth rendered
+reference material due to the vast number of latent texels that need                       with supersampling. Our filtered model is a good match up close, but
+to be optimized. We further analyze the scaling of latent-texture                          loses small details from a medium distance. This is because latent
+optimization with increasing resolution in Section 6.2.                                    optimization does not work as well for coarser levels as it does for
+                                                                                           level 0 and slightly overblurs the result. This may be compensated
+   Latent texture encoder. The second column in Figure 8 shows                             by biasing our level selection towards finer MIP levels, at the cost
+the benefits of adding the encoder (Section 5.1). The texture detail                       of some aliasing. From afar, all levels have a similar appearance.
+is reproduced more faithfully due to two main reasons. First, the
+encoder prevents situations where multiple texels with identical                           6.2    Latent texture optimization
+BRDF end up with different latent codes after optimization. Such                           We further analyze the benefits of using the encoder in Figure 10,
+surjective mapping of latents to BRDF values often occurs in the                           in which we compare the latent textures of different configurations
+basic model (first column) depleting the modeling capacity of the                          at MIP level 0. We visualize latent textures obtained via direct opti-
+decoder. Second, the encoder amortizes each training record over                           mization (top row) and using the encoder at small (512 × 512, left)
+many latent texels instead of optimizing a single latent texel.                            and large (4k × 4k, right) resolutions. The bottom insets show a
+   While the spatial variations are captured well in this particular                       close-up of the learned texture and the rendered appearance of this
+example, the decoder is unable to additionally capture the narrow                          area. While direct optimization and the encoder perform compara-
+reflection lobe of the Teapot ceramic even though it was correctly                         bly at small resolutions (as used for instance in NeuMIP [Kuznetsov
+captured by the vanilla MLP decoder. This suggests that the model                          et al. 2021]), the difference becomes apparent at high resolutions. At
+has insufficient modelling capacity to accurately reproduce both the                       resolution 4k × 4k, the directly optimized texels receive roughly 64×
+spatial variations and the high-frequency reflections. This can be                         fewer gradient updates than texels of the 512 × 512 latent texture.
+alleviated by increasing the size of the decoder.                                          This results in the decoder having to map vastly different latent
+   Our encoder-decoder architecture is reminiscent of the auto-                            codes (due to random initialization) to the same BRDF value, hinder-
+encoder used by Rainer et al. [2019] for compressing BTFs, with the                        ing its performance. Much of the initialization noise is still visible
+key distinction that we chose to encode the material parameters                            in the converged model. On the other hand, the encoder provides a
+(albedo, roughness, normal, etc.) instead of encoding the reflectance                      more data- and compute-efficient approach, yielding high-fidelity
+measurements. This allows our system to further improve scaling                            visuals. All models were trained using the same amount of training
+to very high-resolution textures, since the encoder can exploit the                        data. Despite being computationally less intense during training,
+redundancy in the material parameterization.                                               the models with direct optimization nearly doubled the training
+                                                                                           times (up to 10 hours) due to their higher memory requirements.
+   Transformation to learned shading frames. In the third column
+of Figure 8, we prepend the MLP decoder with the transformation                            6.3    Importance sampling
+of directions to two learned shading frames, which are extracted                           We compare the importance sampler described in Section 4.3 against
+from the latent code using an extra trainable layer with 12 neurons.                       a simplified variant resembling that from Sztrajman et al. [2021]
+This constitutes our complete model. As discussed in Section 4.2,                          and Fan et al. [2022]. This variant is trained to only produce two
+performing a multiplicative operation on the inputs explicitly spares                      outputs: an isotropic roughness parameter and a relative weight
+
+ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                                                                                                                                               Real-Time Neural Appearance Models         •   33:9
+
+
+                       Vanilla MLP decoder with latent texture            With latent texture encoder   With transformed 𝝎i , 𝝎o —full model
+                                   (basic variant)                           (improved training)         (improved training and decoding)                           Reference
+Inkwell
+Teapot
+Cheese slicer blade
+Cheese slicer handle
+
+
+
+
+                  Fig. 8. A qualitative comparison of two ablated variants and our full model at equal amount of training iterations. A vanilla MLP decoder with directly
+                  optimized latent texture (first column) provides limited quality. Training an encoder to produce the latent texture (second column) ensures that texels with
+                  identical appearance feature identical latent codes, easing the decoding to BRDF values. Augmenting the MLP decoder with an explicit transformation of
+                  directions to learned shading frames—our full model (third column)—further improves the reproduction of the reference image (last column). The bottom left
+                  corners show images of the FLIP difference metric. The models without the shading frame extractor (first two columns) were equipped with an extra first layer
+                  with 8 neurons to roughly match the number of parameters of the full model.
+
+                              Reference                 Footprint-based                    Level 0             Level 1                      Level 2           ···               Level 5
+
+
+
+
+                   Fig. 9. We evaluate the quality of our filtering by comparing footprint-based level selection to fixed latent pyramid levels (rendered with supersampling) on
+                   the Cheese slicer asset at different distances. Up close, coarser levels show loss of small detail such as glints, which reflects in our filtered result. This is not
+                   the case for level 0, which is a near perfect match to the ground truth (at the cost of aliasing). From afar, all levels average to visually similar appearance.
+
+
+
+
+                                                                                                                   ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                      33:10 •    Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit, and Aaron Lefohn
+
+                                      512 × 512                                    4k × 4k
+                                                                                                                  the true albedo during training using the 𝐿2 loss, which ensures con-
+Direct optimization
+
+
+
+
+                                                                                                                  vergence towards the mean. The ability to predict albedo gives our
+                                                                                                                  approach an edge over complex materials composed of analytical
+                                                                                                                  models, that can only output texture values of individual compo-
+                                                                                                                  nents, since numerical albedo estimation is typically infeasible in a
+                                                                                                                  path tracer. The albedo value can be used, e.g., to guide a denoiser.
+
+                                                                                                                  7     INLINE NEURAL MATERIALS
+                      zoom-in               render                zoom-in              render                     In this section, we describe the runtime system for inlining our neu-
+                                                                                                                  ral appearance model in ray tracing shaders. Similar to recent work
+                                                                                                                  on real-time NeRFs [Müller et al. 2022], we implement fully fused
+                                                                                                                  neural networks from scratch on the GPU. Instead of hand-written
+Encoder
+
+
+
+
+                                                                                                                  kernels however, we use run-time code generation to evaluate the
+                                                                                                                  neural model inline with rendering code. This allows fine-grained
+                                                                                                                  execution of neural networks at every hit point in a ray tracing
+                                                                                                                  shader program, intermixed with hand-written code. There are sev-
+                                                                                                                  eral technical challenges in making this possible.
+                                                                                                                     First, existing machine learning frameworks, such as PyTorch
+                      zoom-in               render                zoom-in              render                     and TensorFlow, are built for coherent execution of neural networks
+                                                                                                                  in large batches. Tools for integrating neural networks in real-time
+                      Fig. 10. Latent textures of the Inkwell asset. Direct optimization (top row)                shading languages such as GLSL or HLSL with potentially divergent
+                      works well for small textures (left) but struggles with high resolutions (right)
+                                                                                                                  execution, are largely non-existent. Second, we want to leverage
+                      as independently optimizing texels is computationally inefficient; the latent
+                      texture still contains a large amount of initialization noise after many iter-
+                                                                                                                  hardware accelerated matrix multiply-accumulate (MMA) opera-
+                      ations. Therefore, we train an encoder (bottom row) that transforms PBR                     tions in recent GPU architectures by AMD,1 Intel,2 and NVIDIA,3
+                      surface attributes into latent codes, and can be executed at any resolution.                but these instructions are not exposed in current shading languages.
+                      All analyzed configurations were optimized using the same amount of data.                   Last, the execution and data divergence in a renderer are challeng-
+                      The left inset zooms-in on a small part of the texture that is partly visible in            ing for neural networks, which load large amounts of parameter
+                      the rendered inset on the right.                                                            data from memory.
+                                                                                                                     In the following, we discuss how we address each of these chal-
+                                                                                                                  lenges in order to reach real-time performance.
+                      for mixing the specular and diffuse components. Figure 11 shows
+                      the benefit of the more general approach in the context of level-of-
+                      detail rendering, where it is useful to sample both non-centered and                        7.1    Neural material shaders
+                      anisotropic NDFs for normal mapped and filtered BRDFs.                                      Our neural model consists of several small MLPs, interconnected
+                          We also considered using samplers based on normalizing flows                            by blocks of non-neural operations. We train materials offline and
+                      [Dinh et al. 2017] in our system. In particular, the variant described                      export a description of the final model along with its learned hier-
+                      by Zheng et al. [2021] where the distribution of half-vectors is repre-                     archical latent textures, stored as mipmapped 16-bit RGBA images.
+                      sented by two piecewise quadratic warps [Müller et al. 2019], each                          Texture compression of the latents is an interesting avenue for fu-
+                      parameterized by an MLP (3 layers with 16 neurons). We found this                           ture work. In particular, neural texture compression [Vaidyanathan
+                      to yield comparable sampling quality to our chosen approach, but                            et al. 2023] may be very fruitful as the compression and neural
+                      it increases the total frame render time by a factor of 2–3.8× (see                         material model could be trained end-to-end.
+                      Figure 12), making it less viable in our real-time context. This is                            The runtime system compiles the neural material description
+                      explained by the additional overhead of the warps and the need                              into optimized shader code. We target the open source Slang shad-
+                      to evaluate a larger number of MLPs at shading time. Normalizing                            ing language [He et al. 2018], which has backends for a variety of
+                      flows generally run 4 MLPs at each hit: 2 when sampling an out-                             targets including Vulkan, Direct3D 12, and CUDA. Slang supports
+                      going direction and 2 when evaluating the associated PDF, e.g. for                          shader modules and interfaces for logically modularizing code. We
+                      computing multiple importance sampling (MIS) weights [Veach and                             generate one shader module per neural material, implementing the
+                      Guibas 1995]. In contrast, our method only needs to query the sam-                          same interface as hand-written materials. In other words, neural
+                      pling network once per hit and caches the resulting analytic proxy                          materials are executed by the renderer no differently than classical
+                      parameters for subsequent sampling and PDF evaluation steps.                                ones. See the supplemental material for implementation details and
+                                                                                                                  pseudocode examples for functional reproducibility of our work.
+                      6.4    Albedo inference
+                      Figure 13 demonstrates the ability of a data-driven BRDF model to
+                                                                                                                  1 https://gpuopen.com/learn/wmma_on_rdna3
+                      learn additional material characteristics. The BRDF decoder outputs                         2 https://www.intel.com/content/www/us/en/developer/articles/technical/
+                      an extra RGB triplet approximating the albedo of the multilayer                             introduction-to-the-xe-hpg-architecture.html
+                      material. We optimize the triplet against (one-sample) estimates of                         3 https://developer.nvidia.com/tensor-cores
+
+
+
+                      ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                                                                                                                                                       Real-Time Neural Appearance Models                                                     •          33:11
+
+
+                      Example NDF                  Std. deviation       Zoomed view                       MIP 0 reference                Zoomed view           Std. deviation                                     Example NDF
+                            90                                      5                        MIP 0                          MIP 2                                                                   1                                 90
+
+
+                      135              45                                                                                                                                                                         135                                      45
+Our PDF
+
+
+
+
+                180                                                                                                                                                                                     180
+                             0    22     45   68                                                                                                                                                                                       0            22       45    68
+
+
+
+
+                      225              315                                                                                                                                                                        225                                      315
+
+
+                            270
+                                                        Mean: 0.70 0                                                                                                       Mean: 0.22 0                                               270
+
+
+
+
+                            90                                     5                                                                                                                  1                                               90
+Isotropic PDF
+
+
+
+
+                      135              45                                                                                                                                                                         135                                      45
+
+
+
+
+                180                                                                                                                                                                                     180
+                             0    22     45   68                                                                                                                                                                                       0            22       45    68
+
+
+
+
+                      225              315                                                                                                                                                                        225                                      315
+
+
+                            270
+                                                        Mean: 1.73 0                                                                                                       Mean: 0.42 0                                               270
+
+
+
+
+                Fig. 11. The importance sampler (top row) reduces noise levels compared to a simpler variant only supporting isotropic specular reflections (bottom row),
+                in the spirit of Sztrajman et al. [2021] and Fan et al. [2022]. Left: Fine details of a normal map are captured using a non-centered microfacet NDF. Right:
+                At coarser MIP levels, the filtered distribution is strongly anisotropic. The zoomed views are rendered using 4 SPP. False-color images show the pixel-wise
+                standard deviation and its mean across the entire inset.
+
+                             Normalizing flows (8 bins)                        Normalizing flows (16 bins)                    Analytic proxy (ours)                                           Example PDF
+                                                                                                                                                                                                        0°
+                                                 Time: 7.93 ms                                  Time: 14.31 ms                                 Time: 3.06 ms   0.5
+                                                                                                                                                                                        30°                                           −30°
+                                             TTUV: 12.26 ms                                    TTUV: 22.12 ms                                 TTUV: 4.73 ms
+ Inkwell
+
+
+
+
+                                                                                                                                                                           60°                                                                             −60°
+
+
+
+
+                                                                                                                                                                     90°                                 0.000                                                     −90°
+                                                                                                                                                                                                              1
+                                                                                                                                                                                                                        0.001
+                                                                                                                                                                                                                                            0.01
+                                                                                                                                                                                                                                                             0.1
+
+                                                                                                                                                               0.0               Normalizing flows (8 bins)              Analytic proxy (ours)
+
+                                                                                                                                                               4.0               Normalizing flows (16 bins)             Reference BRDF
+                                                      Time: 10.59 ms                             Time: 17.69 ms                              Time: 4.55 ms                                              0°
+                                                    TTUV: 366.00 ms                            TTUV: 330.06 ms                              TTUV: 70.34 ms                              30°                                           −30°
+ Teapot
+
+
+
+
+                                                                                                                                                                           60°                                                                             −60°
+
+
+
+
+                                                                                                                                                                     90°                                0.000                                                      −90°
+                                                                                                                                                                                                             1 0.0
+                                                                                                                                                                                                                  01 0.0
+                                                                                                                                                                                                                        1
+                                                                                                                                                                                                                                0.1
+                                                                                                                                                                                                                                       1
+                                                                                                                                                                                                                                               10
+                                                                                                                                                               0.0                                                                                   100
+                                                                                                                                                                                                                                                            1000
+
+
+
+
+                Fig. 12. Pixel-wise standard deviation images of our importance sampler against an alternative implementation based on normalizing flows. The sampler
+                architecture in the first column (using warps with 8 bins, matching that of Zheng et al. [2021]), is adequate for the glossy Inkwell metal it struggles with
+                the highly specular peak of the Teapot ceramic. The second column (using a higher-quality warp with 16 bins) captures the peak and roughly matches the
+                variance of our sampler based on the analytic proxy (third column). The last column shows corresponding (log scale) polar plots of the learned densities. The
+                overlaid numbers report rendering time (for the full frame at 1 SPP) and the time to unit variance (TTUV), i.e. the product of mean variance and render time.
+                This reveals a significant runtime overhead of normalizing flows. The size of the evaluation network is fixed at 2 layers with 32 neurons in all cases.
+
+
+                                            Rendering                   Visualization of learned albedo                Code Generation. GPUs use a single instruction, multiple threads
+                                                                                                                    (SIMT) execution model, where batches (wavefronts or warps) of
+                                                                                                                    threads execute in lockstep. Threads may be terminated or masked
+                                                                                                                    out due to control flow. Because each thread may process a different
+                                                                                                                    hit point and material, there is no guarantee that all threads in a
+                                                                                                                    warp evaluate the same network.
+                                                                                                                       We handle this by generating two code paths, optimized for di-
+                                                                                                                    vergent and coherent execution respectively. The shader selects
+                                                                                                                    dynamically per warp which path to take. In the divergent case,
+                                                                                                                    we rely on the hardware SIMT model to handle divergence and
+                Fig. 13. The BRDF decoder can be trained to additionally infer the albedo
+                                                                                                                    generate an unrolled sequence of arithmetic and load instructions.
+                of the material by optimizing its additional RGB output against a Monte                             A majority of the instructions evaluate the large matrix multiplies
+                Carlo estimate of the albedo of the reference material.                                             in the MLP feedforward layers. We use fused multiply-add (FMA)
+                                                                                                                    instructions to operate on two packed 16-bit weights at a time. The
+                                                                                                                    weights are laid out in memory in order of access, and special care
+                                                                                                                    is taken to generate 128-bit vectorized loads.
+
+                                                                                                                              ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+33:12 •    Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit, and Aaron Lefohn
+
+
+             Cake box scene                Ratio of coherent warps per path length          8 RUNTIME ANALYSIS AND RESULTS
+                                           1.0
+
+
+
+
+                                           0.8
+                                                                             Coherent       To study quality and performance, we implement our system for
+                                                                             Divergent
+                                                                                            neural materials in a real-time path tracer [Clarberg et al. 2022a,b]
+                                           0.6
+
+                                                                                            built on the Falcor rendering framework [Kallweit et al. 2022]. The
+                                           0.4
+
+                                                                                            path tracer uses next-event estimation with MIS [Veach and Guibas
+                                           0.2
+                                                                                            1995], and each path calls the eval, sample, and evalPdf material
+                                           0.0
+                                                 1   2   3   4   5   6   7   8   9   10     interface multiple times.
+                                                                                               Our system is running on Direct3D 12 using hardware-accelerated
+Fig. 14. This partially open Cake box is filled with 25 different neural mate-
+rials. The statistics show that our megakernel path tracer achieves a high                  ray tracing through DirectX Raytracing (DXR). All results are gener-
+degree of shading coherency using shader execution reordering (SER) over                    ated on an NVIDIA GeForce RTX 4090 GPU at resolution 1920 × 1080,
+all vertices along long light paths.                                                        unless otherwise noted. We focus on evaluating quality and perfor-
+                                                                                            mance for path tracing with neural materials, and therefore disable
+                                                                                            denoising and other features that can bias the results.
+7.2    Tensor core acceleration                                                                Performance is reported as total time in milliseconds (ms) for
+Some recent GPU architectures offer hardware units for acceler-                             rendering a 1920 × 1080 image with one path sample per pixel (SPP).
+ating general matrix multiplication. While implementation details                           The timing in ms/SPP is representative for real-time path tracing,
+vary, core functionality is similar. We focus on NVIDIA’s tensor                            and can be scaled linearly to predict rendering time at higher SPP for
+cores which provide many flavors of matrix multiply instructions,                           applications such as high-quality preview rendering. Path length is
+although the same idea applies to other architectures.                                      capped at six path vertices (camera and light included) and Russian
+   These instructions are currently limited to compute APIs and                             roulette is turned off for the purpose of these measurement.
+are not exposed in shaders. To address this, we modified an open
+                                                                                               Reference materials. In order to study rich materials, we added
+source LLVM-based DirectX shader compiler4 to add custom in-
+                                                                                            support for physically-based, layered material graphs expressed in
+trinsics for low-level access. This mechanism allows us to generate
+                                                                                            the open standard MaterialX [Smythe and Stone 2021], a common
+Slang shader code evaluating neural networks very efficiently using
+                                                                                            interchange format for high-fidelity materials in VFX and movie
+tensor cores, which operate on 16 × 16 blocks of the weight matrix
+                                                                                            production. This allows authoring complex layered materials (c.f.,
+simultaneously.
+                                                                                            Figure 2) in Houdini and other tools. All materials consist of multiple
+   MMA instructions require cooperation across the warp, which
+                                                                                            BRDFs combined through mixing or coating operations. Nearly all
+limits this fast path to coherent warps where all threads evaluate
+                                                                                            parameters are textured, with resolutions of 4k-8k per texture. Some
+the same material. Additionally, loading network parameters also
+                                                                                            materials stitch multiple (up to 14) 4k texture tiles for even higher
+benefits from coherent access, requiring careful consideration of
+                                                                                            resolution. We programmatically converted the reference materials
+how to construct coherent warps, which we discuss next.
+                                                                                            into an optimized Slang code that implements the shading graph as
+7.3    Shading coherency                                                                    a weighted (𝝎i -dependent) combination of standard BRDF models.
+                                                                                            Each material comprises multiple layers, where each layer is driven
+Neural materials allow us to reproduce a variety of materials using                         by a number of textures; the statistics are provided in Table 1.
+the same shader code, simply by swapping out network weights
+and latent textures. This improves warp utilization (and thus per-                          8.1 Visual accuracy
+formance) even for workloads with traditionally high execution
+                                                                                            In Figure 3, we compare our proposed neural material parameterized
+divergence, such as path tracing.
+                                                                                            by an 8-channel latent texture to a simple analytical model that
+   However, the increase in data divergence puts pressure on the
+                                                                                            combines a diffuse component with an isotropic Trowbridge-Reitz
+memory system, and we can extract additional performance by
+                                                                                            (GGX) lobe, which are driven by textures with 8 channels in total. We
+increasing shading coherence. Classical coherent approaches like
+                                                                                            tested two variants for the analytical model: numerically optimized
+wavefront path tracing [Laine et al. 2013; van Antwerpen 2011] store
+                                                                                            parameters obtained using our existing training pipeline (which
+hits to memory and globally reorder them after each bounce, but
+                                                                                            was tuned for training neural materials), and parameters that were
+the high bandwidth requirements fundamentally limit their perfor-
+                                                                                            manually optimized by a specialist. Both variants fail to capture the
+mance. Recent hardware features such as Intel’s thread sorting unit
+                                                                                            complexity of the reference, multi-layered material. In particular, the
+(TSU)5 and NVIDIA’s shader execution reordering (SER),6 instead
+                                                                                            diffuse albedo of the simple analytical model can only capture a slice
+reorder work locally. We use a megakernel path tracer to keep paths
+                                                                                            of the view-dependent color of the ceramic glazing and is therefore
+on-chip, and benefit from the increased data coherence provided by
+                                                                                            accurate only for the specific view directions that match the chosen
+SER. Figure 14 shows that the majority of warps are fully coherent
+                                                                                            albedo. The neural material offers a more faithful reproduction,
+(shading the same material with all threads active) with our path
+                                                                                            overall striking a balance between the speed and quality of the high-
+tracing architecture.
+                                                                                            quality but slow reference, and the lower-quality but fast analytical
+4 https://github.com/microsoft/DirectXShaderCompiler
+                                                                                            approximation.
+5 https://www.intel.com/content/www/us/en/developer/articles/guide/real-time-ray-
+                                                                                               In Figures 15 and 16, we compare the visual quality and rendering
+tracing-in-games.html
+6 https://developer.nvidia.com/sites/default/files/akamai/gameworks/ser-                    performance of three configurations of the neural BRDF decoder
+whitepaper.pdf                                                                              (the importance sampler always comprises 3 hidden layers with
+
+ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                                                                                                                                   Real-Time Neural Appearance Models     •   33:13
+
+
+                  2 layers with 16 neurons                2 layers with 32 neurons                 3 layers with 64 neurons                            Reference
+View 1
+
+
+
+
+                                             3.64 ms                                 4.36 ms                                  9.94 ms                                   14.58 ms
+View 2
+
+
+
+
+                                             3.26 ms                                 4.16 ms                                  10.93 ms                                  15.36 ms
+
+         Fig. 15. The Inkwell scene where the metal uses the proposed neural BRDF. The remaining parts use analytical BRDFs. The first three columns show different
+         sizes of the BRDF decoder, from fastest to the most accurate. In the corners we show a FLIP error image and the rendering performance of an image with a
+         single path sample per pixel (1 SPP) at 1920 × 1080 resolution using paths of up to length six. All images are rendered at 8192 SPP to suppress path tracing noise.
+
+                  2 layers with 16 neurons                2 layers with 32 neurons                 3 layers with 64 neurons                            Reference
+View 1
+
+
+
+
+                                             3.15 ms                                 3.71 ms                                  6.31 ms                                   13.25 ms
+View 2
+
+
+
+
+                                             3.30 ms                                 4.32 ms                                  7.67 ms                                   14.29 ms
+View 3
+
+
+
+
+                                             4.29 ms                                 5.73 ms                                  11.02 ms                                  19.98 ms
+View 4
+
+
+
+
+                                             3.49 ms                                 4.39 ms                                  8.68 ms                                   16.53 ms
+View 5
+
+
+
+
+                                             3.45 ms                                 4.12 ms                                  7.68 ms                                   7.78 ms
+
+     Fig. 16. The Stage scene with four materials that we approximate using the proposed neural BRDFs. We use a similar layout as in Figure 15. FLIP error images
+     are in the corners, timings quantify the cost of rendering a 1 SPP image of the scene at 1920×1080 resolution using paths of up to length six. All images are
+     rendered at 8192 SPP to suppress path tracing noise. The rendering with neural BRDFs is 1.64× to 4.14× faster than the reference materials in full frame time
+     (averaged over the views in Figure 15 and here). Please refer to the supplemental document for details on the scene and lighting setup.
+
+
+                                                                                                        ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+33:14 •    Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit, and Aaron Lefohn
+
+
+Table 3. Image error metrics averaged over the converged renderings shown                   Table 5. Material shading performance in ms/SPP with two different BRDF
+in Figures 15 and 16, each of which was produced using 8192 SPP. View-                      decoder architectures (importance sampler is always 3 × 32). Column labels
+specific statistics are included in the supplemental material.                              denote the number and width of hidden layers. Numbers in parenthesis
+                                                                                            show speed up over the reference material, reported in the last column.
+                                         2 × 16     2 × 32     3 × 64
+                                                                                                                                                   2 × 32                 3 × 64                 Ref.
+               Mean FLIP                 0.1087     0.0551     0.0444
+               Mean abs. error           0.0439     0.0145     0.0121                                      Stage, View 3               1.59 (10.19×)            6.02 (2.69×)                    16.21
+               Mean sqr. error           1.3855     0.0107     0.0101                                      Stage, View 4               1.23 (12.82×)            5.06 (3.12×)                    15.77
+               Mean rel. abs. error      0.1042     0.0429     0.0347                                      Inkwell, View 1              1.59 (6.99×)            6.01 (1.85×)                    11.11
+               Mean rel. sqr. error      0.0353     0.0056     0.0035                                      Inkwell, View 2              1.74 (7.25×)            7.15 (1.76×)                    12.61
+               SMAPE                     0.1449     0.0468     0.0363
+                                                                                                           Average                      1.54 (9.06×)            6.06 (2.30×)                    13.93
+
+
+Table 4. Full frame performance in ms/SPP with three different BRDF de-                                         Stage timings (ms)                                   Inkwell timings (ms)
+coder architectures (importance sampler is always 3 × 32). Column labels
+                                                                                              18                                                     18
+                                                                                                           Material shading                                         Material shading
+denote the number and width of hidden layers. Numbers in parenthesis                          16                                                     16
+
+                                                                                              14           Path tracing                              14             Path tracing
+show speed up over the reference material, reported in the last column.                       12                                                     12
+
+                                                                                              10                                                     10
+
+                                                                                              8                                                       8
+
+
+                               2 × 16             2 × 32           3 × 64      Ref.           6
+
+                                                                                              4
+                                                                                                                                                      6
+
+                                                                                                                                                      4
+
+                                                                                              2                                                       2
+
+ Inkwell, View 1        3.64 (4.01×)      4.36 (3.34×)        9.94 (1.47×)    14.58           0
+                                                                                                   2   ×   32             3   ×   64   Reference
+                                                                                                                                                      0
+                                                                                                                                                            2   ×   32             3   ×   64           Reference
+
+ Inkwell, View 2        3.26 (4.71×)      4.16 (3.69×)       10.93 (1.41×)    15.36
+ Stage, View 1          3.15 (4.21×)      3.71 (3.57×)        6.31 (2.10×)    13.25         Fig. 17. Average path tracing and material shading time in ms, respectively,
+ Stage, View 2          3.30 (4.33×)      4.32 (3.31×)        7.67 (1.86×)    14.29         for rendering a 1 SPP image of the scene at 1920×1080 pixels resolution
+ Stage, View 3          4.29 (4.66×)      5.73 (3.49×)       11.02 (1.81×)    19.98         using paths up to six path vertices in length. Two different BRDF decoder
+ Stage, View 4          3.49 (4.74×)      4.39 (3.77×)        8.68 (1.90×)    16.53         architectures are profiled, and compared to the cost of shading using the
+ Stage, View 5          3.45 (2.26×)      4.12 (1.89×)        7.68 (1.01×)     7.78         reference materials.
+ Average                3.51 (4.14×)      4.40 (3.31×)        8.89 (1.64×)    14.54
+                                                                                               The frame time includes both general path tracing operations
+                                                                                            (light sampling, ray tracing, and control logic) as well as material
+32 neurons each). As expected, quality varies with the size of the                          sampling and evaluation. To estimate how much time is spent in
+decoder. The largest configuration, with 3 hidden layers and 64                             material shading, and thus the relative speedups of our neural mate-
+neurons, reproduces the reference material well, with most details                          rials over the reference materials, we setup a dedicated benchmark.
+and colors captured accurately. The errors appear mostly at grazing                         Since all neural material shaders in our system are running inline in
+angles of near-specular materials, e.g., the ceramic Teapot body                            the renderer, not as separate kernels, this has to be done with care;
+near to the silhouette. We tested a number of hyper-parameter                               we lock the path distribution to a simple cosine-weighted distribu-
+configurations, and while some successfully reduced the grazing                             tion, while ensuring that the compiler does not eliminate any of the
+angle artifacts (e.g., using 𝐿2 loss), the quality elsewhere degraded,                      material code. As a baseline, we measure the pure path tracing cost
+sometimes significantly. In order to escape this “zero-sum” game,                           using a material with constant color.
+we posit that another graphics prior is needed for handling Fresnel                            Table 5 and Figure 17 summarize our findings for two representa-
+effects; we leave this to future work.                                                      tive views of the Inkwell scene (Figure 15, view 1 & 2) and Stage
+   We include FLIP [Andersson et al. 2020] false-color error images in                      scene (Figure 16, view 3 & 4). The shading times with the neural
+corners to illustrate the perceived difference when toggling between                        BRDFs are 2.30× (3 × 64) to 9.06× (2 × 32) faster than the reference
+the neural and reference BRDFs renders; all images are also provided                        materials on average, with over an order of magnitude speedup for
+as part of the supplemental material to facilitate such inspection.                         several views and the mid-sized BRDF decoder (2 × 32).
+Table 3 lists average errors using a variety of standard image error                           Overall, the performance and visual fidelity scale in a predictable
+metrics. The supplemental also includes polar plots for the learned                         manner as neural BRDFs accommodate trading quality for perfor-
+materials with different decoder sizes.                                                     mance. Next, we analyze the scaling behavior in more detail.
+
+8.2    Runtime performance                                                                  8.3    Scalability
+The smallest network yields the best rendering performance, al-                             Figure 18 shows that performance scales favorably when increasing
+beit at reduced reconstruction accuracy. Table 4 lists the absolute                         the number of neural materials. For this test we render the Cake box
+performance in ms/SPP and the relative speed improvement over                               scene (Figure 14) and vary the number of (different) neural materials,
+rendering a GPU-optimized implementation of the reference ma-                               while keeping geometry and path distribution identical. Paths up to
+terial (all running on NVIDIA GeForce RTX 4090 GPU). The full                               ten vertices in length are traced and the scene also contains a small
+frame rendering times with the neural BRDFs are 1.64× (3 × 64) to                           number of traditional materials, in order to introduce significant
+4.14× (2 × 16) faster than the reference material on average.                               execution and data divergence.
+
+ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                                                                                                                Real-Time Neural Appearance Models       •   33:15
+
+
+         Rendering time (ms) for increasing number of neural materials        9   LIMITATIONS & FUTURE WORK
+        14
+                                                                                 Energy conservation and reciprocity. Because the neural material
+                                                                              is only an approximate fit of the input material, it is not guaranteed
+        12
+
+                                                                              to be energy conserving. Although we have not observed this to be
+        10
+
+
+                                                               3   ×   64
+                                                                              a problem in our tests, this could become an issue for high albedo
+         8
+                                                               2   ×   32
+                                                                              materials with high orders of bounces (e.g. white fur). Enforcing
+         6                                                                    energy conservation would require the network to output in a form
+         4                                                                    that is analytically integrable, or integrates to a known value. The
+         2
+                                                                              latter can be achieved with normalizing flows (as in [Müller et al.
+         0
+                                                                              2020]) at an increased evaluation cost. Our BRDF model is currently
+             1   2   3   4   6   8   12        16       20             25
+                                                                              not reciprocal, but reciprocity could be enforced with the modi-
+Fig. 18. Rendering times for path tracing a 1 SPP image of the Cake box
+                                                                              fied Rusinkiewicz encoding of directions [Zheng et al. 2021]. We
+scene with varying numbers of neural materials. The measurements show         opted for the Cartesian parameterization of directions that was more
+that our method is insensitive to the divergence introduced by path tracing   numerically stable in our experiments and yielded better visuals.
+scenes with many neural materials; rendering times stay near constant
+as material count increases. Two different BRDF decoder architectures            Displacement. We do not currently support effects that affect
+are studied. The path distribution is kept fixed to isolate the effects on    surface geometry, such as displacement mapping. We implemented
+performance from scaling the number of materials.                             the neural displacement approach of Kuznetsov et al. [2021], and
+                                                                              tested several variations that include geometric priors, but we found
+                                                                              that this approach is always outperformed by fixed-function ray
+                                                                              marching, both in terms of bandwidth and runtime. None of these
+   For very small numbers of neural materials, the network param-             approaches were sufficiently fast to reach our performance goals,
+eters fit in caches close to the shader cores, whereas with more              but we expect additional research to make them viable alternatives.
+materials the parameters are increasingly streamed in from L2 or
+global memory. Our approach based on a megakernel path tracer                    Filtering. Although neural prefiltering is effective at preventing
+with local work reordering manages to extract enough coherency                aliasing, we report that, while the finest level is very accurate, the
+to amortize the cost of memory loads well.                                    coarser levels of the latent pyramid tend to produce softer appear-
+                                                                              ance than the supersampled reference BRDF. This is likely because
+  Memory usage. The memory footprint is dominated by the 8-                   the inputs to the encoder correlate strongly with the appearance only
+channel, half-precision latent texture, requiring 256MB per 4k tex-           at the finest level. In case of coarser levels, the encoder consumes
+ture tile. The network weights are comparably small, requiring                prefiltered material parameters, where the correlation is weaker
+37kB for the 3x64 network configuration and 9.3kB for the 2x16                and the auto-encoder thus performs worse. Finetuning improves
+configuration.                                                                the quality somewhat, but cannot escape the initial local minimum.
+
+                                                                                 Alternative geometric priors. We tested a number of alternative
+   Discussion. It is difficult to do a direct comparison to previous          implementations of the rotation prior (Section 4.2), ranging from un-
+work as our focus is different; we show that neural materials can run         constrained, high-dimensional affine transforms inspired by the gen-
+efficiently in real-time shaders even in divergent workloads such as          erality of self-attention layers [Vaswani et al. 2017] to rotation-only
+path tracing. There are few examples of inferencing in traditional            matrices. Our final solution uses normalized (but not orthogonal)
+shaders. One exception is deep shading [Nalbach et al. 2017] that runs        normal n and tangent t from the network output, with bitangent
+a forward pass in GLSL for traditional deferred shading. Research             b = n × t/∥n × t∥. Additionally, we tested explicitly supervising
+on neural appearance models have generally used CUDA kernels,                 the extracted TBN frames against frames of the reference material,
+either directly or via machine learning frameworks.                           with an optional asymmetric loss [Vogels et al. 2018]. This occasion-
+   Fan et al. [2022] record all intersections to global memory and            ally improved the results (e.g., for glints), but the training requires
+shade in a deferred manner, precluding adaptiveness and paying                extensive hyperparameter tuning; hence we excluded it from results.
+the cost of memory transfers. The authors report a single BRDF
+evaluation per pixel with resolution 1920 × 1080 costing 5 ms on an              Training stability and time. We occasionally found training to
+NVIDIA RTX 2080Ti. NeuMIP [Kuznetsov et al. 2021] implement                   converge to local minima with large visual differences based on
+an interactive CUDA/OptiX-based path tracer and report similar                small perturbations of hyperparameters or weight initialization. For
+performance of 5 ms per evaluation at the same resolution/GPU.                instance, the smallest network configuration could not reliably pre-
+The paper is scarce on details; in personal communication it was              serve the highly specular glazing of the Teapot so we chose to
+stated that the reported 60 frames per second path tracing applies            include a version without it in our results (Figure 16). We want to
+to relatively short paths in a simple scene with a single material.           investigate robustness more closely, also while scaling to a larger
+Scaling to multiple materials is not explored.                                target material diversity. At the same time, we would like to sig-
+   We believe the scalability, handling of divergent shaders, and inte-       nificantly reduce training times (ideally from hours to minutes) to
+gration in real-time shading languages are important contributions            improve iteration times when developing further enhancements
+of our work for ease of adoption of neural materials more widely.             and to make the current iteration of the system more practical.
+
+                                                                                       ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+33:16 •    Tizian Zeltner, Fabrice Rousselle, Andrea Weidlich, Petrik Clarberg, Jan Novák, Benedikt Bitterli, Alex Evans, Tomáš Davidovič, Simon Kallweit, and Aaron Lefohn
+
+
+   Refraction. We evaluate our method only on purely reflective                             Petrik Clarberg, Simon Kallweit, Craig Kolb, Pawel Kozlowski, Yong He, Lifan Wu, and
+materials. Extending our model to transmissive materials poses the                              Edward Liu. 2022a. Research Advances Toward Real-Time Path Tracing. Game
+                                                                                                Developers Conference (GDC).
+following challenge: physically based renderers require knowing                             Petrik Clarberg, Simon Kallweit, Craig Kolb, Pawel Kozlowski, Yong He, Lifan Wu,
+the index of refraction of the material to maintain reciprocity after                           Edward Liu, Benedikt Bitterli, and Matt Pharr. 2022b. Real-Time Path Tracing and
+                                                                                                Beyond. HPG 2022 Keynote.
+refracting. While the network could be trained to produce the index                         Laurent Dinh, Jascha Sohl-Dickstein, and Samy Bengio. 2017. Density estimation
+as an additional output, it is difficult to guarantee that this trained                         using Real NVP. In International Conference on Learning Representations. https:
+value matches the actual behavior of the BRDF; this topic deserves                             //openreview.net/forum?id=HkpbnH9lx
+                                                                                            Jonathan Dupuy. 2015. Photorealistic Surface Rendering with Microfacet Theory. Ph. D.
+special attention in the future.                                                                Dissertation. Université Claude Bernard - Lyon I ; Université de Montréal.
+                                                                                            Jonathan Dupuy, Eric Heitz, Jean-Claude Iehl, Pierre Poulin, Fabrice Neyret, and Victor
+                                                                                                Ostromoukhov. 2013. Linear efficient antialiased displacement and reflectance
+10    CONCLUSION                                                                                mapping. ACM Transactions on Graphics 32, 6, Article 211 (Nov 2013), 11 pages.
+We present a complete real-time neural materials system. The model                              https://doi.org/10.1145/2508363.2508422
+                                                                                            Jonathan Dupuy and Wenzel Jakob. 2018. An adaptive parameterization for efficient
+jointly addresses evaluation, sampling, and filtering of highly com-                            material acquisition and rendering. ACM Transactions on Graphics 37, 6, Article 274
+plex and detailed materials. We achieve this by combining ideas                                (Dec 2018), 14 pages. https://doi.org/10.1145/3272127.3275059
+from prior works with new graphics priors and training strategies                           Jiahui Fan, Beibei Wang, Miloš Hašan, Jian Yang, and Ling-Qi Yan. 2022. Neural Layered
+                                                                                                BRDFs. In ACM SIGGRAPH 2022 Conference Proceedings (Vancouver, BC, Canada).
+to achieve higher quality and faster training. A key contribution                              Association for Computing Machinery, New York, NY, USA, Article 4, 8 pages.
+of our work is that such comprehensive solutions can be imple-                                  https://doi.org/10.1145/3528233.3530732
+                                                                                            Alban Gauthier, Robin Faury, Jérémy Levallois, Théo Thonat, Jean-Marc Thiery, and
+mented efficiently on modern graphics hardware; we propose to                                  Tamy Boubekeur. 2022. MIPNet: Neural Normal-to-Anisotropic-Roughness MIP
+deploy the neural network to the innermost rendering loop to reduce                             Mapping. ACM Transactions on Graphics 41, 6, Article 246 (Nov 2022), 12 pages.
+bandwidth requirements. In our tests, the neural BRDFs achieve                                  https://doi.org/10.1145/3550454.3555487
+                                                                                            Yong He, Kayvon Fatahalian, and Theresa Foley. 2018. Slang: Language Mechanisms for
+state-of-the-art rendering performance, outperform optimized GPU                                Extensible Real-time Shading Systems. ACM Transactions on Graphics 37, 4, Article
+implementations of reference multi-layered classical materials, and                             141 (Jul 2018), 13 pages. https://doi.org/10.1145/3197517.3201380
+scale to multiple materials in a scene. We believe the presented                            Wenzel Jakob, Andrea Weidlich, Andrew Beddini, Rob Pieké, Hanzhi Tang, Luca
+                                                                                                Fascione, and Johannes Hanika. 2019. Path Tracing in Production: Part 2: Mak-
+neural BRDFs can serve as “baked” versions of complex materials;                                ing Movies. In ACM SIGGRAPH 2019 Courses (Los Angeles, California). Asso-
+as well as increased performance and lower memory consumption,                                  ciation for Computing Machinery, New York, NY, USA, Article 20, 41 pages.
+                                                                                                https://doi.org/10.1145/3305366.3328085
+this enables easy interchange of arbitrarily complex materials be-                          Simon Kallweit, Petrik Clarberg, Craig Kolb, Tomáš Davidovič, Kai-Hwa Yao, Theresa
+tween different workflows and tools, simply by exchanging a fixed                               Foley, Yong He, Lifan Wu, Lucy Chen, Tomas Akenine-Möller, Chris Wyman, Cyril
+set of latent textures and a small table of MLP weights. Lastly, we                             Crassin, and Nir Benty. 2022. The Falcor Rendering Framework (version 5.2). https:
+                                                                                               //github.com/NVIDIAGameWorks/Falcor
+hope this article will stimulate adoption of small neural networks                          Alexandr Kuznetsov, Miloš Hašan, Zexiang Xu, Ling-Qi Yan, Bruce Walter,
+in real-time rendering.                                                                         Nima Khademi Kalantari, Steve Marschner, and Ravi Ramamoorthi. 2019. Learning
+                                                                                                generative models for rendering specular microgeometry. ACM Transactions on
+ACKNOWLEDGMENTS                                                                                 Graphics 38, 6, Article 225 (Nov 2019), 14 pages. https://doi.org/10.1145/3355089.
+                                                                                                3356525
+We want to thank Toni Bratincevic, Davide Di Giannantonio Potente,                          Alexandr Kuznetsov, Krishna Mullia, Zexiang Xu, Miloš Hašan, and Ravi Ramamoorthi.
+and Kevin Margo for their help creating the reference objects, Yong                             2021. NeuMIP: multi-resolution neural materials. ACM Transactions on Graphics 40,
+                                                                                                4, Article 175 (Jul 2021), 13 pages. https://doi.org/10.1145/3450626.3459795
+He for evolving the Slang language to support this project, Craig                           Alexandr Kuznetsov, Xuezheng Wang, Krishna Mullia, Fujun Luan, Zexiang Xu, Miloš
+Kolb for his help with the 3D asset importer, Justin Holewinski                                 Hašan, and Ravi Ramamoorthi. 2022. Rendering Neural Materials on Curved Sur-
+                                                                                                faces. In ACM SIGGRAPH 2022 Conference Proceedings (Vancouver, BC, Canada).
+and Patrick Neill for low-level compiler and GPU driver support,                               Association for Computing Machinery, New York, NY, USA, Article 9, 9 pages.
+and Karthik Vaidyanathan for providing the TensorCore support                                   https://doi.org/10.1145/3528233.3530721
+in Slang. We also thank Eugene d’Eon, Steve Marschner, Thomas                               Samuli Laine, Tero Karras, and Timo Aila. 2013. Megakernels considered harmful:
+                                                                                               wavefront path tracing on GPUs. In Proceedings of the 5th High-Performance Graphics
+Müller, Marco Salvi, and Bart Wronski for their valuable input. The                             Conference (Anaheim, California). Association for Computing Machinery, New York,
+material test blob in Figure 14 was created by Robin Marin and                                  NY, USA, 137–143. https://doi.org/10.1145/2492045.2492060
+released under CC (https://creativecommons.org/licenses/by/3.0/).                           Wojciech Matusik, Hanspeter Pfister, Matt Brand, and Leonard McMillan. 2003. A data-
+                                                                                                driven reflectance model. ACM Transactions on Graphics 22, 3 (Jul 2003), 759–769.
+                                                                                                https://doi.org/10.1145/882262.882343
+REFERENCES                                                                                  Ben Mildenhall, Pratul P. Srinivasan, Matthew Tancik, Jonathan T. Barron, Ravi Ra-
+                                                                                                mamoorthi, and Ren Ng. 2020. NeRF: Representing Scenes as Neural Radiance
+Tomas Akenine-Möller, Cyril Crassin, Jakub Boksansky, Laurent Belcour, Alexey Pan-              Fields for View Synthesis. In Computer Vision – ECCV 2020. Springer International
+   teleev, and Oli Wright. 2021. Improved Shader and Texture Level of Detail Using              Publishing, Cham, 405–421.
+   Ray Cones. Journal of Computer Graphics Techniques (JCGT) 10, 1 (January 2021),          Thomas Müller, Alex Evans, Christoph Schied, and Alexander Keller. 2022. Instant
+   1–24. http://jcgt.org/published/0010/01/01/                                                  neural graphics primitives with a multiresolution hash encoding. ACM Transactions
+Pontus Andersson, Jim Nilsson, Tomas Akenine-Möller, Magnus Oskarsson, Kalle                    on Graphics 41, 4, Article 102 (Jul 2022), 15 pages. https://doi.org/10.1145/3528223.
+   Åström, and Mark D. Fairchild. 2020. FLIP: A Difference Evaluator for Alternating            3530127
+   Images. Proceedings of the ACM on Computer Graphics and Interactive Techniques 3,        Thomas Müller, Brian Mcwilliams, Fabrice Rousselle, Markus Gross, and Jan Novák.
+   2, Article 15 (Aug 2020), 23 pages. https://doi.org/10.1145/3406183                          2019. Neural Importance Sampling. ACM Transactions on Graphics 38, 5, Article 145
+Hendrik Baatz, Jonathan Granskog, Marios Papas, Fabrice Rousselle, and Jan Novák.              (Oct 2019), 19 pages. https://doi.org/10.1145/3341156
+   2022. NeRF-Tex: Neural Reflectance Field Textures. Computer Graphics Forum 41, 6,        Thomas Müller, Fabrice Rousselle, Alexander Keller, and Jan Novák. 2020. Neural
+   287–301. https://doi.org/10.1111/cgf.14449                                                   control variates. ACM Transactions on Graphics 39, 6, Article 243 (Nov 2020), 19 pages.
+Yaoyi Bai, Songyin Wu, Zheng Zeng, Beibei Wang, and Ling-Qi Yan. 2023. BSDF                     https://doi.org/10.1145/3414685.3417804
+   Importance Baking: A Lightweight Neural Solution to Importance Sampling General          Oliver Nalbach, Elena Arabadzhiyska, Dushyant Mehta, Hans-Peter Seidel, and Tobias
+   Parametric BSDFs. arXiv:2210.13681                                                           Ritschel. 2017. Deep Shading: Convolutional Neural Networks for Screen Space
+Steve Bako, Pradeep Sen, and Anton Kaplanyan. 2023. Deep Appearance Prefiltering.               Shading. Computer Graphics Forum 36, 4, 65–78. https://doi.org/10.1111/cgf.13225
+   ACM Transactions on Graphics 42, 2, Article 23 (Jan 2023), 23 pages. https://doi.org/
+   10.1145/3570327
+
+
+ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+                                                                                                                              Real-Time Neural Appearance Models       •   33:17
+
+
+Marc Olano and Dan Baker. 2010. LEAN mapping. In Proceedings of the 2010 ACM                  The diffuse PDF 𝑝 d is a cosine-weighted distribution but tilted
+    SIGGRAPH Symposium on Interactive 3D Graphics and Games (Washington, D.C.).            by a normal vector computed from a predicted 2D surface slope
+    Association for Computing Machinery, New York, NY, USA, 181–188. https://doi.
+    org/10.1145/1730804.1730834                                                            (𝜇 d,x, 𝜇d,y ) as
+Matt Pharr, Wenzel Jakob, and Greg Humphreys. 2016. Physically Based Rendering,
+    Third Edition: From Theory to Implementation. Morgan Kaufmann.                                            nd = Normalize([−𝜇 d,x, −𝜇 d,y, 1]).                          (6)
+Gilles Rainer, Abhijeet Ghosh, Wenzel Jakob, and Tim Weyrich. 2020. Unified Neural
+    Encoding of BTFs. Computer Graphics Forum 39, 2, 167–178. https://doi.org/10.
+                                                                                              The specular PDF 𝑝 s is a standard microfacet density using a
+    1111/cgf.13921                                                                         Trowbridge-Reitz (GGX) NDF [Trowbridge and Reitz 1975; Walter
+Gilles Rainer, Wenzel Jakob, Abhijeet Ghosh, and Tim Weyrich. 2019. Neural BTF             et al. 2007] with elliptical anisotropy and non-centered mean surface
+    Compression and Interpolation. Computer Graphics Forum 38, 2, 235–244. https:
+    //doi.org/10.1111/cgf.13633                                                            slopes [Dupuy 2015]:
+Daniel Rebain, Mark J. Matthews, Kwang Moo Yi, Gopal Sharma, Dmitry Lagun, and
+                                                                                                                          M −1 𝝎h     det M −1
+                                                                                                                                              
+    Andrea Tagliasacchi. 2023. Attention Beats Concatenation for Conditioning Neural
+                                                                                                                                                         1
+                                                                                                    𝑝 s (𝝎o ) = 𝐷 std                                            , (7)
+    Fields. Transactions on Machine Learning Research (2023). https://openreview.net/                                   ||M −1 𝝎h || ||M −1 𝝎h || 3 4 |𝝎o · 𝝎h |
+    forum?id=GzqdMrFQsE
+Szymon Rusinkiewicz. 1998. A New Change of Variables for Efficient BRDF Represen-          where 𝝎h = Normalize(𝝎i + 𝝎o ) is the half vector and 𝐷 std is the
+    tation. In Rendering Techniques ’98. Springer Vienna, Vienna, 11–22.                   isotropic NDF with unit roughness (𝛼 = 1), transformed based on
+Doug Smythe and Jonathan Stone. 2021.                          MaterialX: An Open
+    Standard for Network-Based CG Object Looks, Version 1.38.                                                   𝛼x
+                                                                                                                         √︁ 0        −𝜇 s,x 
+    https://materialx.org/assets/MaterialX.v1.38.Spec.pdf.
+                                                                                                               
+                                                                                                          M = 𝛼 y 𝜌 𝛼 y 1 − 𝜌 2 −𝜇 s,y  .              (8)
+Alejandro Sztrajman, Gilles Rainer, Tobias Ritschel, and Tim Weyrich. 2021. Neural
+    BRDF Representation and Importance Sampling. Computer Graphics Forum 40, 6,
+                                                                                                                0          0          1     
+                                                                                                                                            
+    332–346. https://doi.org/10.1111/cgf.14335
+Justus Thies, Michael Zollhöfer, and Matthias Nießner. 2019. Deferred neural rendering:    Here, the elliptical anisotropy is described by two orthogonal rough-
+    image synthesis using neural textures. ACM Transactions on Graphics 38, 4, Article     ness values 𝛼 x , 𝛼 y with correlation parameter 𝜌 and the mean of
+    66 (Jul 2019), 12 pages. https://doi.org/10.1145/3306346.3323035                       the NDF is offset by a 2D surface slope (𝜇 s,x, 𝜇s,y ).
+T. S. Trowbridge and K. P. Reitz. 1975. Average Irregularity Representation of a Rough
+    Surface for Ray Reflection. Journal of the Optical Society of America 65, 5 (1975),       The last two terms in Equation (7) are the Jacobian determinants
+    531–536.                                                                               accounting for the transformation (and subsequent normalization)
+Karthik Vaidyanathan, Marco Salvi, Bartlomiej Wronski, Tomas Akenine-Moller, Pontus
+    Ebelin, and Aaron Lefohn. 2023. Random-Access Neural Compression of Material
+                                                                                           of 𝝎h , as well as the change of variables between 𝝎h and 𝝎o .
+    Textures. ACM Transactions on Graphics 42, 4, Article 88 (Jul 2023), 25 pages.
+    https://doi.org/10.1145/3592407                                                           Sampling. The sample transform 𝑊 first selects one of the two
+Dietger van Antwerpen. 2011. Improving SIMD efficiency for parallel Monte Carlo            PDF terms (Equation (5)) based on the relative weights 𝑤 d and 𝑤 s .
+    light transport on the GPU. In Proceedings of the ACM SIGGRAPH Symposium on            If the diffuse component is chosen we simply generate a cosine-
+    High Performance Graphics (Vancouver, British Columbia, Canada). Association for
+    Computing Machinery, New York, NY, USA, 41–50. https://doi.org/10.1145/2018323.        weighted outgoing direction 𝝎o and tilt it based on nd . Otherwise,
+    2018330                                                                                we perform specular reflection along a sampled half-vector
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N
+    Gomez, Łukasz Kaiser, and Illia Polosukhin. 2017. Attention is All you Need. In                              𝝎h = Normalize(M · 𝑊std (u))                               (9)
+    Advances in Neural Information Processing Systems, Vol. 30. Curran Associates, Inc.
+Eric Veach and Leonidas J. Guibas. 1995. Optimally combining sampling techniques for       where 𝑊std is the usual isotropic NDF sampling technique (𝛼 = 1).
+    Monte Carlo rendering. In Proceedings of the 22nd Annual Conference on Computer
+    Graphics and Interactive Techniques (SIGGRAPH ’95). Association for Computing             Network prediction. We dropped the explicit dependence of 𝑝 and
+    Machinery, New York, NY, USA, 419–428. https://doi.org/10.1145/218380.218498           𝑊 on 𝝎i and x above for brevity, but our full set of 9 proxy pa-
+Thijs Vogels, Fabrice Rousselle, Brian Mcwilliams, Gerhard Röthlin, Alex Harvill, David
+    Adler, Mark Meyer, and Jan Novák. 2018. Denoising with kernel prediction and           rameters {𝑤 d, 𝜇d,x, 𝜇d,y, 𝑤 s, 𝛼 x, 𝛼 y, 𝜌, 𝜇s,x, 𝜇s,y } are the result of an
+    asymmetric loss functions. ACM Transactions on Graphics 37, 4, Article 124 (Jul        MLP evaluation that takes these as input. To ensure that all in-
+    2018), 15 pages. https://doi.org/10.1145/3197517.3201388                               ferred parameters lie in their respective valid ranges (𝛼 ∈ [0, 1], 𝜌 ∈
+Bruce Walter, Stephen R. Marschner, Hongsong Li, and Kenneth E. Torrance. 2007.
+    Microfacet models for refraction through rough surfaces. In Proceedings of the         [−1, 1], 𝜇 ∈ [−∞, +∞]) we append an appropriate final activation to
+    18th Eurographics Conference on Rendering Techniques (Grenoble, France) (EGSR’07).     each network output based on quadratic approximations of tanh(𝑥)
+    Eurographics Association, Goslar, DEU, 195–206.
+Bing Xu, Liwen Wu, Miloš Hašan, Fujun Luan, Iliyan Georgiev, Zexiang Xu, and Ravi
+                                                                                           and sinh(𝑥). Lastly, 𝑤 d and 𝑤 s are processed by the softmax func-
+    Ramamoorthi. 2023. NeuSample: Importance Sampling for Neural Materials. In             tion to form valid mixing weights that add up to one.
+    ACM SIGGRAPH 2023 Conference Proceedings (Los Angeles, CA, USA). Association
+    for Computing Machinery, New York, NY, USA, Article 41, 10 pages. https://doi.
+    org/10.1145/3588432.3591524
+Chuankun Zheng, Ruzhang Zheng, Rui Wang, Shuang Zhao, and Hujun Bao. 2021.
+    A Compact Representation of Measured BRDFs Using Neural Processes. ACM
+    Transactions on Graphics 41, 2, Article 14 (Nov 2021), 15 pages. https://doi.org/10.
+    1145/3490385
+
+
+A    IMPORTANCE SAMPLING DETAILS
+The following outlines the implementation details of our analytic
+proxy model used for importance sampling.
+
+   Probability density. Like prior work [Fan et al. 2022; Sztrajman
+et al. 2021] our sampling density is aS linear blend between a diffuse
+and specular term
+
+      𝑝 (𝝎o ) = 𝑤 d · 𝑝 d (𝝎o ) + 𝑤 s · 𝑝 s (𝝎o ),       with 𝑤 d + 𝑤 s = 1.        (5)
+
+                                                                                                     ACM Trans. Graph., Vol. 43, No. 3, Article 33. Publication date: June 2024.
+

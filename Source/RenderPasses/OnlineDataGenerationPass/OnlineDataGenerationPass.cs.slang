@@ -33,6 +33,8 @@ struct BsdfSampleData
     float4 bootstrapFeature3;
     float4 bootstrapFeature4;
     float4 bootstrapFeature5;
+    float4 bootstrapFeature6;
+    float4 bootstrapFeature7;
 #endif
 };
 
@@ -167,6 +169,8 @@ void clearBootstrapFeatures(inout BsdfSampleData data)
     data.bootstrapFeature3 = 0.f.xxxx;
     data.bootstrapFeature4 = 0.f.xxxx;
     data.bootstrapFeature5 = 0.f.xxxx;
+    data.bootstrapFeature6 = 0.f.xxxx;
+    data.bootstrapFeature7 = 0.f.xxxx;
 }
 
 #if LEGACY_FEATURES_ENABLED
@@ -189,6 +193,8 @@ void writeMaterialBootstrapFeatures(const ShadingData sd, inout BsdfSampleData d
     data.bootstrapFeature3 = features.feature3;
     data.bootstrapFeature4 = features.feature4;
     data.bootstrapFeature5 = features.feature5;
+    data.bootstrapFeature6 = features.feature6;
+    data.bootstrapFeature7 = features.feature7;
 }
 #endif
 #endif
@@ -225,8 +231,9 @@ void main(uint3 threadId : SV_DispatchThreadID)
     // hemisphere. This covers the full valid half/difference domain instead of
     // using the conservative theta_h + theta_d <= pi/2 shortcut.
     //
-    // Seed stream 1 (woSeed) drives (phi_h, phi_d) — the azimuthal angles.
-    // Seed stream 2 (wiSeed) drives (u_thetaD, u_thetaH) — the elevation angles.
+    // Seed stream 1 (woSeed) drives (phi_h, phi_d), the azimuthal angles.
+    // Seed stream 2 (wiSeed) drives theta_d and theta_h, both sampled uniformly
+    // over their angular domains [0, pi/2).
     //
     // Note: in this file wi = view/incident direction (toward viewer),
     //       wo = light direction (away from surface). Both must have z > 0.
@@ -239,7 +246,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
     for (uint attempt = 0u; attempt < kMaxDirectionAttempts; ++attempt)
     {
         // --- Half vector h in tangent space (normal = (0,0,1)) ---
-        float cosTheta_h = lerp(kHorizonEps, 1.f, rand(wiSeed));
+        float theta_h = acos(kHorizonEps) * rand(wiSeed);
+        float cosTheta_h = cos(theta_h);
         float sinTheta_h = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
         float phi_h = M_2PI * rand(woSeed);
 
@@ -253,9 +261,12 @@ void main(uint3 threadId : SV_DispatchThreadID)
         makeBasis(h, h_tangent, h_bitangent);
 
         // --- Difference direction around h ---
-        float cosTheta_d = lerp(kHorizonEps, 1.f, rand(wiSeed));
+        float theta_d = acos(kHorizonEps) * rand(wiSeed);
+        float cosTheta_d = cos(theta_d);
         float sinTheta_d = sqrt(max(0.f, 1.f - cosTheta_d * cosTheta_d));
-        float phi_d = M_2PI * rand(woSeed);
+        // Reciprocity makes phi_d and phi_d + pi equivalent, so sample the
+        // canonical Rusinkiewicz difference-azimuth domain [0, pi).
+        float phi_d = M_PI * rand(woSeed);
 
         float3 candidateWi = sinTheta_d * cos(phi_d) * h_tangent
                            + sinTheta_d * sin(phi_d) * h_bitangent

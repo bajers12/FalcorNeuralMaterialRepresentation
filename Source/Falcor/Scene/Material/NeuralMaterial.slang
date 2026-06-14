@@ -1,5 +1,6 @@
 import Scene.Scene;
 import Scene.Material.MaterialSystem;
+import Scene.Material.ShadingUtils;
 import Rendering.Materials.IMaterial;
 import Rendering.Materials.IMaterialInstance;
 import Utils.Math.ShadingFrame;
@@ -557,7 +558,7 @@ float3 evalNeuralBRDFFromLatents(
         // residuals around N=(0,0,1), T=(1,0,0), and T is not orthogonalized.
         float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2] + 1.f));
         float3 T = neuralSafeNormalize(float3(sf[sfBase + 3] + 1.f, sf[sfBase + 4], sf[sfBase + 5]));
-        float3 B = cross(N, T);
+        float3 B = neuralSafeNormalize(cross(N, T));
 
         float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
         float3 woPred = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
@@ -1000,6 +1001,7 @@ import Scene.Material.MaterialSystem;
 struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 {
     NeuralMaterialData data = {};
+    float3 carrierNormal = float3(0.f, 0.f, 1.f);
     uint defaultSamplerID = 0;
     float2 uv = float2(0.f);
     float neuralLod = 0.f;
@@ -1010,6 +1012,11 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
     bool usePaperStochasticFiltering()
     {
         return !neuralForceMipEnabled(data) && neuralFilteringMode(data) == kNeuralFilteringPaperStochastic;
+    }
+
+    ShadingFrame carrierFrame(const ShadingData sd)
+    {
+        return ShadingFrame(carrierNormal, sd.tangentW);
     }
 
     void fetchLatentsForShading<S : ISampleGenerator>(inout S sg, out float4 z0, out float4 z1, out float selectedMip)
@@ -1029,8 +1036,9 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 
     float3 eval<S : ISampleGenerator>(const ShadingData sd, const float3 wo, inout S sg)
     {
-        float3 wiLocal = sd.frame.toLocal(sd.V);
-        float3 woLocal = sd.frame.toLocal(wo);
+        ShadingFrame sf = carrierFrame(sd);
+        float3 wiLocal = sf.toLocal(sd.V);
+        float3 woLocal = sf.toLocal(wo);
         float4 z0;
         float4 z1;
         float selectedMip;
@@ -1056,7 +1064,8 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
     {
         result = (BSDFSample)0;
 
-        float3 wiLocal = sd.frame.toLocal(sd.V);
+        ShadingFrame sf = carrierFrame(sd);
+        float3 wiLocal = sf.toLocal(sd.V);
         float4 z0;
         float4 z1;
         float selectedMip;
@@ -1068,7 +1077,7 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
             float3 woLocalDebug = sampleCosineHemisphere(u);
             float debugPdf = evalCosinePdf(woLocalDebug);
             if (debugPdf <= 0.f) return false;
-            result.wo = sd.frame.fromLocal(woLocalDebug);
+            result.wo = sf.fromLocal(woLocalDebug);
             result.pdf = debugPdf;
             result.weight = neuralMipDebugColor(data, selectedMip, z0, z1);
             result.lobeType = uint(LobeType::DiffuseReflection);
@@ -1108,7 +1117,7 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         if (pdf <= 0.f)
             return false;
 
-        result.wo = sd.frame.fromLocal(woLocal);
+        result.wo = sf.fromLocal(woLocal);
         result.pdf = pdf;
         result.weight = fcos / pdf;
         result.lobeType = sampledLobeType;
@@ -1117,11 +1126,12 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 
     float evalPdf(const ShadingData sd, const float3 wo, bool useImportanceSampling = true)
     {
-        float3 woLocal = sd.frame.toLocal(wo);
+        ShadingFrame sf = carrierFrame(sd);
+        float3 woLocal = sf.toLocal(wo);
         if (!useImportanceSampling)
             return evalCosinePdf(woLocal);
 
-        float3 wiLocal = sd.frame.toLocal(sd.V);
+        float3 wiLocal = sf.toLocal(sd.V);
         if (neuralDebugMode(data) != 0u)
             return evalCosinePdf(woLocal);
         if (neuralSamplingMode(data) == kNeuralSamplingCosine || !neuralHasLearnedSampler(data))
@@ -1153,7 +1163,7 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
         BSDFProperties p = {};
         p.emission = 0.f.xxx;
         p.roughness = 0.25f;
-        p.guideNormal = sd.frame.N;
+        p.guideNormal = carrierNormal;
         p.flags = 0;
         p.diffuseReflectionAlbedo = 0.5.xxx;
         p.diffuseTransmissionAlbedo = 0.f.xxx;
@@ -1176,6 +1186,12 @@ struct NeuralMaterial : MaterialBase, IMaterial
     {
         NeuralMaterialInstance m = {};
         m.data = data;
+        ShadingFrame sf = sd.frame;
+        if (isAdjustShadingNormalEnabled(hints))
+        {
+            adjustShadingNormal(sd, sf);
+        }
+        m.carrierNormal = sf.N;
         m.defaultSamplerID = header.getDefaultTextureSamplerID();
         m.uv = sd.uv;
         m.neuralLod = computeNeuralLatentLod(ms, data, sd);

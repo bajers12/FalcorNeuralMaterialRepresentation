@@ -147,6 +147,7 @@ class TrainingRunLogger:
             "training": {
                 "max_epochs": int(self.cfg.max_epochs),
                 "encoder_bootstrap_epochs": int(self.cfg.encoder_bootstrap_epochs),
+                "total_epochs": int(self.cfg.encoder_bootstrap_epochs + self.cfg.max_epochs),
                 "tex_w": int(self.cfg.tex_w),
                 "tex_h": int(self.cfg.tex_h),
                 "train_latent_texture": bool(self.cfg.train_latent_texture),

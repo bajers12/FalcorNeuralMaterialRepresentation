@@ -9,6 +9,8 @@ struct BootstrapFeatureData
     float4 feature3;
     float4 feature4;
     float4 feature5;
+    float4 feature6;
+    float4 feature7;
 };
 
 [anyValueSize(128)]

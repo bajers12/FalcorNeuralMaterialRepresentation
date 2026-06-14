@@ -72,8 +72,8 @@ namespace Falcor
     ref<Sampler> NeuralMaterial::createLatentSampler() const
     {
         Sampler::Desc desc;
-        desc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Linear);
-        desc.setMaxAnisotropy(8);
+        desc.setFilterMode(TextureFilteringMode::Linear, TextureFilteringMode::Linear, TextureFilteringMode::Point);
+        desc.setMaxAnisotropy(1);
         desc.setLodParams(-1000.f, 1000.f, mLatentLodBias);
         return mpDevice->createSampler(desc);
     }

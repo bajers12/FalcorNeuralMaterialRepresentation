@@ -1,4 +1,4 @@
-#include "ThreeLayeredGGXMaterial.h"
+#include "ThreeLayeredGGXNoHeightMaterial.h"
 
 #include "MaterialSystem.h"
 #include "Core/API/Device.h"
@@ -19,20 +19,14 @@ namespace Falcor
 {
     namespace
     {
-        const std::string kShaderFile = "Scene/Material/ThreeLayeredGGXMaterial.slang";
+        const std::string kShaderFile = "Scene/Material/ThreeLayeredGGXNoHeightMaterial.slang";
         const std::vector<std::string> kBootstrapFeatureNames = {
-            "attenuated_base_color.r",
-            "attenuated_base_color.g",
-            "attenuated_base_color.b",
+            "base_color.r",
+            "base_color.g",
+            "base_color.b",
             "base_roughness",
             "mid_roughness",
             "coat_roughness",
-            "base_weight",
-            "mid_weight",
-            "coat_weight",
-            "attenuation.r",
-            "attenuation.g",
-            "attenuation.b",
             "base_normal.x",
             "base_normal.y",
             "base_normal.z",
@@ -51,40 +45,38 @@ namespace Falcor
             "coat_tangent.x",
             "coat_tangent.y",
             "coat_tangent.z",
-            "thickness",
+            "dust_coverage",
         };
 
-        MaterialType getThreeLayeredGGXMaterialType()
+        MaterialType getThreeLayeredGGXNoHeightMaterialType()
         {
-            static MaterialType sType = registerMaterialType("ThreeLayeredGGXMaterial");
+            static MaterialType sType = registerMaterialType("ThreeLayeredGGXNoHeightMaterial");
             return sType;
         }
     }
 
-    ThreeLayeredGGXMaterial::ThreeLayeredGGXMaterial(ref<Device> pDevice, const std::string& name)
-        : Material(pDevice, name, getThreeLayeredGGXMaterialType())
+    ThreeLayeredGGXNoHeightMaterial::ThreeLayeredGGXNoHeightMaterial(ref<Device> pDevice, const std::string& name)
+        : Material(pDevice, name, getThreeLayeredGGXNoHeightMaterialType())
     {
         setupTextureSlots();
         markUpdates(UpdateFlags::DataChanged | UpdateFlags::ResourcesChanged | UpdateFlags::CodeChanged);
     }
 
-    ThreeLayeredGGXMaterial::ThreeLayeredGGXMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
-        : ThreeLayeredGGXMaterial(std::move(pDevice), name)
+    ThreeLayeredGGXNoHeightMaterial::ThreeLayeredGGXNoHeightMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
+        : ThreeLayeredGGXNoHeightMaterial(std::move(pDevice), name)
     {
         loadTextureSet(textureDirectory);
     }
 
-    void ThreeLayeredGGXMaterial::setupTextureSlots()
+    void ThreeLayeredGGXNoHeightMaterial::setupTextureSlots()
     {
         mTextureSlotInfo[(uint32_t)TextureSlot::BaseColor] = {"baseColor", TextureChannelFlags::RGB, true};
-        mTextureSlotInfo[(uint32_t)TextureSlot::Specular] = {"roughness", TextureChannelFlags::Red, false};
         mTextureSlotInfo[(uint32_t)TextureSlot::Normal] = {"normal", TextureChannelFlags::RGB, false};
-        mTextureSlotInfo[(uint32_t)TextureSlot::Displacement] = {"displacement", TextureChannelFlags::Red, false};
         mTextureSlotInfo[(uint32_t)TextureSlot::Emissive] = {"layerRoughness", TextureChannelFlags::RGB, false};
-        mTextureSlotInfo[(uint32_t)TextureSlot::Transmission] = {"layerWeights", TextureChannelFlags::RGB, false};
+        mTextureSlotInfo[(uint32_t)TextureSlot::Index] = {"dustCoverage", TextureChannelFlags::Red, false};
     }
 
-    void ThreeLayeredGGXMaterial::renderTextureInfo(Gui::Widgets& widget, const char* label, const ref<Texture>& pTexture)
+    void ThreeLayeredGGXNoHeightMaterial::renderTextureInfo(Gui::Widgets& widget, const char* label, const ref<Texture>& pTexture)
     {
         if (!pTexture) return;
 
@@ -96,7 +88,7 @@ namespace Falcor
         widget.image(label, pTexture.get(), float2(100.f));
     }
 
-    ref<Texture> ThreeLayeredGGXMaterial::loadExrTexture(const std::filesystem::path& path, bool singleChannel) const
+    ref<Texture> ThreeLayeredGGXNoHeightMaterial::loadExrTexture(const std::filesystem::path& path, bool singleChannel) const
     {
         try
         {
@@ -187,21 +179,19 @@ namespace Falcor
         }
         catch (const std::exception& e)
         {
-            logWarning("ThreeLayeredGGXMaterial: OpenEXR fallback failed for '{}': {}", path.string(), e.what());
+            logWarning("ThreeLayeredGGXNoHeightMaterial: OpenEXR fallback failed for '{}': {}", path.string(), e.what());
             return nullptr;
         }
     }
 
-    bool ThreeLayeredGGXMaterial::renderUI(Gui::Widgets& widget)
+    bool ThreeLayeredGGXNoHeightMaterial::renderUI(Gui::Widgets& widget)
     {
         bool dirty = Material::renderUI(widget);
 
         renderTextureInfo(widget, "Base color", getBaseColorTexture());
-        renderTextureInfo(widget, "Roughness", getRoughnessTexture());
         renderTextureInfo(widget, "Normal", getNormalTexture());
-        renderTextureInfo(widget, "Displacement", getDisplacementTexture());
         renderTextureInfo(widget, "Packed layer roughness", getLayerRoughnessTexture());
-        renderTextureInfo(widget, "Packed layer weights", getLayerWeightTexture());
+        renderTextureInfo(widget, "Dust coverage", getDustCoverageTexture());
 
         bool enableBaseLayer = mData.enableBaseLayer != 0;
         if (widget.checkbox("Enable base layer", enableBaseLayer))
@@ -231,34 +221,21 @@ namespace Falcor
             markUpdates(UpdateFlags::DataChanged);
         }
 
-        bool showThickness = mData.showThickness != 0;
-        if (widget.checkbox("Show thickness debug", showThickness))
-        {
-            mData.showThickness = showThickness ? 1u : 0u;
-            markUpdates(UpdateFlags::DataChanged);
-        }
-
         if (widget.var("Base F0", mData.baseF0, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Mid F0", mData.midF0, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Coat F0", mData.coatF0, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Roughness scale", mData.roughnessScale, 0.f, 4.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Roughness bias", mData.roughnessBias, -1.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
-        if (widget.var("Base weight scale", mData.baseWeightScale, 0.f, 4.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
-        if (widget.var("Mid weight scale", mData.midWeightScale, 0.f, 4.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
-        if (widget.var("Coat weight scale", mData.coatWeightScale, 0.f, 4.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
+        if (widget.var("Dust coverage scale", mData.dustCoverageScale, 0.f, 4.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Base normal flatten", mData.baseNormalFlatten, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Mid normal flatten", mData.midNormalFlatten, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Coat normal flatten", mData.coatNormalFlatten, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
-        if (widget.var("Height scale", mData.heightScale, 0.f, 100.f, 0.1f)) markUpdates(UpdateFlags::DataChanged);
-        if (widget.var("Thickness scale", mData.thicknessScale, 0.f, 100.f, 0.1f)) markUpdates(UpdateFlags::DataChanged);
-        if (widget.var("Absorption color", mData.absorptionColor, 0.f, 10.f, 0.05f)) markUpdates(UpdateFlags::DataChanged);
-        if (widget.var("Microfacet samples", mData.microfacetSamples, 1u, 64u)) markUpdates(UpdateFlags::DataChanged);
 
         dirty |= mUpdates != UpdateFlags::None;
         return dirty;
     }
 
-    Material::UpdateFlags ThreeLayeredGGXMaterial::update(MaterialSystem* pOwner)
+    Material::UpdateFlags ThreeLayeredGGXNoHeightMaterial::update(MaterialSystem* pOwner)
     {
         FALCOR_ASSERT(pOwner);
 
@@ -272,11 +249,9 @@ namespace Falcor
         }
 
         updateTextureHandle(pOwner, TextureSlot::BaseColor, mData.texBaseColor);
-        updateTextureHandle(pOwner, TextureSlot::Specular, mData.texRoughness);
         updateTextureHandle(pOwner, TextureSlot::Normal, mData.texNormal);
-        updateTextureHandle(pOwner, TextureSlot::Displacement, mData.texDisplacement);
         updateTextureHandle(pOwner, TextureSlot::Emissive, mData.texLayerRoughness);
-        updateTextureHandle(pOwner, TextureSlot::Transmission, mData.texLayerWeights);
+        updateTextureHandle(pOwner, TextureSlot::Index, mData.texDustCoverage);
         updateDefaultTextureSamplerID(pOwner, mpSampler);
 
         UpdateFlags updates = mUpdates;
@@ -284,9 +259,9 @@ namespace Falcor
         return updates;
     }
 
-    bool ThreeLayeredGGXMaterial::isEqual(const ref<Material>& pOther) const
+    bool ThreeLayeredGGXNoHeightMaterial::isEqual(const ref<Material>& pOther) const
     {
-        auto p = dynamic_ref_cast<ThreeLayeredGGXMaterial>(pOther);
+        auto p = dynamic_ref_cast<ThreeLayeredGGXNoHeightMaterial>(pOther);
         if (!p) return false;
         return isBaseEqual(*p) &&
                mData.baseF0 == p->mData.baseF0 &&
@@ -294,12 +269,7 @@ namespace Falcor
                mData.coatF0 == p->mData.coatF0 &&
                mData.roughnessScale == p->mData.roughnessScale &&
                mData.roughnessBias == p->mData.roughnessBias &&
-               mData.thicknessScale == p->mData.thicknessScale &&
-               mData.heightScale == p->mData.heightScale &&
-               all(mData.absorptionColor == p->mData.absorptionColor) &&
-               mData.baseWeightScale == p->mData.baseWeightScale &&
-               mData.midWeightScale == p->mData.midWeightScale &&
-               mData.coatWeightScale == p->mData.coatWeightScale &&
+               mData.dustCoverageScale == p->mData.dustCoverageScale &&
                mData.baseNormalFlatten == p->mData.baseNormalFlatten &&
                mData.midNormalFlatten == p->mData.midNormalFlatten &&
                mData.coatNormalFlatten == p->mData.coatNormalFlatten &&
@@ -307,34 +277,30 @@ namespace Falcor
                mData.enableMidLayer == p->mData.enableMidLayer &&
                mData.enableCoatLayer == p->mData.enableCoatLayer &&
                mData.flipNormalY == p->mData.flipNormalY &&
-               mData.showThickness == p->mData.showThickness &&
-               mData.microfacetSamples == p->mData.microfacetSamples &&
                getBaseColorTexture() == p->getBaseColorTexture() &&
-               getRoughnessTexture() == p->getRoughnessTexture() &&
                getNormalTexture() == p->getNormalTexture() &&
-               getDisplacementTexture() == p->getDisplacementTexture() &&
                getLayerRoughnessTexture() == p->getLayerRoughnessTexture() &&
-               getLayerWeightTexture() == p->getLayerWeightTexture() &&
+               getDustCoverageTexture() == p->getDustCoverageTexture() &&
                mpSampler == p->mpSampler;
     }
 
-    bool ThreeLayeredGGXMaterial::loadTextureSet(const std::filesystem::path& textureDirectory, bool loadDisplacement)
+    bool ThreeLayeredGGXNoHeightMaterial::loadTextureSet(const std::filesystem::path& textureDirectory)
     {
         if (textureDirectory.empty()) return false;
 
         auto load = [&](TextureSlot slot, const char* label, const std::filesystem::path& path, bool srgb)
         {
-            logInfo("ThreeLayeredGGXMaterial: loading {} texture '{}'.", label, path.string());
+            logInfo("ThreeLayeredGGXNoHeightMaterial: loading {} texture '{}'.", label, path.string());
             if (!std::filesystem::exists(path))
             {
-                logWarning("ThreeLayeredGGXMaterial: missing {} texture '{}'.", label, path.string());
+                logWarning("ThreeLayeredGGXNoHeightMaterial: missing {} texture '{}'.", label, path.string());
                 return false;
             }
 
             ref<Texture> pTexture;
             if (hasExtension(path, "exr"))
             {
-                pTexture = loadExrTexture(path, slot == TextureSlot::Specular || slot == TextureSlot::Displacement);
+                pTexture = loadExrTexture(path, slot == TextureSlot::Specular);
             }
             else
             {
@@ -343,13 +309,13 @@ namespace Falcor
 
             if (!pTexture)
             {
-                logWarning("ThreeLayeredGGXMaterial: failed to load {} texture '{}'.", label, path.string());
+                logWarning("ThreeLayeredGGXNoHeightMaterial: failed to load {} texture '{}'.", label, path.string());
                 return false;
             }
 
             setTexture(slot, pTexture);
             logInfo(
-                "ThreeLayeredGGXMaterial: loaded {} texture '{}' as {}x{} {}.",
+                "ThreeLayeredGGXNoHeightMaterial: loaded {} texture '{}' as {}x{} {}.",
                 label,
                 path.filename().string(),
                 pTexture->getWidth(),
@@ -365,22 +331,13 @@ namespace Falcor
             {
                 if (std::filesystem::exists(candidate)) return load(slot, label, candidate, srgb);
             }
-            logWarning("ThreeLayeredGGXMaterial: no candidate file found for {}.", label);
+            logWarning("ThreeLayeredGGXNoHeightMaterial: no candidate file found for {}.", label);
             return false;
         };
 
         bool loaded = false;
         loaded |= load(TextureSlot::BaseColor, "baseColor", textureDirectory / "rough_concrete_diff_8k.jpg", true);
-        loaded |= load(TextureSlot::Specular, "roughness", textureDirectory / "rough_concrete_rough_8k.exr", false);
         loaded |= load(TextureSlot::Normal, "normal", textureDirectory / "rough_concrete_nor_gl_8k.exr", false);
-        if (loadDisplacement)
-        {
-            loaded |= load(TextureSlot::Displacement, "displacement", textureDirectory / "rough_concrete_disp_8k.png", false);
-        }
-        else
-        {
-            logInfo("ThreeLayeredGGXMaterial: displacement texture disabled for this material instance.");
-        }
 
         loadFirstExisting(
             TextureSlot::Emissive,
@@ -395,66 +352,63 @@ namespace Falcor
         );
 
         loadFirstExisting(
-            TextureSlot::Transmission,
-            "packed layer weights",
+            TextureSlot::Index,
+            "dust coverage",
             {
-                textureDirectory / "layer_weights_packed_8k.exr",
-                textureDirectory / "layer_weights_packed_8k.png",
-                textureDirectory / "layered_weights_packed_8k.exr",
-                textureDirectory / "layered_weights_packed_8k.png"
+                textureDirectory / "dust_coverage_8k.png",
+                textureDirectory / "dust_coverage_8k.exr"
             },
             false
         );
 
-        logInfo("ThreeLayeredGGXMaterial: texture set load {}.", loaded ? "completed" : "did not load any textures");
+        logInfo("ThreeLayeredGGXNoHeightMaterial: texture set load {}.", loaded ? "completed" : "did not load any textures");
         return loaded;
     }
 
-    MaterialDataBlob ThreeLayeredGGXMaterial::getDataBlob() const
+    MaterialDataBlob ThreeLayeredGGXNoHeightMaterial::getDataBlob() const
     {
         return prepareDataBlob(mData);
     }
 
-    ProgramDesc::ShaderModuleList ThreeLayeredGGXMaterial::getShaderModules() const
+    ProgramDesc::ShaderModuleList ThreeLayeredGGXNoHeightMaterial::getShaderModules() const
     {
         return {ProgramDesc::ShaderModule::fromFile(kShaderFile)};
     }
 
-    TypeConformanceList ThreeLayeredGGXMaterial::getTypeConformances() const
+    TypeConformanceList ThreeLayeredGGXNoHeightMaterial::getTypeConformances() const
     {
         TypeConformanceList conformances;
-        conformances.add("ThreeLayeredGGXMaterial", "IMaterial", (uint32_t)getType());
-        conformances.add("ThreeLayeredGGXMaterial", "IBootstrapFeatureMaterial", (uint32_t)getType());
+        conformances.add("ThreeLayeredGGXNoHeightMaterial", "IMaterial", (uint32_t)getType());
+        conformances.add("ThreeLayeredGGXNoHeightMaterial", "IBootstrapFeatureMaterial", (uint32_t)getType());
         return conformances;
     }
 
-    std::vector<std::string> ThreeLayeredGGXMaterial::getBootstrapFeatureNames() const
+    std::vector<std::string> ThreeLayeredGGXNoHeightMaterial::getBootstrapFeatureNames() const
     {
         return kBootstrapFeatureNames;
     }
 
-    FALCOR_SCRIPT_BINDING(ThreeLayeredGGXMaterial)
+    FALCOR_SCRIPT_BINDING(ThreeLayeredGGXNoHeightMaterial)
     {
         using namespace pybind11::literals;
 
         FALCOR_SCRIPT_BINDING_DEPENDENCY(Material)
 
-        pybind11::class_<ThreeLayeredGGXMaterial, Material, ref<ThreeLayeredGGXMaterial>> material(m, "ThreeLayeredGGXMaterial");
-        auto create = [](const std::string& name, const std::filesystem::path& textureDirectory, bool loadDisplacement)
+        pybind11::class_<ThreeLayeredGGXNoHeightMaterial, Material, ref<ThreeLayeredGGXNoHeightMaterial>> material(m, "ThreeLayeredGGXNoHeightMaterial");
+        auto create = [](const std::string& name, const std::filesystem::path& textureDirectory)
         {
             auto resolvedPath = getActiveAssetResolver().resolvePath(textureDirectory);
             FALCOR_CHECK(!resolvedPath.empty(), "Layered texture directory '{}' could not be resolved.", textureDirectory.string());
             FALCOR_CHECK(std::filesystem::is_directory(resolvedPath), "Layered texture path '{}' is not a directory.", resolvedPath.string());
 
-            auto pMaterial = ThreeLayeredGGXMaterial::create(accessActivePythonSceneBuilder().getDevice(), name);
-            pMaterial->loadTextureSet(resolvedPath, loadDisplacement);
+            auto pMaterial = ThreeLayeredGGXNoHeightMaterial::create(accessActivePythonSceneBuilder().getDevice(), name);
+            pMaterial->loadTextureSet(resolvedPath);
             return pMaterial;
         };
         material.def(
             pybind11::init(create),
             "name"_a,
-            "textureDirectory"_a,
-            "loadDisplacement"_a = true
+            "textureDirectory"_a
         );
     }
 }

@@ -94,7 +94,7 @@ class TrainConfig:
     seed: int = 1337
     training_n: int = 65536 # total samples generated per outer epoch
     validation_n: int = 65536
-    max_epochs: int = 300000
+    max_epochs: int = 300000  # finetune iterations after encoder bootstrap
     sampler_epochs: int = 20000
 
     lr: float = 1e-3
@@ -320,6 +320,10 @@ def get_training_phase(cfg: TrainConfig, epoch: int) -> str:
     if epoch < cfg.encoder_bootstrap_epochs:
         return "bootstrap"
     return "finetune"
+
+
+def get_total_training_epochs(cfg: TrainConfig) -> int:
+    return cfg.encoder_bootstrap_epochs + cfg.max_epochs
 
 
 def get_mollification_cone_angle_rad(cfg: TrainConfig, iteration: int) -> float:
@@ -562,11 +566,14 @@ def make_sampler_optimizer(
     )
 
 
-def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
+def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig, phase: str):
     """
-    Cosine LR decay from the per-group base LR to the per-group minimum over cfg.max_epochs (epoch-stepped).
-    Used for the BRDF/latent/encoder optimizer only.
+    Cosine LR decay for the BRDF/latent/encoder optimizer. Bootstrap and
+    finetune each receive a complete schedule over their own iteration count.
     """
+    phase_epochs = (
+        cfg.encoder_bootstrap_epochs if phase == "bootstrap" else cfg.max_epochs
+    )
     base_by_name = {
         "latent": _latent_lr(cfg),
         "decoder": _decoder_lr(cfg),
@@ -583,9 +590,9 @@ def make_scheduler(opt: torch.optim.Optimizer, cfg: TrainConfig):
         min_lr = min_by_name.get(group_name, min_by_name["decoder"])
 
         def lr_lambda(epoch: int):
-            if cfg.max_epochs <= 1:
+            if phase_epochs <= 1:
                 return min_lr / max(base, 1e-12)
-            t = min(epoch / max(cfg.max_epochs - 1, 1), 1.0)
+            t = min(epoch / max(phase_epochs - 1, 1), 1.0)
             scale = 0.5 * (1.0 + math.cos(math.pi * t))
             lr_now = min_lr + (base - min_lr) * scale
             return lr_now / max(base, 1e-12)
@@ -678,8 +685,9 @@ def maybe_rebuild_optimizer_and_scheduler(
                     for k, v in old_state[p].items()
                 }
 
-    new_scheduler = make_scheduler(new_opt, cfg)
-    if scheduler is not None and hasattr(scheduler, "last_epoch"):
+    new_scheduler = make_scheduler(new_opt, cfg, phase)
+    phase_transition = phase == "finetune" and "encoder" in current_group_names
+    if not phase_transition and scheduler is not None and hasattr(scheduler, "last_epoch"):
         new_scheduler.last_epoch = scheduler.last_epoch
 
     print(
@@ -956,7 +964,12 @@ def parse_args() -> TrainConfig:
 
     p.add_argument("--training_n", type=int, default=65536)
     p.add_argument("--validation_size", type=int, default=65536)
-    p.add_argument("--max_epochs", type=int, default=300000)
+    p.add_argument(
+        "--max_epochs",
+        type=int,
+        default=300000,
+        help="Number of finetune iterations after encoder bootstrap.",
+    )
     p.add_argument("--sampler_epochs", type=int, default=20000)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
@@ -1211,7 +1224,7 @@ def main():
     model = NeuralMaterialModel(cfg).to(device)
     current_phase = get_training_phase(cfg, 0)
     opt = make_optimizer(model, cfg, current_phase)
-    scheduler = make_scheduler(opt, cfg)
+    scheduler = make_scheduler(opt, cfg, current_phase)
 
     sampler_opt = None
     sampler_scheduler = None
@@ -1305,8 +1318,17 @@ def main():
         else:
             print(f"[train] brdf-only mode: batch={cfg.training_n}")
 
-        for epoch in range(cfg.max_epochs):
+        total_training_epochs = get_total_training_epochs(cfg)
+        print(
+            "[train] iteration schedule: "
+            f"bootstrap={cfg.encoder_bootstrap_epochs}, "
+            f"finetune={cfg.max_epochs}, total={total_training_epochs}"
+        )
+        for epoch in range(total_training_epochs):
             phase = get_training_phase(cfg, epoch)
+            phase_iteration = (
+                epoch if phase == "bootstrap" else epoch - cfg.encoder_bootstrap_epochs
+            )
             phase_changed = phase != current_phase
             if phase_changed:
                 print(f"[train] switching phase: {current_phase} -> {phase} at epoch {epoch:03d}")
@@ -1351,7 +1373,7 @@ def main():
             data_batch_decoder = active_data_generator.generate_data(
                 cfg.seed,
                 SEED_DOMAIN_TRAIN,
-                epoch,
+                phase_iteration,
                 mollification_cone_angle_rad,
                 cfg.mollification_sample_count,
             )
@@ -1448,7 +1470,7 @@ def main():
             if run_logger.should_log_progress(
                 epoch=epoch,
                 phase_changed=phase_changed,
-                is_final=(epoch == cfg.max_epochs - 1),
+                is_final=(epoch == total_training_epochs - 1),
             ):
                 run_logger.append_progress(epoch, metrics, phase)
 

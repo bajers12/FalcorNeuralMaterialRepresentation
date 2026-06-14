@@ -58,6 +58,8 @@ struct BsdfFeatureSampleData
     float4 bootstrapFeature3;
     float4 bootstrapFeature4;
     float4 bootstrapFeature5;
+    float4 bootstrapFeature6;
+    float4 bootstrapFeature7;
 };
 
 class OnlineDataGenerationPass : public RenderPass

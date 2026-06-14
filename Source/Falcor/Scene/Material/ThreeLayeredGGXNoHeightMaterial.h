@@ -9,23 +9,23 @@
 
 namespace Falcor
 {
-    class ThreeLayeredGGXMaterial : public Material
+    class ThreeLayeredGGXNoHeightMaterial : public Material
     {
-        FALCOR_OBJECT(ThreeLayeredGGXMaterial)
+        FALCOR_OBJECT(ThreeLayeredGGXNoHeightMaterial)
 
     public:
-        static ref<ThreeLayeredGGXMaterial> create(ref<Device> pDevice, const std::string& name = "")
+        static ref<ThreeLayeredGGXNoHeightMaterial> create(ref<Device> pDevice, const std::string& name = "")
         {
-            return make_ref<ThreeLayeredGGXMaterial>(std::move(pDevice), name);
+            return make_ref<ThreeLayeredGGXNoHeightMaterial>(std::move(pDevice), name);
         }
 
-        static ref<ThreeLayeredGGXMaterial> create(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
+        static ref<ThreeLayeredGGXNoHeightMaterial> create(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
         {
-            return make_ref<ThreeLayeredGGXMaterial>(std::move(pDevice), name, textureDirectory);
+            return make_ref<ThreeLayeredGGXNoHeightMaterial>(std::move(pDevice), name, textureDirectory);
         }
 
-        ThreeLayeredGGXMaterial(ref<Device> pDevice, const std::string& name);
-        ThreeLayeredGGXMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory);
+        ThreeLayeredGGXNoHeightMaterial(ref<Device> pDevice, const std::string& name);
+        ThreeLayeredGGXNoHeightMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory);
 
         bool renderUI(Gui::Widgets& widget) override;
         UpdateFlags update(MaterialSystem* pOwner) override;
@@ -41,35 +41,25 @@ namespace Falcor
         void setBaseColorTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::BaseColor, pTexture); }
         ref<Texture> getBaseColorTexture() const { return getTexture(TextureSlot::BaseColor); }
 
-        void setRoughnessTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Specular, pTexture); }
-        ref<Texture> getRoughnessTexture() const { return getTexture(TextureSlot::Specular); }
-
         void setNormalTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Normal, pTexture); }
         ref<Texture> getNormalTexture() const { return getTexture(TextureSlot::Normal); }
 
-        void setDisplacementTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Displacement, pTexture); }
-        ref<Texture> getDisplacementTexture() const { return getTexture(TextureSlot::Displacement); }
-
-        // Packed maps:
-        //  - layerRoughnessMap.rgb = base/mid/coat roughness overrides
-        //  - layerWeightMap.rgb    = base/mid/coat layer weights
+        // layerRoughnessMap.rgb = base/mid/coat roughness.
         void setLayerRoughnessTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Emissive, pTexture); }
         ref<Texture> getLayerRoughnessTexture() const { return getTexture(TextureSlot::Emissive); }
 
-        void setLayerWeightTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Transmission, pTexture); }
-        ref<Texture> getLayerWeightTexture() const { return getTexture(TextureSlot::Transmission); }
+        void setDustCoverageTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Index, pTexture); }
+        ref<Texture> getDustCoverageTexture() const { return getTexture(TextureSlot::Index); }
 
-        bool loadTextureSet(const std::filesystem::path& textureDirectory, bool loadDisplacement = true);
+        bool loadTextureSet(const std::filesystem::path& textureDirectory);
 
     private:
         struct Data
         {
             TextureHandle texBaseColor;
-            TextureHandle texRoughness;
             TextureHandle texNormal;
-            TextureHandle texDisplacement;
             TextureHandle texLayerRoughness;
-            TextureHandle texLayerWeights;
+            TextureHandle texDustCoverage;
 
             float baseF0 = 0.02f;
             float midF0 = 0.2f;
@@ -77,13 +67,8 @@ namespace Falcor
 
             float roughnessScale = 1.f;
             float roughnessBias = 0.02f;
-            float thicknessScale = 1.f;
-            float heightScale = 1.5f;
-            float3 absorptionColor = float3(0.25f, 0.2f, 0.15f);
 
-            float baseWeightScale = 0.9f;
-            float midWeightScale = 0.45f;
-            float coatWeightScale = 0.5f;
+            float dustCoverageScale = 0.65f;
 
             float baseNormalFlatten = 0.f;
             float midNormalFlatten = 0.2f;
@@ -93,10 +78,8 @@ namespace Falcor
             uint32_t enableMidLayer = 1;
             uint32_t enableCoatLayer = 1;
             uint32_t flipNormalY = 1;
-            uint32_t showThickness = 0;
-            uint32_t microfacetSamples = 64;
         };
-        static_assert(sizeof(Data) <= sizeof(MaterialPayload), "ThreeLayeredGGXMaterial payload must fit in MaterialPayload");
+        static_assert(sizeof(Data) <= sizeof(MaterialPayload), "ThreeLayeredGGXNoHeightMaterial payload must fit in MaterialPayload");
 
         void setupTextureSlots();
         ref<Texture> loadExrTexture(const std::filesystem::path& path, bool singleChannel) const;
