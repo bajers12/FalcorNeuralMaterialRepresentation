@@ -325,12 +325,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
                 }
             }
 
-            // Fix 3: require at least half the cone samples to be valid before trusting
-            // the mollified average. When wo is near the horizon the surviving samples
-            // are biased toward the upper side of the cone, producing a brighter-than-
-            // correct average. Fall back to the unmollified evaluation in that case.
-            float validFraction = float(validSampleCount) / float(gMollificationSampleCount);
-            f += (validFraction >= 0.5f) ? mollifiedF / float(validSampleCount) : mi.eval(sd, wo, sg);
+            f += (validSampleCount >= 3) ? mollifiedF / float(validSampleCount) : mi.eval(sd, wo, sg);
         }
         else
         {
