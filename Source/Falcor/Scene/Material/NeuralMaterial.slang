@@ -512,10 +512,6 @@ float3 evalNeuralBRDFFromLatents(
     float3 woLocal
 )
 {
-    // Match the current training/data-generation convention:
-    // both wi and wo are local directions pointing away from the surface.
-    if (wiLocal.z <= 0.f || woLocal.z <= 0.f)
-        return 0.f.xxx;
 
     ByteAddressBuffer decoderBuf = materials.getBuffer(md.brdfDecoderBufferID);
 
@@ -540,7 +536,7 @@ float3 evalNeuralBRDFFromLatents(
     float x[20];
 
     // Trainer contract:
-    //   - frame_linear(z) -> (Nxyz, Txyz) per frame, no +1 offsets
+    //   - frame_linear(z) -> (Nxyz, Txyz) per frame
     //   - B = normalize(cross(N, T))
     //   - MLP input is [z, dir_feats]
     //   - dir_feats flatten as [frame0(wi_TBN, wo_TBN), frame1(...)]
