@@ -77,7 +77,7 @@ static const uint kNeuralSamplingCosine = 1u;
 
 bool neuralHasLearnedSampler(const NeuralMaterialData md)
 {
-    return md.samplerMlpWidth != 0u && (md.samplerMlpDepth == 2u || md.samplerMlpDepth == 3u);
+    return md.samplerDecoderBufferID != 0xffffffffu && md.samplerMlpWidth != 0u && (md.samplerMlpDepth == 2u || md.samplerMlpDepth == 3u);
 }
 
 struct NeuralMipPair
@@ -818,6 +818,8 @@ NeuralSamplerParams evalNeuralSamplerParams(const MaterialSystem materials, cons
 
     if (wiLocal.z <= 0.f)
         return p;
+    if (!neuralHasLearnedSampler(md))
+        return p;
 
     ByteAddressBuffer decoderBuf = materials.getBuffer(md.samplerDecoderBufferID);
 
@@ -910,6 +912,9 @@ float evalNeuralPdf(
     const float3 woLocal
 )
 {
+    if (!neuralHasLearnedSampler(md))
+        return evalCosinePdf(woLocal);
+
     NeuralSamplerParams p = evalNeuralSamplerParams(materials, md, z, wiLocal);
     return evalNeuralPdfFromParams(md, p, wiLocal, woLocal);
 }

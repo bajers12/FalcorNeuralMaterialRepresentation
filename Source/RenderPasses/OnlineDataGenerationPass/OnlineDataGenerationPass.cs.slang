@@ -25,6 +25,7 @@ struct BsdfSampleData
     float3 wo;
     float3 wi;
     float3 f;
+    float3 albedo;
     float mipLevel;
 #if SAMPLE_FEATURES_ENABLED
     float4 bootstrapFeature0;
@@ -58,6 +59,7 @@ uniform float gMipExponentialRate;
 uniform uint gMinFilterSampleCount;
 uniform uint gMaxFilterSampleCount;
 uniform float gGaussianFilterStdScale;
+uniform bool gGenerateAlbedoTarget;
 
 uint hash(uint x)
 {
@@ -212,6 +214,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
     uint mollificationSeed = makeSampleSeed(idx, 4u);
     uint mipSeed = makeSampleSeed(idx, 5u);
     uint filterSeed = makeSampleSeed(idx, 6u);
+    uint albedoDirectionSeed = makeSampleSeed(idx, 7u);
+    uint albedoSgSeed = makeSampleSeed(idx, 8u);
 
     float2 uv = float2(rand(uvSeed), rand(uvSeed));
     if (gUseUvSamples)
@@ -293,6 +297,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
 
     // For some fucking reason the ray towards the surface (w_i) is called wo, V is the view Vector
     float3 f = float3(0.f);
+    float3 albedo = float3(0.f);
     uint validSpatialSampleCount = 0u;
     [loop]
     for (uint spatialSample = 0u; spatialSample < spatialSampleCount; ++spatialSample)
@@ -308,6 +313,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
         ShadingData sd = gScene.materials.prepareShadingData(v, gMaterialId, wi);
         let mi = gScene.materials.getMaterialInstance(sd, lod, materialHints);
         UniformSampleGenerator sg = UniformSampleGenerator(sgSeed, spatialSample);
+        UniformSampleGenerator albedoSg = UniformSampleGenerator(albedoSgSeed, spatialSample);
 
         if (gMollificationConeAngleRad > 0.f && gMollificationSampleCount > 1u)
         {
@@ -331,9 +337,20 @@ void main(uint3 threadId : SV_DispatchThreadID)
         {
             f += mi.eval(sd, wo, sg);
         }
+
+        if (gGenerateAlbedoTarget)
+        {
+            float albedoPdf = 0.f;
+            float3 albedoWo = sample_cosine_hemisphere_concentric(
+                float2(rand(albedoDirectionSeed), rand(albedoDirectionSeed)),
+                albedoPdf
+            );
+            albedo += mi.eval(sd, albedoWo, albedoSg) / max(albedoPdf, 1e-6f);
+        }
         validSpatialSampleCount++;
     }
     f /= float(max(1u, validSpatialSampleCount));
+    albedo /= float(max(1u, validSpatialSampleCount));
     float pdf = 0.0f;
 
     // Save results
@@ -342,6 +359,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
     data.wi       = wi;   // incident/view direction, towards viewer
     data.wo       = wo;   // sampled light direction, away from surface
     data.f        = f;
+    data.albedo   = albedo;
     data.mipLevel = float(trainingMip);
 
     #if SAMPLE_FEATURES_ENABLED

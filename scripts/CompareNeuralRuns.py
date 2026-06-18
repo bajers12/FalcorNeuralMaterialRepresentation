@@ -6,8 +6,10 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +100,21 @@ def parse_args() -> argparse.Namespace:
         help="Analyze existing captures in --output-dir without launching Mogwai.",
     )
     parser.add_argument(
+        "--render-staging-dir",
+        type=Path,
+        default=REPO_ROOT / "tmp" / "compare_neural_runs_staging",
+        help=(
+            "Repo-local folder used for Mogwai captures before copying results to "
+            "--output-dir. This avoids fragile long renders directly into external folders."
+        ),
+    )
+    parser.add_argument(
+        "--launch-delay-seconds",
+        type=float,
+        default=15.0,
+        help="Delay between Mogwai launches. This gives D3D/Falcor teardown time after long renders.",
+    )
+    parser.add_argument(
         "--sphere-center-x",
         type=float,
         default=0.5,
@@ -142,16 +159,56 @@ def capture_path(output_dir: Path, name: str, frames: int) -> Path:
     return output_dir / f"{name}.ToneMapper.dst.{frames}.png"
 
 
+def copy_capture(src_dir: Path, dst_dir: Path, name: str, frames: int) -> Path:
+    src = require_path(capture_path(src_dir, name, frames), f"Rendered capture for {name}")
+    dst = capture_path(dst_dir, name, frames)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst
+
+
+def copy_render_logs(src_dir: Path, dst_dir: Path, log_stem: str) -> None:
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for suffix in ("mogwai.log", "console.log"):
+        src = src_dir / f"{log_stem}.{suffix}"
+        if src.exists():
+            shutil.copy2(src, dst_dir / src.name)
+
+
+def configure_mogwai_environment(env: dict[str, str], mogwai_path: Path) -> None:
+    bin_dir = mogwai_path.parent
+    plugin_dir = bin_dir / "plugins"
+    python_dir = bin_dir / "python"
+
+    path_key = "Path" if "Path" in env else "PATH"
+    old_path = env.get(path_key, "")
+    prepend = [str(bin_dir)]
+    if plugin_dir.exists():
+        prepend.append(str(plugin_dir))
+    env[path_key] = os.pathsep.join(prepend + ([old_path] if old_path else []))
+
+    old_python_path = env.get("PYTHONPATH", "")
+    python_paths = [str(python_dir)] if python_dir.exists() else []
+    if old_python_path:
+        python_paths.append(old_python_path)
+    if python_paths:
+        env["PYTHONPATH"] = os.pathsep.join(python_paths)
+
+
 def run_mogwai(
     args: argparse.Namespace,
     env_updates: dict[str, str],
     log_stem: str,
+    capture_output_dir: Path,
 ) -> None:
+    capture_output_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    configure_mogwai_environment(env, args.mogwai)
     for key in (
         "NEURAL_ASSET_ROOT",
         "NEURAL_ASSET_PATH",
         "NEURAL_ASSET_PATHS",
+        "NEURAL_CAPTURE_USE_BSDF_SAMPLING",
         "REFERENCE_SCENE_PATH",
         "REFERENCE_CAPTURE_NAME",
     ):
@@ -159,10 +216,11 @@ def run_mogwai(
     env.update(env_updates)
     env.update(
         {
-            "NEURAL_CAPTURE_OUTPUT": str(args.output_dir),
+            "NEURAL_CAPTURE_OUTPUT": str(capture_output_dir),
             "NEURAL_CAPTURE_FRAMES": str(args.frames),
             "NEURAL_CAPTURE_WIDTH": str(args.width),
             "NEURAL_CAPTURE_HEIGHT": str(args.height),
+            "NEURAL_CAPTURE_USE_BSDF_SAMPLING": "0",
         }
     )
 
@@ -172,13 +230,13 @@ def run_mogwai(
         "--script",
         str(args.render_script),
         "--logfile",
-        str(args.output_dir / f"{log_stem}.mogwai.log"),
+        str(capture_output_dir / f"{log_stem}.mogwai.log"),
         "--width",
         str(args.width),
         "--height",
         str(args.height),
     ]
-    console_path = args.output_dir / f"{log_stem}.console.log"
+    console_path = capture_output_dir / f"{log_stem}.console.log"
     print(f"[compare] Launching Mogwai: {log_stem}")
     with console_path.open("w", encoding="utf-8") as console:
         result = subprocess.run(
@@ -190,15 +248,23 @@ def run_mogwai(
             check=False,
         )
     if result.returncode != 0:
+        copy_render_logs(capture_output_dir, args.output_dir, log_stem)
         raise RuntimeError(
             f"Mogwai failed with exit code {result.returncode}. See {console_path}"
         )
+    copy_render_logs(capture_output_dir, args.output_dir, log_stem)
 
 
 def render_inputs(args: argparse.Namespace, runtime_dirs: list[Path]) -> Path:
+    staging_dir = (args.render_staging_dir / args.output_dir.name).resolve()
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[compare] Rendering through staging dir: {staging_dir}")
+
     if args.reference_image:
         reference_path = require_path(args.reference_image, "Reference image")
     else:
+        staged_reference = capture_path(staging_dir, args.reference_name, args.frames)
+        staged_reference.unlink(missing_ok=True)
         run_mogwai(
             args,
             {
@@ -206,14 +272,26 @@ def render_inputs(args: argparse.Namespace, runtime_dirs: list[Path]) -> Path:
                 "REFERENCE_CAPTURE_NAME": args.reference_name,
             },
             "reference",
+            staging_dir,
         )
-        reference_path = capture_path(args.output_dir, args.reference_name, args.frames)
+        reference_path = copy_capture(staging_dir, args.output_dir, args.reference_name, args.frames)
 
+    if args.launch_delay_seconds > 0.0:
+        print(f"[compare] Waiting {args.launch_delay_seconds:g}s before rendering runs.")
+        time.sleep(args.launch_delay_seconds)
+
+    for runtime_dir in runtime_dirs:
+        run_name = runtime_dir.name.removesuffix(args.runtime_suffix)
+        capture_path(staging_dir, run_name, args.frames).unlink(missing_ok=True)
     run_mogwai(
         args,
         {"NEURAL_ASSET_PATHS": os.pathsep.join(str(path) for path in runtime_dirs)},
         "runs",
+        staging_dir,
     )
+    for runtime_dir in runtime_dirs:
+        run_name = runtime_dir.name.removesuffix(args.runtime_suffix)
+        copy_capture(staging_dir, args.output_dir, run_name, args.frames)
     return require_path(reference_path, "Rendered reference image")
 
 
@@ -384,6 +462,7 @@ def main() -> None:
     args.render_script = require_path(args.render_script, "Mogwai render script")
     args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.render_staging_dir = args.render_staging_dir.resolve()
 
     if args.frames <= 0 or args.width <= 0 or args.height <= 0:
         raise ValueError("Frames, width, and height must be positive.")

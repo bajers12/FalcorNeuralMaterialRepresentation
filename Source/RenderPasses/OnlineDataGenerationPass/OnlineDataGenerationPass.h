@@ -42,6 +42,7 @@ struct BsdfSampleData
     float3 wo;
     float3 wi;
     float3 f;
+    float3 albedo;
     float mipLevel;
 };
 
@@ -51,6 +52,7 @@ struct BsdfFeatureSampleData
     float3 wo;
     float3 wi;
     float3 f;
+    float3 albedo;
     float mipLevel;
     float4 bootstrapFeature0;
     float4 bootstrapFeature1;
@@ -140,6 +142,7 @@ private:
     uint32_t mMinFilterSampleCount = 1;
     uint32_t mMaxFilterSampleCount = 64;
     float mGaussianFilterStdScale = 0.5f;
+    bool mGenerateAlbedoTarget = false;
     BootstrapFeatureLayout mRequestedBootstrapFeatureLayout = BootstrapFeatureLayout::Auto;
     BootstrapFeatureLayout mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::None;
     std::vector<std::string> mBootstrapFeatureNames;

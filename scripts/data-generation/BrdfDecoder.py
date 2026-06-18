@@ -20,15 +20,25 @@ class Decoder(nn.Module):
         mlp_depth: int = 2,
         use_bias_in_mlp: bool = True,
         frame_linear_bias: bool = False,
+        fixed_canonical_frames: bool = False,
+        predict_albedo: bool = False,
         exp_offset: float = 3.0,
     ):
         super().__init__()
         assert num_frames >= 1
         self.latent_ch = latent_ch
         self.num_frames = num_frames
+        self.fixed_canonical_frames = fixed_canonical_frames
+        self.predict_albedo = predict_albedo
         self.exp_offset = exp_offset
 
         self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias)
+        if self.fixed_canonical_frames:
+            with torch.no_grad():
+                self.frame_linear.weight.zero_()
+                if self.frame_linear.bias is not None:
+                    self.frame_linear.bias.zero_()
+            self.frame_linear.requires_grad_(False)
 
         mlp_in = latent_ch + 6 * num_frames
         layers = []
@@ -39,6 +49,7 @@ class Decoder(nn.Module):
             prev = mlp_width
         layers.append(nn.Linear(prev, 3, bias=use_bias_in_mlp))
         self.mlp = nn.Sequential(*layers)
+        self.albedo_head = nn.Linear(prev, 3, bias=use_bias_in_mlp) if predict_albedo else None
 
     @staticmethod
     def _safe_normalize(v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -67,7 +78,7 @@ class Decoder(nn.Module):
 
         return T, Bv, N
 
-    def forward_raw(
+    def _decoder_input(
         self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
     ) -> torch.Tensor:
         """
@@ -98,8 +109,22 @@ class Decoder(nn.Module):
         dir_feats = torch.cat([wi_f, wo_f], dim=-1).view(
             z.shape[0], 6 * self.num_frames
         )
-        x = torch.cat([z, dir_feats], dim=-1)
-        return self.mlp(x)
+        return torch.cat([z, dir_feats], dim=-1)
+
+    def forward_raw_and_albedo(
+        self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
+        x = self._decoder_input(z, wi, wo)
+        hidden = self.mlp[:-1](x)
+        raw = self.mlp[-1](hidden)
+        albedo = torch.sigmoid(self.albedo_head(hidden)) if self.albedo_head is not None else None
+        return raw, albedo
+
+    def forward_raw(
+        self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> torch.Tensor:
+        raw, _ = self.forward_raw_and_albedo(z, wi, wo)
+        return raw
 
     def forward(
         self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
@@ -137,47 +162,27 @@ class Decoder(nn.Module):
         return ((raw_c - exp_offset) - torch.log(y_c)).abs().mean()
 
     @staticmethod
-    def l1_loss(
+    def loss(
         raw: torch.Tensor,
         y: torch.Tensor,
         exp_offset: float,
         eps: float,
+        mode: str = "log_l1",
         mask_threshold: float = 1e-4,
     ) -> torch.Tensor:
+        if mode == "log_l1":
+            return Decoder.log_l1_loss(raw, y, exp_offset, eps, mask_threshold)
+
         y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-        raw = torch.nan_to_num(nn.exp(raw_c - exp_offset), nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-        # Build per-sample mask: keep samples that have at least one significant channel
-        valid = y.amax(dim=-1) >= mask_threshold  # [B]
+        valid = y.amax(dim=-1) >= mask_threshold
+        prediction = torch.exp(raw - exp_offset)
         if valid.any():
-            raw_c = raw[valid]
-            y_c = y[valid].clamp_min(eps)
-        else:
-            # Fallback: use everything (avoids zero-element mean on pathological batches)
-            raw_c = raw
-            y_c = y.clamp_min(eps)
+            prediction = prediction[valid]
+            y = y[valid]
 
-        return (raw_c - y_c).abs().mean()
-
-
-    @staticmethod
-    def l2_loss(
-        raw: torch.Tensor,
-        y: torch.Tensor,
-        exp_offset: float,
-        eps: float,
-        mask_threshold: float = 1e-4,
-    ) -> torch.Tensor:
-        y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-        raw = torch.nan_to_num(nn.exp(raw_c - exp_offset), nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-
-        # Build per-sample mask: keep samples that have at least one significant channel
-        valid = y.amax(dim=-1) >= mask_threshold  # [B]
-        if valid.any():
-            raw_c = raw[valid]
-            y_c = y[valid].clamp_min(eps)
-        else:
-            # Fallback: use everything (avoids zero-element mean on pathological batches)
-            raw_c = raw
-            y_c = y.clamp_min(eps)
-
-        return (raw_c - y_c).square.mean()
+        error = prediction - y
+        if mode == "linear_l1":
+            return error.abs().mean()
+        if mode == "linear_l2":
+            return error.square().mean()
+        raise ValueError(f"Unsupported BRDF loss mode: {mode}")

@@ -79,6 +79,12 @@ class TrainConfig:
     brdf_mlp_depth: int = 2  # number of hidden layers
     use_bias_in_mlp: bool = True
     frame_linear_bias: bool = False
+    fixed_canonical_frames: bool = False
+    predict_albedo: bool = False
+    albedo_loss_weight: float = 1.0
+    albedo_loss_normalization: str = "none"
+    albedo_loss_normalization_eps: float = 1e-6
+    albedo_loss_running_beta: float = 0.99
 
     # Importance sampling decoder architecture
     sampler_mlp_width: int = 32
@@ -88,6 +94,7 @@ class TrainConfig:
     exp_offset: float = 3.0
     clamp_min_target: float = 0.0  # safety clamp on y before log
     log_eps: float = 1e-6  # y' = clamp(y, eps) for log
+    brdf_loss_mode: str = "log_l1"
 
     # Optimization
     device: str = "cuda"
@@ -156,7 +163,7 @@ def tensorize_batch(data_dict: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]
 
 def print_first_sample(batch: Dict[str, torch.Tensor], label: str) -> None:
     print(f"[debug] first sample from {label}:")
-    ordered_keys = ["uv", "wi", "wo", "y", "mip_level", "features"]
+    ordered_keys = ["uv", "wi", "wo", "y", "albedo", "mip_level", "features"]
     for key in ordered_keys:
         if key not in batch:
             continue
@@ -199,6 +206,8 @@ class NeuralMaterialModel(nn.Module):
             mlp_depth=cfg.brdf_mlp_depth,
             use_bias_in_mlp=cfg.use_bias_in_mlp,
             frame_linear_bias=cfg.frame_linear_bias,
+            fixed_canonical_frames=cfg.fixed_canonical_frames,
+            predict_albedo=cfg.predict_albedo,
             exp_offset=cfg.exp_offset,
         )
         self.importance_sampler = ImportanceSamplingDecoder(
@@ -220,6 +229,13 @@ class NeuralMaterialModel(nn.Module):
         raw = self.decoder.forward_raw(z, wi, wo)
         y_hat = torch.exp(raw - self.decoder.exp_offset)
         return y_hat, raw
+
+    def decode_with_raw_and_albedo(
+        self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        raw, albedo = self.decoder.forward_raw_and_albedo(z, wi, wo)
+        y_hat = torch.exp(raw - self.decoder.exp_offset)
+        return y_hat, raw, albedo
 
     def forward_with_raw(
         self, uv: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor, mip_level: torch.Tensor | None = None
@@ -258,6 +274,18 @@ def compute_raw_stats(raw: torch.Tensor) -> Dict[str, float]:
     }
 
 
+def format_albedo_metrics(metrics: Dict[str, float]) -> str:
+    if "albedo_loss" not in metrics:
+        return ""
+    return (
+        f" albedo_loss={metrics['albedo_loss']:.6f}"
+        f" albedo_w={metrics['albedo_loss_weighted']:.6f}"
+        f" albedo_val={metrics.get('albedo_val_loss', float('nan')):.6f}"
+        f" albedo_raw={metrics.get('albedo_loss_raw', float('nan')):.6f}"
+        f" albedo_scale={metrics.get('albedo_loss_scale', float('nan')):.6f}"
+    )
+
+
 def compute_mip_validation_losses(
     raw: torch.Tensor,
     y: torch.Tensor,
@@ -276,14 +304,48 @@ def compute_mip_validation_losses(
         out[f"brdf_val_count_mip{mip_level}"] = float(sample_count)
         if sample_count == 0:
             continue
-        mip_loss = Decoder.log_l1_loss(
+        mip_loss = Decoder.loss(
             raw[mask],
             y[mask],
             exp_offset,
             cfg.log_eps,
+            cfg.brdf_loss_mode,
         )
         out[f"brdf_val_loss_mip{mip_level}"] = mip_loss.item()
     return out
+
+
+def compute_albedo_loss(
+    albedo_hat: torch.Tensor,
+    albedo_target: torch.Tensor,
+    cfg: TrainConfig,
+    *,
+    update_running: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    raw_loss = nn.functional.mse_loss(albedo_hat, albedo_target)
+    scale = raw_loss.detach().new_tensor(1.0)
+
+    if cfg.albedo_loss_normalization == "variance":
+        scale = albedo_target.var(dim=0, unbiased=False).mean().detach()
+        scale = scale.clamp_min(cfg.albedo_loss_normalization_eps)
+    elif cfg.albedo_loss_normalization == "running_variance":
+        batch_scale = albedo_target.var(dim=0, unbiased=False).mean().detach()
+        batch_scale = batch_scale.clamp_min(cfg.albedo_loss_normalization_eps)
+        running_scale = getattr(cfg, "_albedo_loss_running_scale", None)
+        if running_scale is None:
+            scale = batch_scale
+        else:
+            scale = running_scale.to(device=batch_scale.device, dtype=batch_scale.dtype)
+            if update_running:
+                beta = min(max(float(cfg.albedo_loss_running_beta), 0.0), 0.999999)
+                scale = (beta * scale + (1.0 - beta) * batch_scale).detach()
+        if update_running or running_scale is None:
+            setattr(cfg, "_albedo_loss_running_scale", scale.detach())
+    elif cfg.albedo_loss_normalization != "none":
+        raise ValueError(f"Unsupported albedo loss normalization: {cfg.albedo_loss_normalization}")
+
+    normalized_loss = raw_loss / scale
+    return normalized_loss, raw_loss, scale
 
 
 def build_material_features(
@@ -750,13 +812,36 @@ def train_one_epoch(
         mip_dec = mip_dec.to(device, non_blocking=True) if mip_dec is not None else None
         z_dec = model.latent.sample(uv_dec, mip_dec)
 
-    y_hat_dec, raw_dec = model.decode_with_raw(z_dec, wi_dec, wo_dec)
-    bsdf_loss = Decoder.log_l1_loss(raw_dec, y_dec, model.decoder.exp_offset, cfg.log_eps)
+    y_hat_dec, raw_dec, albedo_hat_dec = model.decode_with_raw_and_albedo(z_dec, wi_dec, wo_dec)
+    bsdf_loss = Decoder.loss(
+        raw_dec,
+        y_dec,
+        model.decoder.exp_offset,
+        cfg.log_eps,
+        cfg.brdf_loss_mode,
+    )
+    albedo_loss = None
+    albedo_loss_raw = None
+    albedo_loss_scale = None
+    total_loss = bsdf_loss
+    if cfg.predict_albedo:
+        albedo_target = batch_decoder["albedo"].to(device, non_blocking=True)
+        albedo_target = torch.nan_to_num(albedo_target, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+        albedo_loss, albedo_loss_raw, albedo_loss_scale = compute_albedo_loss(
+            albedo_hat_dec,
+            albedo_target,
+            cfg,
+            update_running=True,
+        )
+        total_loss = total_loss + cfg.albedo_loss_weight * albedo_loss
 
-    if not torch.isfinite(bsdf_loss):
-        raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
+    if not torch.isfinite(total_loss):
+        raise RuntimeError(
+            f"Non-finite total loss at epoch {epoch}: "
+            f"brdf={bsdf_loss.item()}, albedo={None if albedo_loss is None else albedo_loss.item()}"
+        )
 
-    bsdf_loss.backward()
+    total_loss.backward()
 
     if cfg.grad_clip_norm is not None:
         nn.utils.clip_grad_norm_(
@@ -822,6 +907,12 @@ def train_one_epoch(
     }
     if sampler_loss is not None:
         out["sampler_loss"] = sampler_loss.item()
+    if albedo_loss is not None:
+        out["albedo_loss"] = albedo_loss.item()
+        out["albedo_loss_raw"] = albedo_loss_raw.item()
+        out["albedo_loss_scale"] = albedo_loss_scale.item()
+        out["albedo_loss_weighted"] = cfg.albedo_loss_weight * albedo_loss.item()
+        out["total_loss"] = total_loss.item()
 
     return (out, opt, scheduler)
 
@@ -853,8 +944,14 @@ def validate(
     else:
         z = model.latent.sample(uv, mip)
 
-    y_hat, raw = model.decode_with_raw(z, wi, wo)
-    loss = Decoder.log_l1_loss(raw, y, model.decoder.exp_offset, cfg.log_eps)
+    y_hat, raw, albedo_hat = model.decode_with_raw_and_albedo(z, wi, wo)
+    loss = Decoder.loss(
+        raw,
+        y,
+        model.decoder.exp_offset,
+        cfg.log_eps,
+        cfg.brdf_loss_mode,
+    )
     stats = compute_basic_stats(y_hat, y)
     raw_stats = compute_raw_stats(raw)
     mip_metrics = (
@@ -873,6 +970,19 @@ def validate(
         "val_raw_mean": raw_stats["raw_mean"],
         "val_raw_std": raw_stats["raw_std"],
     }
+    if cfg.predict_albedo:
+        albedo_target = batch["albedo"].to(device, non_blocking=True)
+        albedo_target = torch.nan_to_num(albedo_target, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+        albedo_loss, albedo_loss_raw, albedo_loss_scale = compute_albedo_loss(
+            albedo_hat,
+            albedo_target,
+            cfg,
+        )
+        out["albedo_val_loss"] = albedo_loss.item()
+        out["albedo_val_loss_raw"] = albedo_loss_raw.item()
+        out["albedo_val_loss_scale"] = albedo_loss_scale.item()
+        out["albedo_val_loss_weighted"] = cfg.albedo_loss_weight * albedo_loss.item()
+        out["total_val_loss"] = loss.item() + cfg.albedo_loss_weight * albedo_loss.item()
     out.update(mip_metrics)
     return out
 
@@ -958,6 +1068,48 @@ def parse_args() -> TrainConfig:
     p.add_argument("--num_frames", type=int, default=2)
     p.add_argument("--brdf_mlp_width", type=int, default=64)
     p.add_argument("--brdf_mlp_depth", type=int, default=2)
+    p.add_argument(
+        "--fixed_canonical_frames",
+        action="store_true",
+        help=(
+            "Ablate learned shading frames by fixing both decoder frames to the "
+            "canonical local frame while preserving the runtime/export layout."
+        ),
+    )
+    p.add_argument(
+        "--predict_albedo",
+        action="store_true",
+        help="Train an auxiliary directional-albedo head with one-sample cosine-hemisphere MC targets.",
+    )
+    p.add_argument(
+        "--albedo_loss_weight",
+        type=float,
+        default=1.0,
+        help="Weight of the auxiliary linear-L2 directional-albedo loss.",
+    )
+    p.add_argument(
+        "--albedo_loss_normalization",
+        type=str,
+        choices=("none", "variance", "running_variance"),
+        default="none",
+        help=(
+            "Normalize the auxiliary albedo L2 before applying --albedo_loss_weight. "
+            "'variance' divides by the mean RGB target variance of the current batch; "
+            "'running_variance' divides by an EMA of that variance."
+        ),
+    )
+    p.add_argument(
+        "--albedo_loss_running_beta",
+        type=float,
+        default=0.99,
+        help="EMA beta for --albedo_loss_normalization running_variance.",
+    )
+    p.add_argument(
+        "--albedo_loss_normalization_eps",
+        type=float,
+        default=1e-6,
+        help="Minimum scale used by albedo loss normalization.",
+    )
     p.add_argument("--sampler_mlp_width", type=int, default=32)
     p.add_argument("--sampler_mlp_depth", type=int, default=3)
     p.add_argument("--exp_offset", type=float, default=3.0)
@@ -980,6 +1132,13 @@ def parse_args() -> TrainConfig:
 
     p.add_argument("--log_eps", type=float, default=1e-6)
     p.add_argument("--clamp_min_target", type=float, default=0.0)
+    p.add_argument(
+        "--brdf_loss_mode",
+        type=str,
+        choices=("log_l1", "linear_l1", "linear_l2"),
+        default="log_l1",
+        help="BRDF training and validation loss. Default: log_l1.",
+    )
 
     p.add_argument("--print_every_epochs", type=int, default=10000)
     p.add_argument(
@@ -1091,6 +1250,12 @@ def parse_args() -> TrainConfig:
     cfg.num_frames = args.num_frames
     cfg.brdf_mlp_width = args.brdf_mlp_width
     cfg.brdf_mlp_depth = args.brdf_mlp_depth
+    cfg.fixed_canonical_frames = args.fixed_canonical_frames
+    cfg.predict_albedo = args.predict_albedo
+    cfg.albedo_loss_weight = max(0.0, args.albedo_loss_weight)
+    cfg.albedo_loss_normalization = args.albedo_loss_normalization
+    cfg.albedo_loss_normalization_eps = max(1e-12, args.albedo_loss_normalization_eps)
+    cfg.albedo_loss_running_beta = min(max(args.albedo_loss_running_beta, 0.0), 0.999999)
     cfg.sampler_mlp_width = args.sampler_mlp_width
     cfg.sampler_mlp_depth = args.sampler_mlp_depth
     cfg.exp_offset = args.exp_offset
@@ -1108,6 +1273,7 @@ def parse_args() -> TrainConfig:
 
     cfg.log_eps = args.log_eps
     cfg.clamp_min_target = args.clamp_min_target
+    cfg.brdf_loss_mode = args.brdf_loss_mode
 
     cfg.print_every_epochs = max(0, args.print_every_epochs)
     cfg.train_latent_texture = args.train_latent_texture
@@ -1142,18 +1308,20 @@ def data_to_dict(data: np.ndarray, material_feature_dim: int = 0):
     wo = data[:, 2:5]
     wi = data[:, 5:8]
     f = data[:, 8:11]
-    has_mip_column = data.shape[1] >= (12 + material_feature_dim)
-    mip_level = data[:, 11:12] if has_mip_column else np.zeros((data.shape[0], 1), dtype=data.dtype)
+    albedo = data[:, 11:14]
+    has_mip_column = data.shape[1] >= (15 + material_feature_dim)
+    mip_level = data[:, 14:15] if has_mip_column else np.zeros((data.shape[0], 1), dtype=data.dtype)
 
     batch = {
         "uv": uv,
         "wo": wo,
         "wi": wi,
         "y": f,
+        "albedo": albedo,
         "mip_level": mip_level.reshape(-1),
     }
     if material_feature_dim > 0:
-        feature_start = 12 if has_mip_column else 11
+        feature_start = 15 if has_mip_column else 14
         feature_end = feature_start + material_feature_dim
         if data.shape[1] < feature_end:
             raise ValueError(
@@ -1193,6 +1361,7 @@ def main():
             bootstrap_feature_layout=cfg.bootstrap_feature_layout,
             scene_path=cfg.scene_path,
             hierarchical_filtering_enabled=False,
+            generate_albedo_target=cfg.predict_albedo,
         )
         cfg.material_feature_names = tuple(bootstrap_validation_generator.get_bootstrap_feature_names())
         cfg.material_feature_dim = bootstrap_validation_generator.get_bootstrap_feature_dim()
@@ -1214,6 +1383,14 @@ def main():
     save_config(cfg)
     run_logger = TrainingRunLogger(cfg)
     print("Config:", json.dumps(asdict(cfg), indent=2))
+    print(f"[train] BRDF loss mode: {cfg.brdf_loss_mode}")
+    if cfg.predict_albedo:
+        print(
+            "[train] auxiliary directional-albedo prediction enabled: "
+            f"linear-L2 weight={cfg.albedo_loss_weight:g}, "
+            f"normalization={cfg.albedo_loss_normalization}, "
+            f"running_beta={cfg.albedo_loss_running_beta:g}"
+        )
     if cfg.use_normals:
         print(
             "[train] --use_normals is currently a no-op for wi/wo. "
@@ -1222,6 +1399,11 @@ def main():
 
     # Model
     model = NeuralMaterialModel(cfg).to(device)
+    if cfg.fixed_canonical_frames:
+        print(
+            "[train] learned shading frames disabled: frame_linear is fixed at zero "
+            "and both decoder frames are canonical"
+        )
     current_phase = get_training_phase(cfg, 0)
     opt = make_optimizer(model, cfg, current_phase)
     scheduler = make_scheduler(opt, cfg, current_phase)
@@ -1279,6 +1461,7 @@ def main():
             min_filter_sample_count=cfg.min_filter_sample_count,
             max_filter_sample_count=cfg.max_filter_sample_count,
             gaussian_filter_std_scale=cfg.gaussian_filter_std_scale,
+            generate_albedo_target=cfg.predict_albedo,
         )
         if cfg.encoder_bootstrap_epochs > 0 and not validation_generator.supports_uv_grid():
             raise RuntimeError(
@@ -1299,6 +1482,7 @@ def main():
                 bootstrap_feature_layout=cfg.bootstrap_feature_layout,
                 scene_path=cfg.scene_path,
                 hierarchical_filtering_enabled=False,
+                generate_albedo_target=cfg.predict_albedo,
             )
         finetune_data_generator = DataGenerator(
             sampleCount=cfg.training_n,
@@ -1312,6 +1496,7 @@ def main():
             min_filter_sample_count=cfg.min_filter_sample_count,
             max_filter_sample_count=cfg.max_filter_sample_count,
             gaussian_filter_std_scale=cfg.gaussian_filter_std_scale,
+            generate_albedo_target=cfg.predict_albedo,
         )
         if cfg.train_importance_sampler:
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
@@ -1417,6 +1602,13 @@ def main():
                     if "sampler_loss" in metrics
                     else ""
                 )
+                albedo_log = (
+                    f" albedo_loss={metrics['albedo_loss']:.6f}"
+                    f" albedo_w={metrics['albedo_loss_weighted']:.6f}"
+                    f" albedo_val_loss={metrics['albedo_val_loss']:.6f}"
+                    if "albedo_loss" in metrics and "albedo_val_loss" in metrics
+                    else ""
+                )
                 mip_val_parts = [
                     f"{mip_level}:{metrics[f'brdf_val_loss_mip{mip_level}']:.4f}"
                     for mip_level in range(cfg.hierarchical_mip_count)
@@ -1426,7 +1618,7 @@ def main():
                 print(
                     f"[train] epoch {epoch:03d} "
                     f"phase={phase} brdf_loss={metrics['brdf_loss']:.6f}" \
-                    f"{sampler_log} "
+                    f"{sampler_log}{albedo_log} "
                     f"val_loss={metrics['brdf_val_loss']:.6f} "
                     f"{mip_val_log} "
                     f"yhat_mean={metrics['yhat_mean']:.3e} "
@@ -1438,7 +1630,11 @@ def main():
                 best_bootstrap_epoch = epoch
                 best_bootstrap_metrics = dict(metrics)
                 best_bootstrap_state = snapshot_model_state(model)
-                print(f"[best-bootstrap] epoch {epoch:03d} val_loss={best_bootstrap_val_loss:.6f}")
+                print(
+                    f"[best-bootstrap] epoch {epoch:03d} "
+                    f"val_loss={best_bootstrap_val_loss:.6f}"
+                    f"{format_albedo_metrics(metrics)}"
+                )
 
             if phase == "finetune" and metrics["brdf_val_loss"] < best_finetune_val_loss:
                 best_finetune_val_loss = metrics["brdf_val_loss"]
@@ -1452,7 +1648,12 @@ def main():
                         for k, v in model.importance_sampler.state_dict().items()
                     }
                     best_sampler_loss = metrics["sampler_loss"]
-                print(f"[best-finetune] epoch {epoch:03d} val_loss={best_finetune_val_loss:.6f} and sampler_loss={best_sampler_loss:.6f}")
+                print(
+                    f"[best-finetune] epoch {epoch:03d} "
+                    f"val_loss={best_finetune_val_loss:.6f}"
+                    f"{format_albedo_metrics(metrics)} "
+                    f"and sampler_loss={best_sampler_loss:.6f}"
+                )
 
             if best_finetune_state is not None:
                 best_brdf_val_loss = best_finetune_val_loss

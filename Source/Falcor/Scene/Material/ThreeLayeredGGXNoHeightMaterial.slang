@@ -40,7 +40,7 @@ struct ThreeLayeredGGXNoHeightMaterialData
 
     uint enableBaseLayer = 1;
     uint enableMidLayer = 1;
-    uint enableCoatLayer = 1;
+    uint enableCoatLayer = 0;
     uint flipNormalY = 1;
 };
 

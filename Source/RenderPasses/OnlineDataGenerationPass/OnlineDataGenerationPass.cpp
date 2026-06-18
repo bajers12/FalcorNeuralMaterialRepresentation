@@ -38,6 +38,7 @@ const char kMipExponentialRate[] = "mipExponentialRate";
 const char kMinFilterSampleCount[] = "minFilterSampleCount";
 const char kMaxFilterSampleCount[] = "maxFilterSampleCount";
 const char kGaussianFilterStdScale[] = "gaussianFilterStdScale";
+const char kGenerateAlbedoTarget[] = "generateAlbedoTarget";
 const uint32_t kBootstrapFeatureCapacity = 32;
 
 namespace
@@ -103,6 +104,7 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
     mMinFilterSampleCount = 1;
     mMaxFilterSampleCount = 64;
     mGaussianFilterStdScale = 0.5f;
+    mGenerateAlbedoTarget = false;
     mpMappedData = nullptr;
 
     parseProperties(props);
@@ -128,6 +130,7 @@ void OnlineDataGenerationPass::parseProperties(const Properties& props)
         else if (key == kMinFilterSampleCount) mMinFilterSampleCount = std::max(1u, (uint32_t)value);
         else if (key == kMaxFilterSampleCount) mMaxFilterSampleCount = std::max(1u, (uint32_t)value);
         else if (key == kGaussianFilterStdScale) mGaussianFilterStdScale = std::max(0.f, (float)value);
+        else if (key == kGenerateAlbedoTarget) mGenerateAlbedoTarget = value;
     }
     mMaxFilterSampleCount = std::max(mMinFilterSampleCount, mMaxFilterSampleCount);
 }
@@ -146,6 +149,7 @@ Properties OnlineDataGenerationPass::getProperties() const
     props[kMinFilterSampleCount] = mMinFilterSampleCount;
     props[kMaxFilterSampleCount] = mMaxFilterSampleCount;
     props[kGaussianFilterStdScale] = mGaussianFilterStdScale;
+    props[kGenerateAlbedoTarget] = mGenerateAlbedoTarget;
 
     return props;
 }
@@ -218,6 +222,7 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gMinFilterSampleCount"] = mMinFilterSampleCount;
     var["gMaxFilterSampleCount"] = mMaxFilterSampleCount;
     var["gGaussianFilterStdScale"] = mGaussianFilterStdScale;
+    var["gGenerateAlbedoTarget"] = mGenerateAlbedoTarget;
 
     mpPass->execute(pRenderContext, mSampleCount, 1, 1);
     pRenderContext->uavBarrier(mpGpuSampleBuffer.get());

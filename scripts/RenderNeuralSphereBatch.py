@@ -8,6 +8,7 @@ output_dir = Path(os.environ["NEURAL_CAPTURE_OUTPUT"]).resolve()
 frame_count = int(os.environ.get("NEURAL_CAPTURE_FRAMES", "8192"))
 width = int(os.environ.get("NEURAL_CAPTURE_WIDTH", "1920"))
 height = int(os.environ.get("NEURAL_CAPTURE_HEIGHT", "1080"))
+use_bsdf_sampling = os.environ.get("NEURAL_CAPTURE_USE_BSDF_SAMPLING", "0").lower() in ("1", "true", "yes", "on")
 
 reference_scene = os.environ.get("REFERENCE_SCENE_PATH")
 
@@ -42,6 +43,7 @@ path_tracer = createPass(
     "PathTracer",
     {
         "samplesPerPixel": 1,
+        "useBSDFSampling": use_bsdf_sampling,
     },
 )
 accumulate = createPass("AccumulatePass", {"enabled": True, "precisionMode": "Single"})

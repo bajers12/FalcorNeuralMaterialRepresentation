@@ -39,12 +39,12 @@ def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
         pass
 
 
-def save_weights_bin(path: Path, weights: dict) -> None:
+def save_weights_bin(path: Path, weights: dict, output_dim: int = 3) -> dict:
     return save_network_weights_bin(
         path=path,
         weights=weights,
         input_dim=20,
-        output_dim=3,
+        output_dim=output_dim,
         has_frame_linear=True,
     )
 
@@ -112,6 +112,8 @@ def _infer_network_layout(
         "num_frames": num_frames,
         "mlp_width": mlp_width,
         "mlp_depth": mlp_depth,
+        "output_dim": int(output_dim),
+        "weight_file_format": "NMDLWT03",
         "linear_layers": linear_layers,
         "decoder_layout": decoder_layout,
     }
@@ -137,8 +139,8 @@ def save_network_weights_bin(
     mlp_depth = layout["mlp_depth"]
 
     with open(path, "wb") as f:
-        f.write(b"NMDLWT02")
-        f.write(struct.pack("<iiii", latent_ch, num_frames, mlp_width, mlp_depth))
+        f.write(b"NMDLWT03")
+        f.write(struct.pack("<iiiii", latent_ch, num_frames, mlp_width, mlp_depth, output_dim))
 
         for layer_name in layout["linear_layers"]:
             weight_name = f"{layer_name}.weight"
@@ -149,22 +151,23 @@ def save_network_weights_bin(
                 b = np.asarray(weights[bias_name], dtype=np.float32)
                 f.write(b.ravel(order="C").tobytes())
 
-    layout["weight_file_format"] = "NMDLWT02"
     return layout
 
 
-def save_metadata(path: Path, latent: np.ndarray, weights: dict) -> None:
+def save_metadata(path: Path, latent: np.ndarray, weights: dict, output_dim: int = 3) -> None:
     _, h, w = latent.shape
-    layout = _infer_network_layout(weights, input_dim=20, output_dim=3, has_frame_linear=True)
+    layout = _infer_network_layout(weights, input_dim=20, output_dim=output_dim, has_frame_linear=True)
     metadata = {
         "width": int(w),
         "height": int(h),
         "latent_dim": int(latent.shape[0]),
         "num_frames": layout["num_frames"],
         "apply_exp": True,
+        "output_dim": layout["output_dim"],
+        "has_albedo_output": output_dim >= 6,
         "mlp_width": layout["mlp_width"],
         "mlp_depth": layout["mlp_depth"],
-        "weight_file_format": "NMDLWT02",
+        "weight_file_format": layout["weight_file_format"],
         "decoder_layout": layout["decoder_layout"],
         "mip_count": 1,
         "mip_shapes": [[int(h), int(w)]],
@@ -186,7 +189,8 @@ def save_sampler_metadata(path: Path, weights: dict, *, latent_ch: int) -> None:
         "num_frames": layout["num_frames"],
         "mlp_width": layout["mlp_width"],
         "mlp_depth": layout["mlp_depth"],
-        "weight_file_format": "NMDLWT02",
+        "output_dim": 9,
+        "weight_file_format": layout["weight_file_format"],
         "decoder_layout": layout["decoder_layout"],
     }
     with open(path, "w", encoding="utf-8") as f:
@@ -225,17 +229,39 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
             np.save(preview_dir / "latent1.npy", rgba1)
 
     sd = model.decoder.state_dict()
+    mlp_layer_indices = sorted(
+        int(k.split(".")[1]) for k in sd.keys() if k.startswith("mlp.") and k.endswith(".weight")
+    )
+    if not mlp_layer_indices:
+        raise ValueError("Decoder state_dict contains no mlp.*.weight layers.")
+    final_layer = f"mlp.{mlp_layer_indices[-1]}"
+    export_albedo = "albedo_head.weight" in sd and "albedo_head.bias" in sd
+
     weights = {
         "latent_ch": np.array([cfg.latent_ch], dtype=np.int32),
         "num_frames": np.array([cfg.num_frames], dtype=np.int32),
         "frame_linear.weight": sd["frame_linear.weight"].detach().cpu().numpy(),
     }
     for key, value in sd.items():
-        if key.startswith("mlp."):
+        if key == f"{final_layer}.weight" and export_albedo:
+            brdf_w = value.detach().cpu().numpy()
+            albedo_w = sd["albedo_head.weight"].detach().cpu().numpy()
+            if brdf_w.shape[1] != albedo_w.shape[1]:
+                raise ValueError(
+                    f"Cannot export albedo head: final decoder width {brdf_w.shape[1]} "
+                    f"does not match albedo head width {albedo_w.shape[1]}."
+                )
+            weights[key] = np.concatenate([brdf_w, albedo_w], axis=0)
+        elif key == f"{final_layer}.bias" and export_albedo:
+            brdf_b = value.detach().cpu().numpy()
+            albedo_b = sd["albedo_head.bias"].detach().cpu().numpy()
+            weights[key] = np.concatenate([brdf_b, albedo_b], axis=0)
+        elif key.startswith("mlp."):
             weights[key] = value.detach().cpu().numpy()
 
-    save_weights_bin(preview_dir / "decoder_weights.bin", weights)
-    save_metadata(preview_dir / "metadata.json", latent_levels[0], weights)
+    output_dim = 6 if export_albedo else 3
+    save_weights_bin(preview_dir / "decoder_weights.bin", weights, output_dim=output_dim)
+    save_metadata(preview_dir / "metadata.json", latent_levels[0], weights, output_dim=output_dim)
     metadata_path = preview_dir / "metadata.json"
     with open(metadata_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)

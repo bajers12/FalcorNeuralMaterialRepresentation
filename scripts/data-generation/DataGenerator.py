@@ -20,6 +20,7 @@ class DataGenerator():
         min_filter_sample_count = 1,
         max_filter_sample_count = 8,
         gaussian_filter_std_scale = 0.5,
+        generate_albedo_target = False,
     ):
         # Construct path relative to project root
         project_root = Path(__file__).parent.parent.parent
@@ -43,6 +44,7 @@ class DataGenerator():
                 "minFilterSampleCount": min_filter_sample_count,
                 "maxFilterSampleCount": max_filter_sample_count,
                 "gaussianFilterStdScale": gaussian_filter_std_scale,
+                "generateAlbedoTarget": generate_albedo_target,
             },
         )
         self.graph.mark_output("OnlineDataGenerationPass.output")

@@ -76,7 +76,7 @@ namespace Falcor
 
             uint32_t enableBaseLayer = 1;
             uint32_t enableMidLayer = 1;
-            uint32_t enableCoatLayer = 1;
+            uint32_t enableCoatLayer = 0;
             uint32_t flipNormalY = 1;
         };
         static_assert(sizeof(Data) <= sizeof(MaterialPayload), "ThreeLayeredGGXNoHeightMaterial payload must fit in MaterialPayload");

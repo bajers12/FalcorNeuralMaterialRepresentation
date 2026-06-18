@@ -90,7 +90,7 @@ class TrainingRunLogger:
         metrics: Dict[str, float],
         phase: str,
     ) -> Dict[str, object]:
-        return {
+        entry = {
             "epoch": int(epoch),
             "phase": str(phase),
             "train_loss": _safe_float(metrics.get("brdf_loss", metrics.get("loss"))),
@@ -98,6 +98,16 @@ class TrainingRunLogger:
             "yhat_mean": _safe_float(metrics.get("yhat_mean")),
             "elapsed_seconds": time.time() - self.start_time,
         }
+        if "albedo_loss" in metrics:
+            entry["albedo_loss"] = _safe_float(metrics.get("albedo_loss"))
+            entry["albedo_val_loss"] = _safe_float(metrics.get("albedo_val_loss"))
+            entry["albedo_loss_raw"] = _safe_float(metrics.get("albedo_loss_raw"))
+            entry["albedo_val_loss_raw"] = _safe_float(metrics.get("albedo_val_loss_raw"))
+            entry["albedo_loss_scale"] = _safe_float(metrics.get("albedo_loss_scale"))
+            entry["albedo_val_loss_scale"] = _safe_float(metrics.get("albedo_val_loss_scale"))
+            entry["albedo_loss_weighted"] = _safe_float(metrics.get("albedo_loss_weighted"))
+            entry["albedo_val_loss_weighted"] = _safe_float(metrics.get("albedo_val_loss_weighted"))
+        return entry
 
     def should_log_progress(
         self,
@@ -152,6 +162,13 @@ class TrainingRunLogger:
                 "tex_h": int(self.cfg.tex_h),
                 "train_latent_texture": bool(self.cfg.train_latent_texture),
                 "train_decoder": bool(self.cfg.train_decoder),
+                "fixed_canonical_frames": bool(getattr(self.cfg, "fixed_canonical_frames", False)),
+                "brdf_loss_mode": str(getattr(self.cfg, "brdf_loss_mode", "log_l1")),
+                "predict_albedo": bool(getattr(self.cfg, "predict_albedo", False)),
+                "albedo_loss_weight": float(getattr(self.cfg, "albedo_loss_weight", 1.0)),
+                "albedo_loss_normalization": str(getattr(self.cfg, "albedo_loss_normalization", "none")),
+                "albedo_loss_normalization_eps": float(getattr(self.cfg, "albedo_loss_normalization_eps", 1e-6)),
+                "albedo_loss_running_beta": float(getattr(self.cfg, "albedo_loss_running_beta", 0.99)),
                 "features": self._feature_flags(),
             },
             "best_epoch": _safe_int(best_epoch),

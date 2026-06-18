@@ -3,6 +3,7 @@
 #include "Core/API/Device.h"
 #include "Utils/Logger.h"
 #include <algorithm>
+#include <cstring>
 #include <fstream>
 
 namespace Falcor
@@ -10,6 +11,7 @@ namespace Falcor
     namespace
     {
         constexpr const char kWeightMagic02[8] = { 'N','M','D','L','W','T','0','2' };
+        constexpr const char kWeightMagic03[8] = { 'N','M','D','L','W','T','0','3' };
         const std::string kShaderFile = "Scene/Material/NeuralMaterial.slang";
     }
     namespace
@@ -161,7 +163,9 @@ namespace Falcor
             if (!f)
                 FALCOR_THROW("Invalid weight file magic in: {}", path.string());
 
-            if (std::memcmp(magic, kWeightMagic02, 8) != 0)
+            bool isVersion02 = std::memcmp(magic, kWeightMagic02, 8) == 0;
+            bool isVersion03 = std::memcmp(magic, kWeightMagic03, 8) == 0;
+            if (!isVersion02 && !isVersion03)
                 FALCOR_THROW("Invalid weight file magic in: {}", path.string());
 
             int32_t latentCh = 8;
@@ -169,11 +173,14 @@ namespace Falcor
 
             int32_t mlpWidth = 32;
             int32_t mlpDepth = 2;
+            int32_t outputDim = static_cast<int32_t>(expectedOutputDim);
 
             f.read(reinterpret_cast<char*>(&latentCh), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&numFrames), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&mlpWidth), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&mlpDepth), sizeof(int32_t));
+            if (isVersion03)
+                f.read(reinterpret_cast<char*>(&outputDim), sizeof(int32_t));
             if (!f) FALCOR_THROW("Failed reading weight file header: {}", path.string());
 
             if (latentCh != 8) FALCOR_THROW("Expected latentCh == 8, got {} in {}", latentCh, path.string());
@@ -183,6 +190,15 @@ namespace Falcor
                 FALCOR_THROW("Expected mlpWidth in {16, 32, 64}, got {} in {}", mlpWidth, path.string());
             if (mlpDepth != 2 && mlpDepth != 3)
                 FALCOR_THROW("Expected mlpDepth in {2, 3}, got {} in {}", mlpDepth, path.string());
+            if (hasFrameLinear)
+            {
+                if (outputDim != 3 && outputDim != 6)
+                    FALCOR_THROW("Expected BRDF decoder outputDim in {3, 6}, got {} in {}", outputDim, path.string());
+            }
+            else if (outputDim != static_cast<int32_t>(expectedOutputDim))
+            {
+                FALCOR_THROW("Expected decoder outputDim == {}, got {} in {}", expectedOutputDim, outputDim, path.string());
+            }
 
             std::vector<float> frameLinear;
             if (hasFrameLinear)
@@ -198,15 +214,15 @@ namespace Falcor
 
             if (mlpDepth == 2)
             {
-                w2 = readFloatArray(f, static_cast<size_t>(expectedOutputDim) * static_cast<size_t>(mlpWidth));
-                b2 = readFloatArray(f, expectedOutputDim);
+                w2 = readFloatArray(f, static_cast<size_t>(outputDim) * static_cast<size_t>(mlpWidth));
+                b2 = readFloatArray(f, outputDim);
             }
             else
             {
                 w2 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
                 b2 = readFloatArray(f, static_cast<size_t>(mlpWidth));
-                w3 = readFloatArray(f, static_cast<size_t>(expectedOutputDim) * static_cast<size_t>(mlpWidth));
-                b3 = readFloatArray(f, expectedOutputDim);
+                w3 = readFloatArray(f, static_cast<size_t>(outputDim) * static_cast<size_t>(mlpWidth));
+                b3 = readFloatArray(f, outputDim);
             }
 
             // Pack all weights into a single buffer
@@ -252,6 +268,7 @@ namespace Falcor
             {
                 int32_t mlpWidth = 0;
                 int32_t mlpDepth = 0;
+                int32_t outputDim = 0;
                 ref<Buffer> decoderBuffer;
                 Data::DecoderWeightOffsets offsets;
             };
@@ -259,6 +276,7 @@ namespace Falcor
             LoadedDecoder loaded;
             loaded.mlpWidth = mlpWidth;
             loaded.mlpDepth = mlpDepth;
+            loaded.outputDim = outputDim;
             loaded.offsets = offsets;
             loaded.decoderBuffer = make_ref<Buffer>(
                 mpDevice,
@@ -373,10 +391,7 @@ namespace Falcor
 
     TypeConformanceList NeuralMaterial::getTypeConformances() const
     {
-        TypeConformanceList conformances;
-        // This maps the Slang struct "NeuralMaterial" to the interface "IMaterial"
-        conformances.add("NeuralMaterial", "IMaterial");
-        return conformances;
+        return {{{"NeuralMaterial", "IMaterial"}, (uint32_t)getType()}};
     }
 
 }
