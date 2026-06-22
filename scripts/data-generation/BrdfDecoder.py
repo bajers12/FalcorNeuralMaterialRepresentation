@@ -3,32 +3,6 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
-DECODER_DIRECTION_INPUT_WIWO = "wiwo"
-DECODER_DIRECTION_INPUT_HALF_DIFF = "half_diff"
-
-
-def encode_half_difference(wi: torch.Tensor, wo: torch.Tensor) -> torch.Tensor:
-    """
-    Compact half/difference direction encoding used for ablation runs.
-
-    Returns [h.x, h.y, dot(wi,h), dot(wo,h), cos(phi_diff)] with h.z implicit.
-    """
-    h = Decoder._safe_normalize(wi + wo)
-    cos_theta_i = torch.clamp((wi * h).sum(dim=-1), -1.0, 1.0)
-    cos_theta_o = torch.clamp((wo * h).sum(dim=-1), -1.0, 1.0)
-
-    wi_perp = wi - cos_theta_i.unsqueeze(-1) * h
-    wo_perp = wo - cos_theta_o.unsqueeze(-1) * h
-    wi_perp = Decoder._safe_normalize(wi_perp)
-    wo_perp = Decoder._safe_normalize(wo_perp)
-    cos_phi_diff = torch.clamp((wi_perp * wo_perp).sum(dim=-1), -1.0, 1.0)
-
-    return torch.stack(
-        [h[..., 0], h[..., 1], cos_theta_i, cos_theta_o, cos_phi_diff],
-        dim=-1,
-    )
-
-
 class Decoder(nn.Module):
     """
     Decoder:
@@ -46,35 +20,17 @@ class Decoder(nn.Module):
         mlp_depth: int = 2,
         use_bias_in_mlp: bool = True,
         frame_linear_bias: bool = False,
-        fixed_canonical_frames: bool = False,
-        predict_albedo: bool = False,
         exp_offset: float = 3.0,
-        direction_input: str = DECODER_DIRECTION_INPUT_WIWO,
     ):
         super().__init__()
         assert num_frames >= 1
-        if direction_input not in (DECODER_DIRECTION_INPUT_WIWO, DECODER_DIRECTION_INPUT_HALF_DIFF):
-            raise ValueError(
-                f"Unsupported decoder direction_input={direction_input!r}. "
-                f"Expected '{DECODER_DIRECTION_INPUT_WIWO}' or '{DECODER_DIRECTION_INPUT_HALF_DIFF}'."
-            )
         self.latent_ch = latent_ch
         self.num_frames = num_frames
-        self.fixed_canonical_frames = fixed_canonical_frames
-        self.predict_albedo = predict_albedo
         self.exp_offset = exp_offset
-        self.direction_input = direction_input
 
         self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias)
-        if self.fixed_canonical_frames:
-            with torch.no_grad():
-                self.frame_linear.weight.zero_()
-                if self.frame_linear.bias is not None:
-                    self.frame_linear.bias.zero_()
-            self.frame_linear.requires_grad_(False)
 
-        dir_ch_per_frame = 5 if direction_input == DECODER_DIRECTION_INPUT_HALF_DIFF else 6
-        mlp_in = latent_ch + dir_ch_per_frame * num_frames
+        mlp_in = latent_ch + 6 * num_frames
         layers = []
         prev = mlp_in
         for _ in range(mlp_depth):
@@ -83,12 +39,21 @@ class Decoder(nn.Module):
             prev = mlp_width
         layers.append(nn.Linear(prev, 3, bias=use_bias_in_mlp))
         self.mlp = nn.Sequential(*layers)
-        self.albedo_head = nn.Linear(prev, 3, bias=use_bias_in_mlp) if predict_albedo else None
 
     @staticmethod
     def _safe_normalize(v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
         out = v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+
+    def loss(
+        self,
+        raw: torch.Tensor,
+        y: torch.Tensor,
+        exp_offset: float,
+        eps: float,
+        mask_threshold: float = 1e-4,
+    ) -> torch.Tensor:
+        return Decoder.log_l1_loss(raw, y, exp_offset, eps, mask_threshold)
 
     def _predict_frames(
         self, z: torch.Tensor
@@ -112,7 +77,7 @@ class Decoder(nn.Module):
 
         return T, Bv, N
 
-    def _decoder_input(
+    def forward_raw(
         self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
     ) -> torch.Tensor:
         """
@@ -140,36 +105,39 @@ class Decoder(nn.Module):
             dim=-1,
         )
 
-        if self.direction_input == DECODER_DIRECTION_INPUT_HALF_DIFF:
-            dir_feats = encode_half_difference(wi_f, wo_f).view(
-                z.shape[0], 5 * self.num_frames
-            )
-        else:
-            dir_feats = torch.cat([wi_f, wo_f], dim=-1).view(
-                z.shape[0], 6 * self.num_frames
-            )
-        return torch.cat([z, dir_feats], dim=-1)
-
-    def forward_raw_and_albedo(
-        self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
-        x = self._decoder_input(z, wi, wo)
-        hidden = self.mlp[:-1](x)
-        raw = self.mlp[-1](hidden)
-        albedo = torch.sigmoid(self.albedo_head(hidden)) if self.albedo_head is not None else None
-        return raw, albedo
-
-    def forward_raw(
-        self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
-    ) -> torch.Tensor:
-        raw, _ = self.forward_raw_and_albedo(z, wi, wo)
-        return raw
+        dir_feats = torch.cat([wi_f, wo_f], dim=-1).view(
+            z.shape[0], 6 * self.num_frames
+        )
+        x = torch.cat([z, dir_feats], dim=-1)
+        return self.mlp(x)
 
     def forward(
         self, z: torch.Tensor, wi: torch.Tensor, wo: torch.Tensor
     ) -> torch.Tensor:
         raw = self.forward_raw(z, wi, wo)
         return torch.exp(raw - self.exp_offset)
+
+    @staticmethod
+    def log_diff(
+        raw: torch.Tensor,
+        y: torch.Tensor,
+        exp_offset: float,
+        eps: float,
+        mask_threshold: float = 1e-4,
+    ) -> torch.Tensor:
+        y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
+
+        # Build per-sample mask: keep samples that have at least one significant channel
+        valid = y.amax(dim=-1) >= mask_threshold  # [B]
+        if valid.any():
+            raw_c = raw[valid]
+            y_c = y[valid].clamp_min(eps)
+        else:
+            # Fallback: use everything (avoids zero-element mean on pathological batches)
+            raw_c = raw
+            y_c = y.clamp_min(eps)
+
+        return ((raw_c - exp_offset) - torch.log(y_c))
 
     @staticmethod
     def log_l1_loss(
@@ -186,42 +154,14 @@ class Decoder(nn.Module):
         This is equivalent to taking the log of the exponential decoder output, but
         avoids overflowing exp(raw - exp_offset) before the logarithm is applied.
         """
-        y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-
-        # Build per-sample mask: keep samples that have at least one significant channel
-        valid = y.amax(dim=-1) >= mask_threshold  # [B]
-        if valid.any():
-            raw_c = raw[valid]
-            y_c = y[valid].clamp_min(eps)
-        else:
-            # Fallback: use everything (avoids zero-element mean on pathological batches)
-            raw_c = raw
-            y_c = y.clamp_min(eps)
-
-        return ((raw_c - exp_offset) - torch.log(y_c)).abs().mean()
+        return Decoder.log_diff(raw, y, exp_offset, eps, mask_threshold).abs().mean()
 
     @staticmethod
-    def loss(
+    def log_l2_loss(
         raw: torch.Tensor,
         y: torch.Tensor,
         exp_offset: float,
         eps: float,
-        mode: str = "log_l1",
         mask_threshold: float = 1e-4,
     ) -> torch.Tensor:
-        if mode == "log_l1":
-            return Decoder.log_l1_loss(raw, y, exp_offset, eps, mask_threshold)
-
-        y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-        valid = y.amax(dim=-1) >= mask_threshold
-        prediction = torch.exp(raw - exp_offset)
-        if valid.any():
-            prediction = prediction[valid]
-            y = y[valid]
-
-        error = prediction - y
-        if mode == "linear_l1":
-            return error.abs().mean()
-        if mode == "linear_l2":
-            return error.square().mean()
-        raise ValueError(f"Unsupported BRDF loss mode: {mode}")
+        return Decoder.log_diff(raw, y, exp_offset, eps, mask_threshold).square().mean()
