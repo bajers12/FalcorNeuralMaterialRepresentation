@@ -1004,14 +1004,16 @@ def parse_args() -> TrainConfig:
     p.add_argument("--freeze_latent_after_epoch", type=int, default=None)
     p.add_argument("--freeze_decoder_after_epoch", type=int, default=None)
 
-    p.add_argument(
-        "--enable_mollification",
-        action="store_true",
-        help="Blur early BRDF targets by averaging outgoing directions in a shrinking cone around wo.",
-    )
+
     p.add_argument("--mollification_start_angle_deg", type=float, default=10.0)
     p.add_argument("--mollification_iterations", type=int, default=20000)
     p.add_argument("--mollification_sample_count", type=int, default=256)
+    p.add_argument(
+        "--enable_mollification",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable or disable guide normal in the training-only material encoder.",
+    )
 
     p.add_argument(
         "--use_normals",
