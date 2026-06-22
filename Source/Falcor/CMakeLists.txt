@@ -470,6 +470,7 @@ target_sources(Falcor PRIVATE
     Scene/Material/StandardMaterialParamLayout.slang
     Scene/Material/TextureHandle.slang
     Scene/Material/TextureSampler.slang
+    Scene/Material/TrainingDirectionGuardMaterial.slang
     Scene/Material/VolumeProperties.slang
 
     Scene/Material/PBRT/PBRTCoatedConductorMaterial.cpp

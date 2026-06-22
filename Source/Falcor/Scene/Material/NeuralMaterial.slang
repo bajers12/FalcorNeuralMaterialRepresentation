@@ -33,6 +33,7 @@ struct NeuralMaterialData
 
     uint brdfMlpWidth = 32;
     uint brdfMlpDepth = 2;
+    uint brdfInputDim = 20;
     DecoderWeightOffsets brdfWeightOffsets = {};
 
     uint samplerMlpWidth = 32;
@@ -133,6 +134,21 @@ float4 neuralBufferLoad4WithOffset(ByteAddressBuffer buf, uint offset, uint inde
 float3 neuralSafeNormalize(float3 v)
 {
     return v * rsqrt(max(dot(v, v), 1e-16f));
+}
+
+void neuralStoreHalfDifferenceFeatures(float3 wi, float3 wo, inout float x[20], uint base)
+{
+    float3 h = neuralSafeNormalize(wi + wo);
+    float cosThetaI = clamp(dot(wi, h), -1.f, 1.f);
+    float cosThetaO = clamp(dot(wo, h), -1.f, 1.f);
+    float3 wiPerp = neuralSafeNormalize(wi - cosThetaI * h);
+    float3 woPerp = neuralSafeNormalize(wo - cosThetaO * h);
+    float cosPhiDiff = clamp(dot(wiPerp, woPerp), -1.f, 1.f);
+    x[base + 0] = h.x;
+    x[base + 1] = h.y;
+    x[base + 2] = cosThetaI;
+    x[base + 3] = cosThetaO;
+    x[base + 4] = cosPhiDiff;
 }
 
 float3 evalMLP16x2(
@@ -398,6 +414,83 @@ float3 evalMLP64x3(
     return y;
 }
 
+float3 evalBrdfMLPWithDepth(
+    ByteAddressBuffer buf,
+    const DecoderWeightOffsets offsets,
+    uint width,
+    uint depth,
+    uint inputDim,
+    const float x[20]
+)
+{
+    if (width == 0 || width > 64)
+        return 0.f.xxx;
+    if (depth != 2 && depth != 3)
+        return 0.f.xxx;
+    if (inputDim != 18u && inputDim != 20u)
+        return 0.f.xxx;
+
+    float h0[64];
+    [loop]
+    for (uint r = 0; r < width; ++r)
+    {
+        float s = neuralBufferLoadWithOffset(buf, offsets.b0Offset, r);
+        [loop]
+        for (uint c = 0; c < inputDim; ++c)
+            s += neuralBufferLoadWithOffset(buf, offsets.w0Offset, r * inputDim + c) * x[c];
+        h0[r] = max(s, 0.f);
+    }
+
+    float h1[64];
+    [loop]
+    for (uint r = 0; r < width; ++r)
+    {
+        float s = neuralBufferLoadWithOffset(buf, offsets.b1Offset, r);
+        [loop]
+        for (uint c = 0; c < width; ++c)
+            s += neuralBufferLoadWithOffset(buf, offsets.w1Offset, r * width + c) * h0[c];
+        h1[r] = max(s, 0.f);
+    }
+
+    if (depth == 2)
+    {
+        float3 y = 0.f.xxx;
+        [unroll]
+        for (uint r = 0; r < 3; ++r)
+        {
+            float s = neuralBufferLoadWithOffset(buf, offsets.b2Offset, r);
+            [loop]
+            for (uint c = 0; c < width; ++c)
+                s += neuralBufferLoadWithOffset(buf, offsets.w2Offset, r * width + c) * h1[c];
+            y[r] = s;
+        }
+        return y;
+    }
+
+    float h2[64];
+    [loop]
+    for (uint r = 0; r < width; ++r)
+    {
+        float s = neuralBufferLoadWithOffset(buf, offsets.b2Offset, r);
+        [loop]
+        for (uint c = 0; c < width; ++c)
+            s += neuralBufferLoadWithOffset(buf, offsets.w2Offset, r * width + c) * h1[c];
+        h2[r] = max(s, 0.f);
+    }
+
+    float3 y = 0.f.xxx;
+    [unroll]
+    for (uint r = 0; r < 3; ++r)
+    {
+        float s = neuralBufferLoadWithOffset(buf, offsets.b3Offset, r);
+        [loop]
+        for (uint c = 0; c < width; ++c)
+            s += neuralBufferLoadWithOffset(buf, offsets.w3Offset, r * width + c) * h2[c];
+        y[r] = s;
+    }
+    return y;
+}
+
 void fetchNeuralLatentPairAtMip(
     const MaterialSystem materials,
     const NeuralMaterialData md,
@@ -539,7 +632,8 @@ float3 evalNeuralBRDFFromLatents(
     //   - frame_linear(z) -> (Nxyz, Txyz) per frame
     //   - B = normalize(cross(N, T))
     //   - MLP input is [z, dir_feats]
-    //   - dir_feats flatten as [frame0(wi_TBN, wo_TBN), frame1(...)]
+    //   - inputDim=20: dir_feats flatten as [frame0(wi_TBN, wo_TBN), frame1(...)]
+    //   - inputDim=18: dir_feats flatten as [frame0(half_diff5), frame1(...)]
     [unroll]
     for (uint i = 0; i < 8; ++i)
         x[i] = z[i];
@@ -548,7 +642,6 @@ float3 evalNeuralBRDFFromLatents(
     for (uint f = 0; f < 2; ++f)
     {
         uint sfBase = 6 * f;
-        uint xBase = 8 + 6 * f;
 
         // Match the trainer and paper supplemental. The frame extractor predicts
         // residuals around N=(0,0,1), T=(1,0,0), and T is not orthogonalized.
@@ -559,25 +652,34 @@ float3 evalNeuralBRDFFromLatents(
         float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
         float3 woPred = float3(dot(woLocal, T), dot(woLocal, B), dot(woLocal, N));
 
-        x[xBase + 0] = wiPred.x;
-        x[xBase + 1] = wiPred.y;
-        x[xBase + 2] = wiPred.z;
-        x[xBase + 3] = woPred.x;
-        x[xBase + 4] = woPred.y;
-        x[xBase + 5] = woPred.z;
+        if (md.brdfInputDim == 18u)
+        {
+            uint xBase = 8 + 5 * f;
+            neuralStoreHalfDifferenceFeatures(wiPred, woPred, x, xBase);
+        }
+        else
+        {
+            uint xBase = 8 + 6 * f;
+            x[xBase + 0] = wiPred.x;
+            x[xBase + 1] = wiPred.y;
+            x[xBase + 2] = wiPred.z;
+            x[xBase + 3] = woPred.x;
+            x[xBase + 4] = woPred.y;
+            x[xBase + 5] = woPred.z;
+        }
     }
 
     float3 y = 0.f.xxx;
-    if (md.brdfMlpWidth == 16 && md.brdfMlpDepth == 2)
+    if (md.brdfInputDim == 20u && md.brdfMlpWidth == 16 && md.brdfMlpDepth == 2)
         y = evalMLP16x2(decoderBuf, md.brdfWeightOffsets, x);
-    else if (md.brdfMlpWidth == 32 && md.brdfMlpDepth == 2)
+    else if (md.brdfInputDim == 20u && md.brdfMlpWidth == 32 && md.brdfMlpDepth == 2)
         y = evalMLP32x2(decoderBuf, md.brdfWeightOffsets, x);
-    else if (md.brdfMlpWidth == 64 && md.brdfMlpDepth == 2)
+    else if (md.brdfInputDim == 20u && md.brdfMlpWidth == 64 && md.brdfMlpDepth == 2)
         y = evalMLP64x2(decoderBuf, md.brdfWeightOffsets, x);
-    else if (md.brdfMlpWidth == 64 && md.brdfMlpDepth == 3)
+    else if (md.brdfInputDim == 20u && md.brdfMlpWidth == 64 && md.brdfMlpDepth == 3)
         y = evalMLP64x3(decoderBuf, md.brdfWeightOffsets, x);
     else
-        return 0.f.xxx;
+        y = evalBrdfMLPWithDepth(decoderBuf, md.brdfWeightOffsets, md.brdfMlpWidth, md.brdfMlpDepth, md.brdfInputDim, x);
 
     float3 outValue = exp(y - expOffset);
     if (any(isnan(outValue)) || any(isinf(outValue)))

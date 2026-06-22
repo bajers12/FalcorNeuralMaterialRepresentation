@@ -48,7 +48,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import AssetConverter
-from BrdfDecoder import Decoder
+from BrdfDecoder import (
+    DECODER_DIRECTION_INPUT_WIWO,
+    Decoder,
+)
 from ImportanceSamplingDecoder import ImportanceSamplingDecoder
 from MaterialEncoder import MaterialEncoder
 from LatentTexture import LatentTexture
@@ -72,6 +75,8 @@ class TrainConfig:
     gaussian_filter_std_scale: float = 0.5
 
     scene_path: str = 'MatXScenes/Preview/MatXScene.pyscene'
+    direction_sampling: str = "half_diff"
+    layer_horizon_guard_threshold: float = 0.0
 
     # Decoder architecture
     num_frames: int = 2
@@ -81,6 +86,7 @@ class TrainConfig:
     frame_linear_bias: bool = False
     fixed_canonical_frames: bool = False
     predict_albedo: bool = False
+    decoder_direction_input: str = DECODER_DIRECTION_INPUT_WIWO
     albedo_loss_weight: float = 1.0
     albedo_loss_normalization: str = "none"
     albedo_loss_normalization_eps: float = 1e-6
@@ -115,6 +121,7 @@ class TrainConfig:
     out_dir: str = "./output_weights"
     preview_out_dir: str = ""
     print_every_epochs: int = 10000
+    export_numpy_debug: bool = False
 
     # Training behavior
     train_latent_texture: bool = True
@@ -209,6 +216,7 @@ class NeuralMaterialModel(nn.Module):
             fixed_canonical_frames=cfg.fixed_canonical_frames,
             predict_albedo=cfg.predict_albedo,
             exp_offset=cfg.exp_offset,
+            direction_input=cfg.decoder_direction_input,
         )
         self.importance_sampler = ImportanceSamplingDecoder(
             latent_ch=cfg.latent_ch,
@@ -493,7 +501,9 @@ def initialize_latent_texture_from_encoder(
             sampleCount=uv_sample_capacity,
             bootstrap_feature_layout=cfg.bootstrap_feature_layout,
             scene_path=cfg.scene_path,
+            direction_sampling=cfg.direction_sampling,
             hierarchical_filtering_enabled=False,
+            layer_horizon_guard_threshold=cfg.layer_horizon_guard_threshold,
         )
         try:
             if not grid_generator.supports_uv_samples():
@@ -1040,6 +1050,22 @@ def parse_args() -> TrainConfig:
     )
     p.add_argument("--device", type=str, default="cuda")
     p.add_argument("--seed", type=int, default=1337)
+    p.add_argument(
+        "--direction_sampling",
+        type=str,
+        choices=("half_diff", "half_diff_limited", "wiwo"),
+        default="half_diff",
+        help="BSDF direction sampling used by OnlineDataGenerationPass.",
+    )
+    p.add_argument(
+        "--layer_horizon_guard_threshold",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional material-frame horizon guard for training data. "
+            "When > 0, OnlineDataGenerationPass resamples wi/wo pairs whose per-layer local cosines fall below this threshold."
+        ),
+    )
 
     p.add_argument("--tex_h", type=int, default=4096)
     p.add_argument("--tex_w", type=int, default=4096)
@@ -1068,6 +1094,13 @@ def parse_args() -> TrainConfig:
     p.add_argument("--num_frames", type=int, default=2)
     p.add_argument("--brdf_mlp_width", type=int, default=64)
     p.add_argument("--brdf_mlp_depth", type=int, default=2)
+    p.add_argument(
+        "--decoder_direction_input",
+        type=str,
+        choices=("wiwo", "half_diff"),
+        default="wiwo",
+        help="Direction encoding consumed by the BRDF decoder MLP.",
+    )
     p.add_argument(
         "--fixed_canonical_frames",
         action="store_true",
@@ -1141,6 +1174,11 @@ def parse_args() -> TrainConfig:
     )
 
     p.add_argument("--print_every_epochs", type=int, default=10000)
+    p.add_argument(
+        "--export_numpy_debug",
+        action="store_true",
+        help="Also write large latent*.npy debug dumps during renderer asset export. Runtime uses EXR files.",
+    )
     p.add_argument(
         "--train_latent_texture",
         action=argparse.BooleanOptionalAction,
@@ -1237,6 +1275,8 @@ def parse_args() -> TrainConfig:
     cfg.device = args.device
     cfg.seed = args.seed
     cfg.scene_path = args.scene_path
+    cfg.direction_sampling = args.direction_sampling
+    cfg.layer_horizon_guard_threshold = max(0.0, args.layer_horizon_guard_threshold)
 
     cfg.tex_h = args.tex_h
     cfg.tex_w = args.tex_w
@@ -1250,6 +1290,7 @@ def parse_args() -> TrainConfig:
     cfg.num_frames = args.num_frames
     cfg.brdf_mlp_width = args.brdf_mlp_width
     cfg.brdf_mlp_depth = args.brdf_mlp_depth
+    cfg.decoder_direction_input = args.decoder_direction_input
     cfg.fixed_canonical_frames = args.fixed_canonical_frames
     cfg.predict_albedo = args.predict_albedo
     cfg.albedo_loss_weight = max(0.0, args.albedo_loss_weight)
@@ -1276,6 +1317,7 @@ def parse_args() -> TrainConfig:
     cfg.brdf_loss_mode = args.brdf_loss_mode
 
     cfg.print_every_epochs = max(0, args.print_every_epochs)
+    cfg.export_numpy_debug = args.export_numpy_debug
     cfg.train_latent_texture = args.train_latent_texture
     cfg.train_decoder = args.train_decoder
 
@@ -1360,8 +1402,10 @@ def main():
             sampleCount=cfg.validation_n,
             bootstrap_feature_layout=cfg.bootstrap_feature_layout,
             scene_path=cfg.scene_path,
+            direction_sampling=cfg.direction_sampling,
             hierarchical_filtering_enabled=False,
             generate_albedo_target=cfg.predict_albedo,
+            layer_horizon_guard_threshold=cfg.layer_horizon_guard_threshold,
         )
         cfg.material_feature_names = tuple(bootstrap_validation_generator.get_bootstrap_feature_names())
         cfg.material_feature_dim = bootstrap_validation_generator.get_bootstrap_feature_dim()
@@ -1384,6 +1428,11 @@ def main():
     run_logger = TrainingRunLogger(cfg)
     print("Config:", json.dumps(asdict(cfg), indent=2))
     print(f"[train] BRDF loss mode: {cfg.brdf_loss_mode}")
+    if cfg.layer_horizon_guard_threshold > 0.0:
+        print(
+            "[train] material-frame horizon guard enabled: "
+            f"threshold={cfg.layer_horizon_guard_threshold:g}"
+        )
     if cfg.predict_albedo:
         print(
             "[train] auxiliary directional-albedo prediction enabled: "
@@ -1453,6 +1502,7 @@ def main():
             sampleCount=cfg.validation_n,
             bootstrap_feature_layout="none",
             scene_path=cfg.scene_path,
+            direction_sampling=cfg.direction_sampling,
             hierarchical_filtering_enabled=cfg.hierarchical_mip_count > 1,
             hierarchical_mip_count=cfg.hierarchical_mip_count,
             finest_texture_width=cfg.tex_w,
@@ -1462,6 +1512,7 @@ def main():
             max_filter_sample_count=cfg.max_filter_sample_count,
             gaussian_filter_std_scale=cfg.gaussian_filter_std_scale,
             generate_albedo_target=cfg.predict_albedo,
+            layer_horizon_guard_threshold=cfg.layer_horizon_guard_threshold,
         )
         if cfg.encoder_bootstrap_epochs > 0 and not validation_generator.supports_uv_grid():
             raise RuntimeError(
@@ -1481,13 +1532,16 @@ def main():
                 sampleCount=cfg.training_n,
                 bootstrap_feature_layout=cfg.bootstrap_feature_layout,
                 scene_path=cfg.scene_path,
+                direction_sampling=cfg.direction_sampling,
                 hierarchical_filtering_enabled=False,
                 generate_albedo_target=cfg.predict_albedo,
+                layer_horizon_guard_threshold=cfg.layer_horizon_guard_threshold,
             )
         finetune_data_generator = DataGenerator(
             sampleCount=cfg.training_n,
             bootstrap_feature_layout="none",
             scene_path=cfg.scene_path,
+            direction_sampling=cfg.direction_sampling,
             hierarchical_filtering_enabled=cfg.hierarchical_mip_count > 1,
             hierarchical_mip_count=cfg.hierarchical_mip_count,
             finest_texture_width=cfg.tex_w,
@@ -1497,6 +1551,7 @@ def main():
             max_filter_sample_count=cfg.max_filter_sample_count,
             gaussian_filter_std_scale=cfg.gaussian_filter_std_scale,
             generate_albedo_target=cfg.predict_albedo,
+            layer_horizon_guard_threshold=cfg.layer_horizon_guard_threshold,
         )
         if cfg.train_importance_sampler:
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")

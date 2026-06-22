@@ -108,11 +108,20 @@ private:
         Material,
     };
 
+    enum class DirectionSamplingMode
+    {
+        HalfDifference,
+        HalfDifferenceLimited,
+        WiWo,
+    };
+
     void OnlineDataGenerationPass::parseProperties(const Properties& props);
     void resolveBootstrapFeatureLayout();
     void recreateSampleBuffers();
     static BootstrapFeatureLayout parseBootstrapFeatureLayout(const std::string& value);
     static std::string bootstrapFeatureLayoutToString(BootstrapFeatureLayout layout);
+    static DirectionSamplingMode parseDirectionSamplingMode(const std::string& value);
+    static std::string directionSamplingModeToString(DirectionSamplingMode mode);
 
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;
@@ -143,6 +152,8 @@ private:
     uint32_t mMaxFilterSampleCount = 64;
     float mGaussianFilterStdScale = 0.5f;
     bool mGenerateAlbedoTarget = false;
+    DirectionSamplingMode mDirectionSamplingMode = DirectionSamplingMode::HalfDifference;
+    float mLayerHorizonGuardThreshold = 0.f;
     BootstrapFeatureLayout mRequestedBootstrapFeatureLayout = BootstrapFeatureLayout::Auto;
     BootstrapFeatureLayout mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::None;
     std::vector<std::string> mBootstrapFeatureNames;

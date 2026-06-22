@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import numpy as np
 from pathlib import Path
 import struct
 import json
 import os
-from OnlineStepfreeze import NeuralMaterialModel, TrainConfig
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from OnlineStepfreeze import NeuralMaterialModel, TrainConfig
 
 def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
     rgba_hw4 = np.asarray(rgba_hw4, dtype=np.float32)
@@ -39,11 +44,17 @@ def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
         pass
 
 
-def save_weights_bin(path: Path, weights: dict, output_dim: int = 3) -> dict:
+def decoder_input_dim_from_config(cfg) -> int:
+    direction_input = getattr(cfg, "decoder_direction_input", "wiwo")
+    dir_ch_per_frame = 5 if direction_input == "half_diff" else 6
+    return int(cfg.latent_ch + dir_ch_per_frame * cfg.num_frames)
+
+
+def save_weights_bin(path: Path, weights: dict, output_dim: int = 3, input_dim: int = 20) -> dict:
     return save_network_weights_bin(
         path=path,
         weights=weights,
-        input_dim=20,
+        input_dim=input_dim,
         output_dim=output_dim,
         has_frame_linear=True,
     )
@@ -113,7 +124,8 @@ def _infer_network_layout(
         "mlp_width": mlp_width,
         "mlp_depth": mlp_depth,
         "output_dim": int(output_dim),
-        "weight_file_format": "NMDLWT03",
+        "input_dim": int(input_dim),
+        "weight_file_format": "NMDLWT04",
         "linear_layers": linear_layers,
         "decoder_layout": decoder_layout,
     }
@@ -139,8 +151,8 @@ def save_network_weights_bin(
     mlp_depth = layout["mlp_depth"]
 
     with open(path, "wb") as f:
-        f.write(b"NMDLWT03")
-        f.write(struct.pack("<iiiii", latent_ch, num_frames, mlp_width, mlp_depth, output_dim))
+        f.write(b"NMDLWT04")
+        f.write(struct.pack("<iiiiii", latent_ch, num_frames, mlp_width, mlp_depth, output_dim, input_dim))
 
         for layer_name in layout["linear_layers"]:
             weight_name = f"{layer_name}.weight"
@@ -154,9 +166,16 @@ def save_network_weights_bin(
     return layout
 
 
-def save_metadata(path: Path, latent: np.ndarray, weights: dict, output_dim: int = 3) -> None:
+def save_metadata(
+    path: Path,
+    latent: np.ndarray,
+    weights: dict,
+    output_dim: int = 3,
+    input_dim: int = 20,
+    decoder_direction_input: str = "wiwo",
+) -> None:
     _, h, w = latent.shape
-    layout = _infer_network_layout(weights, input_dim=20, output_dim=output_dim, has_frame_linear=True)
+    layout = _infer_network_layout(weights, input_dim=input_dim, output_dim=output_dim, has_frame_linear=True)
     metadata = {
         "width": int(w),
         "height": int(h),
@@ -164,6 +183,8 @@ def save_metadata(path: Path, latent: np.ndarray, weights: dict, output_dim: int
         "num_frames": layout["num_frames"],
         "apply_exp": True,
         "output_dim": layout["output_dim"],
+        "input_dim": layout["input_dim"],
+        "decoder_direction_input": decoder_direction_input,
         "has_albedo_output": output_dim >= 6,
         "mlp_width": layout["mlp_width"],
         "mlp_depth": layout["mlp_depth"],
@@ -197,9 +218,16 @@ def save_sampler_metadata(path: Path, weights: dict, *, latent_ch: int) -> None:
         json.dump(metadata, f, indent=2)
 
 
-def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None:
+def export_renderer_assets(
+    model: NeuralMaterialModel,
+    cfg: TrainConfig,
+    *,
+    write_numpy_debug: bool | None = None,
+) -> None:
     preview_dir = Path(cfg.preview_out_dir) if cfg.preview_out_dir else Path(__file__).resolve().parents[2] / "MatXScenes" / "Preview"
     os.makedirs(preview_dir, exist_ok=True)
+    if write_numpy_debug is None:
+        write_numpy_debug = bool(getattr(cfg, "export_numpy_debug", False))
 
     if cfg.latent_ch != 8:
         print(
@@ -211,6 +239,11 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
         old_path.unlink(missing_ok=True)
     for old_path in list(preview_dir.glob("latent0_mip*.npy")) + list(preview_dir.glob("latent1_mip*.npy")):
         old_path.unlink(missing_ok=True)
+    for old_path in (
+        preview_dir / "latent0.npy",
+        preview_dir / "latent1.npy",
+    ):
+        old_path.unlink(missing_ok=True)
 
     latent_levels = [level.detach().cpu().numpy()[0] for level in model.latent.levels]
     for mip, latent in enumerate(latent_levels):
@@ -219,14 +252,16 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
 
         write_exr(preview_dir / f"latent0_mip{mip}.exr", rgba0)
         write_exr(preview_dir / f"latent1_mip{mip}.exr", rgba1)
-        np.save(preview_dir / f"latent0_mip{mip}.npy", rgba0)
-        np.save(preview_dir / f"latent1_mip{mip}.npy", rgba1)
+        if write_numpy_debug:
+            np.save(preview_dir / f"latent0_mip{mip}.npy", rgba0)
+            np.save(preview_dir / f"latent1_mip{mip}.npy", rgba1)
 
         if mip == 0:
             write_exr(preview_dir / "latent0.exr", rgba0)
             write_exr(preview_dir / "latent1.exr", rgba1)
-            np.save(preview_dir / "latent0.npy", rgba0)
-            np.save(preview_dir / "latent1.npy", rgba1)
+            if write_numpy_debug:
+                np.save(preview_dir / "latent0.npy", rgba0)
+                np.save(preview_dir / "latent1.npy", rgba1)
 
     sd = model.decoder.state_dict()
     mlp_layer_indices = sorted(
@@ -260,8 +295,16 @@ def export_renderer_assets(model: NeuralMaterialModel, cfg: TrainConfig) -> None
             weights[key] = value.detach().cpu().numpy()
 
     output_dim = 6 if export_albedo else 3
-    save_weights_bin(preview_dir / "decoder_weights.bin", weights, output_dim=output_dim)
-    save_metadata(preview_dir / "metadata.json", latent_levels[0], weights, output_dim=output_dim)
+    brdf_input_dim = decoder_input_dim_from_config(cfg)
+    save_weights_bin(preview_dir / "decoder_weights.bin", weights, output_dim=output_dim, input_dim=brdf_input_dim)
+    save_metadata(
+        preview_dir / "metadata.json",
+        latent_levels[0],
+        weights,
+        output_dim=output_dim,
+        input_dim=brdf_input_dim,
+        decoder_direction_input=getattr(cfg, "decoder_direction_input", "wiwo"),
+    )
     metadata_path = preview_dir / "metadata.json"
     with open(metadata_path, "r", encoding="utf-8") as f:
         metadata = json.load(f)

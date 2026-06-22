@@ -1,6 +1,7 @@
 import Scene.Scene;
 import Scene.Material.BootstrapFeatureMaterial;
 import Scene.Material.MaterialSystem;
+import Scene.Material.TrainingDirectionGuardMaterial;
 import Scene.Material.ShadingUtils;
 import Rendering.Materials.AnisotropicGGX;
 import Rendering.Materials.Fresnel;
@@ -40,7 +41,7 @@ struct ThreeLayeredGGXNoHeightMaterialData
 
     uint enableBaseLayer = 1;
     uint enableMidLayer = 1;
-    uint enableCoatLayer = 0;
+    uint enableCoatLayer = 1;
     uint flipNormalY = 1;
 };
 
@@ -693,7 +694,7 @@ struct ThreeLayeredGGXNoHeightMaterialInstance : MaterialInstanceBase, IMaterial
     }
 };
 
-struct ThreeLayeredGGXNoHeightMaterial : MaterialBase, IMaterial, IBootstrapFeatureMaterial
+struct ThreeLayeredGGXNoHeightMaterial : MaterialBase, IMaterial, IBootstrapFeatureMaterial, ITrainingDirectionGuardMaterial
 {
     ThreeLayeredGGXNoHeightMaterialData data;
 
@@ -742,5 +743,31 @@ struct ThreeLayeredGGXNoHeightMaterial : MaterialBase, IMaterial, IBootstrapFeat
         features.feature5 = float4(coatSf.N.z, coatSf.T);
         features.feature6 = float4(dustLayer.coverage, 0.f, 0.f, 0.f);
         return features;
+    }
+
+    bool isTrainingDirectionPairValid(const MaterialSystem ms, const ShadingData sd, const float3 wo, const float threshold)
+    {
+        uint samplerID = header.getDefaultTextureSamplerID();
+        LayeredTextureInputs inputs = sampleLayeredTextureInputs(data, samplerID, sd);
+        LayeredTextureLayerParams baseLayer = layeredTextureGetBaseLayer(data, inputs);
+        LayeredTextureLayerParams midLayer = layeredTextureGetMidLayer(data, inputs);
+        LayeredTextureLayerParams coatLayer = layeredTextureGetCoatLayer(data, inputs);
+
+        ShadingFrame baseSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, baseLayer.normalFlatten);
+        ShadingFrame midSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, midLayer.normalFlatten);
+        ShadingFrame coatSf = layeredTextureShadingFrame(data, samplerID, sd, inputs, coatLayer.normalFlatten);
+
+        float3 wiBaseLocal = baseSf.toLocal(sd.V);
+        float3 woBaseLocal = baseSf.toLocal(wo);
+        float3 wiMidLocal = midSf.toLocal(sd.V);
+        float3 woMidLocal = midSf.toLocal(wo);
+        float3 wiCoatLocal = coatSf.toLocal(sd.V);
+        float3 woCoatLocal = coatSf.toLocal(wo);
+
+        float minLayerCos = min(
+            min(min(wiBaseLocal.z, woBaseLocal.z), min(wiMidLocal.z, woMidLocal.z)),
+            min(wiCoatLocal.z, woCoatLocal.z)
+        );
+        return minLayerCos >= max(threshold, kMinCosTheta);
     }
 };

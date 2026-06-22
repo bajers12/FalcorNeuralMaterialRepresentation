@@ -100,6 +100,15 @@ def parse_args() -> argparse.Namespace:
         help="Analyze existing captures in --output-dir without launching Mogwai.",
     )
     parser.add_argument(
+        "--render-runs-individually",
+        action="store_true",
+        help=(
+            "Launch one Mogwai process per runtime asset folder instead of rendering all "
+            "runs through NEURAL_ASSET_PATHS in a single process. This is slower, but "
+            "avoids loading many 4k latent textures at once."
+        ),
+    )
+    parser.add_argument(
         "--render-staging-dir",
         type=Path,
         default=REPO_ROOT / "tmp" / "compare_neural_runs_staging",
@@ -283,12 +292,26 @@ def render_inputs(args: argparse.Namespace, runtime_dirs: list[Path]) -> Path:
     for runtime_dir in runtime_dirs:
         run_name = runtime_dir.name.removesuffix(args.runtime_suffix)
         capture_path(staging_dir, run_name, args.frames).unlink(missing_ok=True)
-    run_mogwai(
-        args,
-        {"NEURAL_ASSET_PATHS": os.pathsep.join(str(path) for path in runtime_dirs)},
-        "runs",
-        staging_dir,
-    )
+
+    if args.render_runs_individually:
+        for runtime_dir in runtime_dirs:
+            run_name = runtime_dir.name.removesuffix(args.runtime_suffix)
+            run_mogwai(
+                args,
+                {"NEURAL_ASSET_PATH": str(runtime_dir)},
+                f"run_{run_name}",
+                staging_dir,
+            )
+            if args.launch_delay_seconds > 0.0:
+                print(f"[compare] Waiting {args.launch_delay_seconds:g}s before next run.")
+                time.sleep(args.launch_delay_seconds)
+    else:
+        run_mogwai(
+            args,
+            {"NEURAL_ASSET_PATHS": os.pathsep.join(str(path) for path in runtime_dirs)},
+            "runs",
+            staging_dir,
+        )
     for runtime_dir in runtime_dirs:
         run_name = runtime_dir.name.removesuffix(args.runtime_suffix)
         copy_capture(staging_dir, args.output_dir, run_name, args.frames)

@@ -3,6 +3,32 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 
+DECODER_DIRECTION_INPUT_WIWO = "wiwo"
+DECODER_DIRECTION_INPUT_HALF_DIFF = "half_diff"
+
+
+def encode_half_difference(wi: torch.Tensor, wo: torch.Tensor) -> torch.Tensor:
+    """
+    Compact half/difference direction encoding used for ablation runs.
+
+    Returns [h.x, h.y, dot(wi,h), dot(wo,h), cos(phi_diff)] with h.z implicit.
+    """
+    h = Decoder._safe_normalize(wi + wo)
+    cos_theta_i = torch.clamp((wi * h).sum(dim=-1), -1.0, 1.0)
+    cos_theta_o = torch.clamp((wo * h).sum(dim=-1), -1.0, 1.0)
+
+    wi_perp = wi - cos_theta_i.unsqueeze(-1) * h
+    wo_perp = wo - cos_theta_o.unsqueeze(-1) * h
+    wi_perp = Decoder._safe_normalize(wi_perp)
+    wo_perp = Decoder._safe_normalize(wo_perp)
+    cos_phi_diff = torch.clamp((wi_perp * wo_perp).sum(dim=-1), -1.0, 1.0)
+
+    return torch.stack(
+        [h[..., 0], h[..., 1], cos_theta_i, cos_theta_o, cos_phi_diff],
+        dim=-1,
+    )
+
+
 class Decoder(nn.Module):
     """
     Decoder:
@@ -23,14 +49,21 @@ class Decoder(nn.Module):
         fixed_canonical_frames: bool = False,
         predict_albedo: bool = False,
         exp_offset: float = 3.0,
+        direction_input: str = DECODER_DIRECTION_INPUT_WIWO,
     ):
         super().__init__()
         assert num_frames >= 1
+        if direction_input not in (DECODER_DIRECTION_INPUT_WIWO, DECODER_DIRECTION_INPUT_HALF_DIFF):
+            raise ValueError(
+                f"Unsupported decoder direction_input={direction_input!r}. "
+                f"Expected '{DECODER_DIRECTION_INPUT_WIWO}' or '{DECODER_DIRECTION_INPUT_HALF_DIFF}'."
+            )
         self.latent_ch = latent_ch
         self.num_frames = num_frames
         self.fixed_canonical_frames = fixed_canonical_frames
         self.predict_albedo = predict_albedo
         self.exp_offset = exp_offset
+        self.direction_input = direction_input
 
         self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias)
         if self.fixed_canonical_frames:
@@ -40,7 +73,8 @@ class Decoder(nn.Module):
                     self.frame_linear.bias.zero_()
             self.frame_linear.requires_grad_(False)
 
-        mlp_in = latent_ch + 6 * num_frames
+        dir_ch_per_frame = 5 if direction_input == DECODER_DIRECTION_INPUT_HALF_DIFF else 6
+        mlp_in = latent_ch + dir_ch_per_frame * num_frames
         layers = []
         prev = mlp_in
         for _ in range(mlp_depth):
@@ -106,9 +140,14 @@ class Decoder(nn.Module):
             dim=-1,
         )
 
-        dir_feats = torch.cat([wi_f, wo_f], dim=-1).view(
-            z.shape[0], 6 * self.num_frames
-        )
+        if self.direction_input == DECODER_DIRECTION_INPUT_HALF_DIFF:
+            dir_feats = encode_half_difference(wi_f, wo_f).view(
+                z.shape[0], 5 * self.num_frames
+            )
+        else:
+            dir_feats = torch.cat([wi_f, wo_f], dim=-1).view(
+                z.shape[0], 6 * self.num_frames
+            )
         return torch.cat([z, dir_feats], dim=-1)
 
     def forward_raw_and_albedo(

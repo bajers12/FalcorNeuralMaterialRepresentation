@@ -12,6 +12,7 @@ namespace Falcor
     {
         constexpr const char kWeightMagic02[8] = { 'N','M','D','L','W','T','0','2' };
         constexpr const char kWeightMagic03[8] = { 'N','M','D','L','W','T','0','3' };
+        constexpr const char kWeightMagic04[8] = { 'N','M','D','L','W','T','0','4' };
         const std::string kShaderFile = "Scene/Material/NeuralMaterial.slang";
     }
     namespace
@@ -165,7 +166,8 @@ namespace Falcor
 
             bool isVersion02 = std::memcmp(magic, kWeightMagic02, 8) == 0;
             bool isVersion03 = std::memcmp(magic, kWeightMagic03, 8) == 0;
-            if (!isVersion02 && !isVersion03)
+            bool isVersion04 = std::memcmp(magic, kWeightMagic04, 8) == 0;
+            if (!isVersion02 && !isVersion03 && !isVersion04)
                 FALCOR_THROW("Invalid weight file magic in: {}", path.string());
 
             int32_t latentCh = 8;
@@ -174,13 +176,16 @@ namespace Falcor
             int32_t mlpWidth = 32;
             int32_t mlpDepth = 2;
             int32_t outputDim = static_cast<int32_t>(expectedOutputDim);
+            int32_t inputDim = static_cast<int32_t>(expectedInputDim);
 
             f.read(reinterpret_cast<char*>(&latentCh), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&numFrames), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&mlpWidth), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&mlpDepth), sizeof(int32_t));
-            if (isVersion03)
+            if (isVersion03 || isVersion04)
                 f.read(reinterpret_cast<char*>(&outputDim), sizeof(int32_t));
+            if (isVersion04)
+                f.read(reinterpret_cast<char*>(&inputDim), sizeof(int32_t));
             if (!f) FALCOR_THROW("Failed reading weight file header: {}", path.string());
 
             if (latentCh != 8) FALCOR_THROW("Expected latentCh == 8, got {} in {}", latentCh, path.string());
@@ -194,16 +199,22 @@ namespace Falcor
             {
                 if (outputDim != 3 && outputDim != 6)
                     FALCOR_THROW("Expected BRDF decoder outputDim in {3, 6}, got {} in {}", outputDim, path.string());
+                if (inputDim != 18 && inputDim != 20)
+                    FALCOR_THROW("Expected BRDF decoder inputDim in {18, 20}, got {} in {}", inputDim, path.string());
             }
             else if (outputDim != static_cast<int32_t>(expectedOutputDim))
             {
                 FALCOR_THROW("Expected decoder outputDim == {}, got {} in {}", expectedOutputDim, outputDim, path.string());
             }
+            else if (inputDim != static_cast<int32_t>(expectedInputDim))
+            {
+                FALCOR_THROW("Expected decoder inputDim == {}, got {} in {}", expectedInputDim, inputDim, path.string());
+            }
 
             std::vector<float> frameLinear;
             if (hasFrameLinear)
                 frameLinear = readFloatArray(f, 12 * 8);
-            auto w0 = readFloatArray(f, static_cast<size_t>(mlpWidth) * expectedInputDim);
+            auto w0 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(inputDim));
             auto b0 = readFloatArray(f, static_cast<size_t>(mlpWidth));
             auto w1 = readFloatArray(f, static_cast<size_t>(mlpWidth) * static_cast<size_t>(mlpWidth));
             auto b1 = readFloatArray(f, static_cast<size_t>(mlpWidth));
@@ -269,6 +280,7 @@ namespace Falcor
                 int32_t mlpWidth = 0;
                 int32_t mlpDepth = 0;
                 int32_t outputDim = 0;
+                int32_t inputDim = 0;
                 ref<Buffer> decoderBuffer;
                 Data::DecoderWeightOffsets offsets;
             };
@@ -277,6 +289,7 @@ namespace Falcor
             loaded.mlpWidth = mlpWidth;
             loaded.mlpDepth = mlpDepth;
             loaded.outputDim = outputDim;
+            loaded.inputDim = inputDim;
             loaded.offsets = offsets;
             loaded.decoderBuffer = make_ref<Buffer>(
                 mpDevice,
@@ -295,6 +308,7 @@ namespace Falcor
 
         mData.brdfMlpWidth = static_cast<uint32_t>(brdf.mlpWidth);
         mData.brdfMlpDepth = static_cast<uint32_t>(brdf.mlpDepth);
+        mData.brdfInputDim = static_cast<uint32_t>(brdf.inputDim);
         mData.brdfWeightOffsets = brdf.offsets;
 
 

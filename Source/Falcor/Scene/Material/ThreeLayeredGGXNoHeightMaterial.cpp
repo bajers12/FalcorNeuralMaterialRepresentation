@@ -380,6 +380,7 @@ namespace Falcor
         TypeConformanceList conformances;
         conformances.add("ThreeLayeredGGXNoHeightMaterial", "IMaterial", (uint32_t)getType());
         conformances.add("ThreeLayeredGGXNoHeightMaterial", "IBootstrapFeatureMaterial", (uint32_t)getType());
+        conformances.add("ThreeLayeredGGXNoHeightMaterial", "ITrainingDirectionGuardMaterial", (uint32_t)getType());
         return conformances;
     }
 

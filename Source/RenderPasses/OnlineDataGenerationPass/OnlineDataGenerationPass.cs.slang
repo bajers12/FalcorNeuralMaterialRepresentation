@@ -4,6 +4,7 @@ import Scene.Scene;
 import Scene.Shading;
 import Scene.Material.BootstrapFeatureMaterial;
 import Scene.Material.MaterialFactory;
+import Scene.Material.TrainingDirectionGuardMaterial;
 import Utils.Math.MathHelpers;
 import Utils.Sampling.UniformSampleGenerator;
 
@@ -60,6 +61,14 @@ uniform uint gMinFilterSampleCount;
 uniform uint gMaxFilterSampleCount;
 uniform float gGaussianFilterStdScale;
 uniform bool gGenerateAlbedoTarget;
+uniform uint gDirectionSamplingMode;
+uniform float gLayerHorizonGuardThreshold;
+
+static const uint kDirectionSamplingHalfDifference = 0u;
+static const uint kDirectionSamplingWiWo = 1u;
+static const uint kDirectionSamplingHalfDifferenceLimited = 2u;
+static const float kHorizonEps = 1e-4f;
+static const uint kMaxDirectionAttempts = 64u;
 
 uint hash(uint x)
 {
@@ -162,6 +171,73 @@ float3 sampleConeAround(float3 center, float2 u, float cosTheta)
     return coneDir.x * tangent + coneDir.y * bitangent + coneDir.z * center;
 }
 
+void sampleTrainingDirections(inout uint wiSeed, inout uint woSeed, out float3 wi, out float3 wo)
+{
+    wi = float3(0.f, 0.f, 1.f);
+    wo = float3(0.f, 0.f, 1.f);
+
+    if (gDirectionSamplingMode == kDirectionSamplingWiWo)
+    {
+        wi = sample_hemisphere(float2(rand(wiSeed), rand(wiSeed)));
+        wo = sample_hemisphere(float2(rand(woSeed), rand(woSeed)));
+        return;
+    }
+
+    // Sample wi and wo using the half/difference vector parametrization
+    // (Rusinkiewicz 1998).
+    //
+    // half_diff: sample h and the difference direction freely, then reject
+    // candidates where either resulting direction leaves the upper hemisphere.
+    //
+    // half_diff_limited: use the conservative domain theta_h + theta_d <=
+    // pi/2, which guarantees valid directions and avoids rejection, but
+    // excludes part of the full valid half/difference domain.
+    [loop]
+    for (uint attempt = 0u; attempt < kMaxDirectionAttempts; ++attempt)
+    {
+        float theta_h = acos(kHorizonEps) * rand(wiSeed);
+        float cosTheta_h = cos(theta_h);
+        float sinTheta_h = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
+        float phi_h = M_2PI * rand(woSeed);
+
+        float3 h = float3(sinTheta_h * cos(phi_h),
+                          sinTheta_h * sin(phi_h),
+                          cosTheta_h);
+
+        float3 h_tangent, h_bitangent;
+        makeBasis(h, h_tangent, h_bitangent);
+
+        float maxTheta_d = gDirectionSamplingMode == kDirectionSamplingHalfDifferenceLimited
+            ? max(0.f, acos(kHorizonEps) - theta_h)
+            : acos(kHorizonEps);
+        float theta_d = maxTheta_d * rand(wiSeed);
+        float cosTheta_d = cos(theta_d);
+        float sinTheta_d = sqrt(max(0.f, 1.f - cosTheta_d * cosTheta_d));
+        float phi_d = M_PI * rand(woSeed);
+
+        float3 candidateWi = sinTheta_d * cos(phi_d) * h_tangent
+                           + sinTheta_d * sin(phi_d) * h_bitangent
+                           + cosTheta_d              * h;
+
+        float3 candidateWo = 2.f * dot(candidateWi, h) * h - candidateWi;
+
+        if (candidateWi.z > kHorizonEps && candidateWo.z > kHorizonEps)
+        {
+            wi = normalize(candidateWi);
+            wo = normalize(candidateWo);
+            return;
+        }
+    }
+}
+
+bool isLayerHorizonGuardValid(const ShadingData sd, const float3 wo)
+{
+    if (gLayerHorizonGuardThreshold <= 0.f) return true;
+
+    let guardMaterial = gScene.materials.getTrainingDirectionGuardMaterial(gMaterialId);
+    return guardMaterial.isTrainingDirectionPairValid(gScene.materials, sd, wo, gLayerHorizonGuardThreshold);
+}
+
 #if SAMPLE_FEATURES_ENABLED
 void clearBootstrapFeatures(inout BsdfSampleData data)
 {
@@ -228,62 +304,39 @@ void main(uint3 threadId : SV_DispatchThreadID)
         uv = (float2(texel) + 0.5f) / float2(gUvGridFullWidth, gUvGridFullHeight);
     }
 
-    // Sample wi and wo using the half/difference vector parametrization (Rusinkiewicz 1998).
-    //
-    // We sample the half vector h and difference direction freely, then reject
-    // only candidates where either resulting direction leaves the upper
-    // hemisphere. This covers the full valid half/difference domain instead of
-    // using the conservative theta_h + theta_d <= pi/2 shortcut.
-    //
-    // Seed stream 1 (woSeed) drives (phi_h, phi_d), the azimuthal angles.
-    // Seed stream 2 (wiSeed) drives theta_d and theta_h, both sampled uniformly
-    // over their angular domains [0, pi/2).
-    //
-    // Note: in this file wi = view/incident direction (toward viewer),
-    //       wo = light direction (away from surface). Both must have z > 0.
-    const float kHorizonEps = 1e-4f;
-    const uint kMaxDirectionAttempts = 64u;
-
     float3 wi = float3(0.f, 0.f, 1.f);
     float3 wo = float3(0.f, 0.f, 1.f);
 
-    for (uint attempt = 0u; attempt < kMaxDirectionAttempts; ++attempt)
+    // Note: in this file wi = view/incident direction (toward viewer),
+    //       wo = light direction (away from surface). Both must have z > 0.
+    bool foundGuardedDirectionPair = false;
+    [loop]
+    for (uint guardAttempt = 0u; guardAttempt < kMaxDirectionAttempts; ++guardAttempt)
     {
-        // --- Half vector h in tangent space (normal = (0,0,1)) ---
-        float theta_h = acos(kHorizonEps) * rand(wiSeed);
-        float cosTheta_h = cos(theta_h);
-        float sinTheta_h = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
-        float phi_h = M_2PI * rand(woSeed);
-
-        float3 h = float3(sinTheta_h * cos(phi_h),
-                          sinTheta_h * sin(phi_h),
-                          cosTheta_h);
-
-        // --- Build an orthonormal frame with h as the north pole ---
-        // Used to express wi (= omega_i in difference-vector frame) relative to h.
-        float3 h_tangent, h_bitangent;
-        makeBasis(h, h_tangent, h_bitangent);
-
-        // --- Difference direction around h ---
-        float theta_d = acos(kHorizonEps) * rand(wiSeed);
-        float cosTheta_d = cos(theta_d);
-        float sinTheta_d = sqrt(max(0.f, 1.f - cosTheta_d * cosTheta_d));
-        // Reciprocity makes phi_d and phi_d + pi equivalent, so sample the
-        // canonical Rusinkiewicz difference-azimuth domain [0, pi).
-        float phi_d = M_PI * rand(woSeed);
-
-        float3 candidateWi = sinTheta_d * cos(phi_d) * h_tangent
-                           + sinTheta_d * sin(phi_d) * h_bitangent
-                           + cosTheta_d              * h;
-
-        float3 candidateWo = 2.f * dot(candidateWi, h) * h - candidateWi;
-
-        if (candidateWi.z > kHorizonEps && candidateWo.z > kHorizonEps)
+        sampleTrainingDirections(wiSeed, woSeed, wi, wo);
+        if (gLayerHorizonGuardThreshold <= 0.f)
         {
-            wi = normalize(candidateWi);
-            wo = normalize(candidateWo);
+            foundGuardedDirectionPair = true;
             break;
         }
+
+        VertexData guardV = {};
+        guardV.posW        = float3((uv[0]-0.5f)*2, (uv[1]-0.5f)*2, 0.f);
+        guardV.normalW     = float3(0.f, 0.f, 1.f);
+        guardV.tangentW    = float4(1.f, 0.f, 0.f, 1.f);
+        guardV.faceNormalW = guardV.normalW;
+        guardV.texC        = uv;
+        ShadingData guardSd = gScene.materials.prepareShadingData(guardV, gMaterialId, wi);
+        if (isLayerHorizonGuardValid(guardSd, wo))
+        {
+            foundGuardedDirectionPair = true;
+            break;
+        }
+    }
+    if (!foundGuardedDirectionPair)
+    {
+        wi = float3(0.f, 0.f, 1.f);
+        wo = float3(0.f, 0.f, 1.f);
     }
 
     // Keep independent sample streams for UVs, BSDF directions, and any
@@ -311,6 +364,8 @@ void main(uint3 threadId : SV_DispatchThreadID)
         v.texC        = filteredUv;
 
         ShadingData sd = gScene.materials.prepareShadingData(v, gMaterialId, wi);
+        if (!isLayerHorizonGuardValid(sd, wo)) continue;
+
         let mi = gScene.materials.getMaterialInstance(sd, lod, materialHints);
         UniformSampleGenerator sg = UniformSampleGenerator(sgSeed, spatialSample);
         UniformSampleGenerator albedoSg = UniformSampleGenerator(albedoSgSeed, spatialSample);

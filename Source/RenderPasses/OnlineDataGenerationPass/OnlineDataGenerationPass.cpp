@@ -39,6 +39,8 @@ const char kMinFilterSampleCount[] = "minFilterSampleCount";
 const char kMaxFilterSampleCount[] = "maxFilterSampleCount";
 const char kGaussianFilterStdScale[] = "gaussianFilterStdScale";
 const char kGenerateAlbedoTarget[] = "generateAlbedoTarget";
+const char kDirectionSampling[] = "directionSampling";
+const char kLayerHorizonGuardThreshold[] = "layerHorizonGuardThreshold";
 const uint32_t kBootstrapFeatureCapacity = 32;
 
 namespace
@@ -105,6 +107,8 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
     mMaxFilterSampleCount = 64;
     mGaussianFilterStdScale = 0.5f;
     mGenerateAlbedoTarget = false;
+    mDirectionSamplingMode = DirectionSamplingMode::HalfDifference;
+    mLayerHorizonGuardThreshold = 0.f;
     mpMappedData = nullptr;
 
     parseProperties(props);
@@ -131,6 +135,8 @@ void OnlineDataGenerationPass::parseProperties(const Properties& props)
         else if (key == kMaxFilterSampleCount) mMaxFilterSampleCount = std::max(1u, (uint32_t)value);
         else if (key == kGaussianFilterStdScale) mGaussianFilterStdScale = std::max(0.f, (float)value);
         else if (key == kGenerateAlbedoTarget) mGenerateAlbedoTarget = value;
+        else if (key == kDirectionSampling) mDirectionSamplingMode = parseDirectionSamplingMode(value);
+        else if (key == kLayerHorizonGuardThreshold) mLayerHorizonGuardThreshold = std::max(0.f, (float)value);
     }
     mMaxFilterSampleCount = std::max(mMinFilterSampleCount, mMaxFilterSampleCount);
 }
@@ -150,6 +156,8 @@ Properties OnlineDataGenerationPass::getProperties() const
     props[kMaxFilterSampleCount] = mMaxFilterSampleCount;
     props[kGaussianFilterStdScale] = mGaussianFilterStdScale;
     props[kGenerateAlbedoTarget] = mGenerateAlbedoTarget;
+    props[kDirectionSampling] = directionSamplingModeToString(mDirectionSamplingMode);
+    props[kLayerHorizonGuardThreshold] = mLayerHorizonGuardThreshold;
 
     return props;
 }
@@ -223,6 +231,8 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gMaxFilterSampleCount"] = mMaxFilterSampleCount;
     var["gGaussianFilterStdScale"] = mGaussianFilterStdScale;
     var["gGenerateAlbedoTarget"] = mGenerateAlbedoTarget;
+    var["gDirectionSamplingMode"] = static_cast<uint32_t>(mDirectionSamplingMode);
+    var["gLayerHorizonGuardThreshold"] = mLayerHorizonGuardThreshold;
 
     mpPass->execute(pRenderContext, mSampleCount, 1, 1);
     pRenderContext->uavBarrier(mpGpuSampleBuffer.get());
@@ -400,6 +410,31 @@ std::string OnlineDataGenerationPass::bootstrapFeatureLayoutToString(BootstrapFe
         return "material";
     default:
         return "legacy";
+    }
+}
+
+OnlineDataGenerationPass::DirectionSamplingMode OnlineDataGenerationPass::parseDirectionSamplingMode(const std::string& value)
+{
+    if (value == "half_diff" || value == "half_difference" || value == "rusinkiewicz") return DirectionSamplingMode::HalfDifference;
+    if (value == "half_diff_limited" || value == "half_difference_limited" || value == "limited_domain") return DirectionSamplingMode::HalfDifferenceLimited;
+    if (value == "wiwo" || value == "wi_wo" || value == "direct") return DirectionSamplingMode::WiWo;
+
+    logWarning("OnlineDataGenerationPass: Unknown direction sampling '{}'. Falling back to half_diff.", value);
+    return DirectionSamplingMode::HalfDifference;
+}
+
+std::string OnlineDataGenerationPass::directionSamplingModeToString(DirectionSamplingMode mode)
+{
+    switch (mode)
+    {
+    case DirectionSamplingMode::HalfDifference:
+        return "half_diff";
+    case DirectionSamplingMode::HalfDifferenceLimited:
+        return "half_diff_limited";
+    case DirectionSamplingMode::WiWo:
+        return "wiwo";
+    default:
+        return "half_diff";
     }
 }
 

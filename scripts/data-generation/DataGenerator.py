@@ -12,6 +12,7 @@ class DataGenerator():
         scene_path = 'media/LayeredMaterial/ThreeLayeredGGXPreview.pyscene',
         sampleCount = 10000,
         bootstrap_feature_layout = "auto",
+        direction_sampling = "half_diff",
         hierarchical_filtering_enabled = False,
         hierarchical_mip_count = 1,
         finest_texture_width = 1,
@@ -21,6 +22,7 @@ class DataGenerator():
         max_filter_sample_count = 8,
         gaussian_filter_std_scale = 0.5,
         generate_albedo_target = False,
+        layer_horizon_guard_threshold = 0.0,
     ):
         # Construct path relative to project root
         project_root = Path(__file__).parent.parent.parent
@@ -36,6 +38,7 @@ class DataGenerator():
                 "materialId": materialId,
                 "sampleCount": sampleCount,
                 "bootstrapFeatureLayout": bootstrap_feature_layout,
+                "directionSampling": direction_sampling,
                 "hierarchicalFilteringEnabled": hierarchical_filtering_enabled,
                 "hierarchicalMipCount": hierarchical_mip_count,
                 "finestTextureWidth": finest_texture_width,
@@ -45,6 +48,7 @@ class DataGenerator():
                 "maxFilterSampleCount": max_filter_sample_count,
                 "gaussianFilterStdScale": gaussian_filter_std_scale,
                 "generateAlbedoTarget": generate_albedo_target,
+                "layerHorizonGuardThreshold": layer_horizon_guard_threshold,
             },
         )
         self.graph.mark_output("OnlineDataGenerationPass.output")
