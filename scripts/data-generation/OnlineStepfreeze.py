@@ -920,7 +920,7 @@ def save_config(cfg: TrainConfig) -> None:
 def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser()
 
-    p.add_argument("--scene_path", type=str, default='MatXScenes/Preview/MatXScene.pyscene')
+    p.add_argument("--scene_path", type=str, default='media/ThreeLayer/ThreeLayeredGGXPreview_NoHeight.pyscene')
     p.add_argument("--out_dir", type=str, default="./output_weights")
     p.add_argument(
         "--preview_out_dir",
