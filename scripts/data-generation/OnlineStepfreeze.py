@@ -264,6 +264,7 @@ def compute_mip_validation_losses(
     mip: Optional[torch.Tensor],
     cfg: TrainConfig,
     exp_offset: float,
+    decoder: Decoder
 ) -> Dict[str, float]:
     if mip is None or cfg.hierarchical_mip_count <= 1:
         return {}
@@ -276,7 +277,7 @@ def compute_mip_validation_losses(
         out[f"brdf_val_count_mip{mip_level}"] = float(sample_count)
         if sample_count == 0:
             continue
-        mip_loss = Decoder.log_l1_loss(
+        mip_loss = decoder.loss(
             raw[mask],
             y[mask],
             exp_offset,
@@ -751,7 +752,7 @@ def train_one_epoch(
         z_dec = model.latent.sample(uv_dec, mip_dec)
 
     y_hat_dec, raw_dec = model.decode_with_raw(z_dec, wi_dec, wo_dec)
-    bsdf_loss = Decoder.log_l1_loss(raw_dec, y_dec, model.decoder.exp_offset, cfg.log_eps)
+    bsdf_loss = model.decoder.loss(raw_dec, y_dec, model.decoder.exp_offset, cfg.log_eps)
 
     if not torch.isfinite(bsdf_loss):
         raise RuntimeError(f"Non-finite BRDF loss at epoch {epoch}: {bsdf_loss.item()}")
@@ -854,11 +855,11 @@ def validate(
         z = model.latent.sample(uv, mip)
 
     y_hat, raw = model.decode_with_raw(z, wi, wo)
-    loss = Decoder.log_l1_loss(raw, y, model.decoder.exp_offset, cfg.log_eps)
+    loss = model.decoder.loss(raw, y, model.decoder.exp_offset, cfg.log_eps)
     stats = compute_basic_stats(y_hat, y)
     raw_stats = compute_raw_stats(raw)
     mip_metrics = (
-        compute_mip_validation_losses(raw, y, mip, cfg, model.decoder.exp_offset)
+        compute_mip_validation_losses(raw, y, mip, cfg, model.decoder.exp_offset, model.decoder)
         if phase != "bootstrap"
         else {}
     )

@@ -45,6 +45,16 @@ class Decoder(nn.Module):
         out = v / (v.norm(dim=-1, keepdim=True).clamp_min(eps))
         return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
+    def loss(
+        self,
+        raw: torch.Tensor,
+        y: torch.Tensor,
+        exp_offset: float,
+        eps: float,
+        mask_threshold: float = 1e-4,
+    ) -> torch.Tensor:
+        return Decoder.log_l1_loss(raw, y, exp_offset, eps, mask_threshold)
+
     def _predict_frames(
         self, z: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
