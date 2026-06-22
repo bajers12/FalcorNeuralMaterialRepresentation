@@ -108,6 +108,28 @@ class Decoder(nn.Module):
         return torch.exp(raw - self.exp_offset)
 
     @staticmethod
+    def log_diff(
+        raw: torch.Tensor,
+        y: torch.Tensor,
+        exp_offset: float,
+        eps: float,
+        mask_threshold: float = 1e-4,
+    ) -> torch.Tensor:
+        y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
+
+        # Build per-sample mask: keep samples that have at least one significant channel
+        valid = y.amax(dim=-1) >= mask_threshold  # [B]
+        if valid.any():
+            raw_c = raw[valid]
+            y_c = y[valid].clamp_min(eps)
+        else:
+            # Fallback: use everything (avoids zero-element mean on pathological batches)
+            raw_c = raw
+            y_c = y.clamp_min(eps)
+
+        return ((raw_c - exp_offset) - torch.log(y_c))
+
+    @staticmethod
     def log_l1_loss(
         raw: torch.Tensor,
         y: torch.Tensor,
@@ -122,62 +144,14 @@ class Decoder(nn.Module):
         This is equivalent to taking the log of the exponential decoder output, but
         avoids overflowing exp(raw - exp_offset) before the logarithm is applied.
         """
-        y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-
-        # Build per-sample mask: keep samples that have at least one significant channel
-        valid = y.amax(dim=-1) >= mask_threshold  # [B]
-        if valid.any():
-            raw_c = raw[valid]
-            y_c = y[valid].clamp_min(eps)
-        else:
-            # Fallback: use everything (avoids zero-element mean on pathological batches)
-            raw_c = raw
-            y_c = y.clamp_min(eps)
-
-        return ((raw_c - exp_offset) - torch.log(y_c)).abs().mean()
+        return Decoder.log_diff(raw, y, exp_offset, eps, mask_threshold).abs().mean()
 
     @staticmethod
-    def l1_loss(
+    def log_l2_loss(
         raw: torch.Tensor,
         y: torch.Tensor,
         exp_offset: float,
         eps: float,
         mask_threshold: float = 1e-4,
     ) -> torch.Tensor:
-        y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-        raw = torch.nan_to_num(nn.exp(raw_c - exp_offset), nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-        # Build per-sample mask: keep samples that have at least one significant channel
-        valid = y.amax(dim=-1) >= mask_threshold  # [B]
-        if valid.any():
-            raw_c = raw[valid]
-            y_c = y[valid].clamp_min(eps)
-        else:
-            # Fallback: use everything (avoids zero-element mean on pathological batches)
-            raw_c = raw
-            y_c = y.clamp_min(eps)
-
-        return (raw_c - y_c).abs().mean()
-
-
-    @staticmethod
-    def l2_loss(
-        raw: torch.Tensor,
-        y: torch.Tensor,
-        exp_offset: float,
-        eps: float,
-        mask_threshold: float = 1e-4,
-    ) -> torch.Tensor:
-        y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-        raw = torch.nan_to_num(nn.exp(raw_c - exp_offset), nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
-
-        # Build per-sample mask: keep samples that have at least one significant channel
-        valid = y.amax(dim=-1) >= mask_threshold  # [B]
-        if valid.any():
-            raw_c = raw[valid]
-            y_c = y[valid].clamp_min(eps)
-        else:
-            # Fallback: use everything (avoids zero-element mean on pathological batches)
-            raw_c = raw
-            y_c = y.clamp_min(eps)
-
-        return (raw_c - y_c).square.mean()
+        return Decoder.log_diff(raw, y, exp_offset, eps, mask_threshold).square().mean()
