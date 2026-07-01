@@ -62,6 +62,10 @@ struct BsdfFeatureSampleData
     float4 bootstrapFeature5;
     float4 bootstrapFeature6;
     float4 bootstrapFeature7;
+    float4 bootstrapFeature8;
+    float4 bootstrapFeature9;
+    float4 bootstrapFeature10;
+    float4 bootstrapFeature11;
 };
 
 class OnlineDataGenerationPass : public RenderPass
@@ -115,6 +119,12 @@ private:
         WiWo,
     };
 
+    enum class HalfDiffThetaMeasure
+    {
+        Theta,
+        CosTheta,
+    };
+
     void OnlineDataGenerationPass::parseProperties(const Properties& props);
     void resolveBootstrapFeatureLayout();
     void recreateSampleBuffers();
@@ -122,6 +132,8 @@ private:
     static std::string bootstrapFeatureLayoutToString(BootstrapFeatureLayout layout);
     static DirectionSamplingMode parseDirectionSamplingMode(const std::string& value);
     static std::string directionSamplingModeToString(DirectionSamplingMode mode);
+    static HalfDiffThetaMeasure parseHalfDiffThetaMeasure(const std::string& value);
+    static std::string halfDiffThetaMeasureToString(HalfDiffThetaMeasure measure);
 
     ref<Scene> mpScene;
     ref<ComputePass> mpPass;
@@ -149,10 +161,11 @@ private:
     uint32_t mFinestTextureHeight = 1;
     float mMipExponentialRate = 0.7f;
     uint32_t mMinFilterSampleCount = 1;
-    uint32_t mMaxFilterSampleCount = 64;
+    uint32_t mMaxFilterSampleCount = 256;
     float mGaussianFilterStdScale = 0.5f;
     bool mGenerateAlbedoTarget = false;
     DirectionSamplingMode mDirectionSamplingMode = DirectionSamplingMode::HalfDifference;
+    HalfDiffThetaMeasure mHalfDiffThetaMeasure = HalfDiffThetaMeasure::Theta;
     float mLayerHorizonGuardThreshold = 0.f;
     BootstrapFeatureLayout mRequestedBootstrapFeatureLayout = BootstrapFeatureLayout::Auto;
     BootstrapFeatureLayout mActiveBootstrapFeatureLayout = BootstrapFeatureLayout::None;

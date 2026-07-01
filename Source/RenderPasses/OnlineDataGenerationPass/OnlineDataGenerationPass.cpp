@@ -40,8 +40,9 @@ const char kMaxFilterSampleCount[] = "maxFilterSampleCount";
 const char kGaussianFilterStdScale[] = "gaussianFilterStdScale";
 const char kGenerateAlbedoTarget[] = "generateAlbedoTarget";
 const char kDirectionSampling[] = "directionSampling";
+const char kHalfDiffThetaMeasure[] = "halfDiffThetaMeasure";
 const char kLayerHorizonGuardThreshold[] = "layerHorizonGuardThreshold";
-const uint32_t kBootstrapFeatureCapacity = 32;
+const uint32_t kBootstrapFeatureCapacity = 48;
 
 namespace
 {
@@ -104,10 +105,11 @@ OnlineDataGenerationPass::OnlineDataGenerationPass(ref<Device> pDevice, const Pr
     mFinestTextureHeight = 1;
     mMipExponentialRate = 0.7f;
     mMinFilterSampleCount = 1;
-    mMaxFilterSampleCount = 64;
+    mMaxFilterSampleCount = 256;
     mGaussianFilterStdScale = 0.5f;
     mGenerateAlbedoTarget = false;
     mDirectionSamplingMode = DirectionSamplingMode::HalfDifference;
+    mHalfDiffThetaMeasure = HalfDiffThetaMeasure::Theta;
     mLayerHorizonGuardThreshold = 0.f;
     mpMappedData = nullptr;
 
@@ -136,6 +138,7 @@ void OnlineDataGenerationPass::parseProperties(const Properties& props)
         else if (key == kGaussianFilterStdScale) mGaussianFilterStdScale = std::max(0.f, (float)value);
         else if (key == kGenerateAlbedoTarget) mGenerateAlbedoTarget = value;
         else if (key == kDirectionSampling) mDirectionSamplingMode = parseDirectionSamplingMode(value);
+        else if (key == kHalfDiffThetaMeasure) mHalfDiffThetaMeasure = parseHalfDiffThetaMeasure(value);
         else if (key == kLayerHorizonGuardThreshold) mLayerHorizonGuardThreshold = std::max(0.f, (float)value);
     }
     mMaxFilterSampleCount = std::max(mMinFilterSampleCount, mMaxFilterSampleCount);
@@ -157,6 +160,7 @@ Properties OnlineDataGenerationPass::getProperties() const
     props[kGaussianFilterStdScale] = mGaussianFilterStdScale;
     props[kGenerateAlbedoTarget] = mGenerateAlbedoTarget;
     props[kDirectionSampling] = directionSamplingModeToString(mDirectionSamplingMode);
+    props[kHalfDiffThetaMeasure] = halfDiffThetaMeasureToString(mHalfDiffThetaMeasure);
     props[kLayerHorizonGuardThreshold] = mLayerHorizonGuardThreshold;
 
     return props;
@@ -232,6 +236,7 @@ void OnlineDataGenerationPass::execute(RenderContext* pRenderContext, const Rend
     var["gGaussianFilterStdScale"] = mGaussianFilterStdScale;
     var["gGenerateAlbedoTarget"] = mGenerateAlbedoTarget;
     var["gDirectionSamplingMode"] = static_cast<uint32_t>(mDirectionSamplingMode);
+    var["gHalfDiffThetaMeasure"] = static_cast<uint32_t>(mHalfDiffThetaMeasure);
     var["gLayerHorizonGuardThreshold"] = mLayerHorizonGuardThreshold;
 
     mpPass->execute(pRenderContext, mSampleCount, 1, 1);
@@ -435,6 +440,28 @@ std::string OnlineDataGenerationPass::directionSamplingModeToString(DirectionSam
         return "wiwo";
     default:
         return "half_diff";
+    }
+}
+
+OnlineDataGenerationPass::HalfDiffThetaMeasure OnlineDataGenerationPass::parseHalfDiffThetaMeasure(const std::string& value)
+{
+    if (value == "theta" || value == "uniform_theta") return HalfDiffThetaMeasure::Theta;
+    if (value == "cos_theta" || value == "costheta" || value == "uniform_cos_theta") return HalfDiffThetaMeasure::CosTheta;
+
+    logWarning("OnlineDataGenerationPass: Unknown half-diff theta measure '{}'. Falling back to theta.", value);
+    return HalfDiffThetaMeasure::Theta;
+}
+
+std::string OnlineDataGenerationPass::halfDiffThetaMeasureToString(HalfDiffThetaMeasure measure)
+{
+    switch (measure)
+    {
+    case HalfDiffThetaMeasure::Theta:
+        return "theta";
+    case HalfDiffThetaMeasure::CosTheta:
+        return "cos_theta";
+    default:
+        return "theta";
     }
 }
 

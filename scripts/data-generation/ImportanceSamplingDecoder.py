@@ -243,6 +243,10 @@ class ImportanceSamplingDecoder(nn.Module):
         z: torch.Tensor,
         wi: torch.Tensor,
         eps: float = 1e-6,
+        target_grad: bool = False,
+        loss_order: str = "q_minus_p",
+        discard_below_surface: bool = False,
+        horizon_eps: float = 0.0,
     ) -> torch.Tensor:
         """
         KL divergence loss for the importance sampler (Section 4.3).
@@ -262,25 +266,42 @@ class ImportanceSamplingDecoder(nn.Module):
         log_q = torch.log(pdf_q)  # [B], has grad through wo_sampled -> frames/alpha
 
         # --- 3. Evaluate frozen BRDF target at sampled wo ---
-        with torch.no_grad():
-            # wo_sampled has grad but is safe to use inside no_grad for value computation;
-            # log_p_tilde is fully detached — only log_q carries the gradient.
-            y_hat = decoder.forward(z, wi, wo_sampled)  # [B, 3]  (f(wi,wo))
+        if target_grad:
+            # Keep decoder weights fixed while allowing gradients through wo_sampled.
+            decoder_params = list(decoder.parameters())
+            previous_requires_grad = [p.requires_grad for p in decoder_params]
+            for p in decoder_params:
+                p.requires_grad_(False)
+            try:
+                y_hat = decoder.forward(z, wi, wo_sampled)  # [B, 3]  (f(wi,wo))
+            finally:
+                for p, requires_grad in zip(decoder_params, previous_requires_grad):
+                    p.requires_grad_(requires_grad)
             y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
+        else:
+            with torch.no_grad():
+                y_hat = decoder.forward(z, wi, wo_sampled)  # [B, 3]  (f(wi,wo))
+                y_hat = torch.nan_to_num(y_hat, nan=0.0, posinf=1e6, neginf=0.0).clamp_min(0.0)
 
-            brdf_luminance = (
-                0.2126 * y_hat[..., 0]
-                + 0.7152 * y_hat[..., 1]
-                + 0.0722 * y_hat[..., 2]
-            ).clamp_min(eps)  # [B]
-            p_tilde = (brdf_luminance).clamp_min(eps)
-
-            log_p_tilde = torch.log(p_tilde)  # fully detached
+        brdf_luminance = (
+            0.2126 * y_hat[..., 0]
+            + 0.7152 * y_hat[..., 1]
+            + 0.0722 * y_hat[..., 2]
+        ).clamp_min(eps)  # [B]
+        p_tilde = (brdf_luminance).clamp_min(eps)
+        log_p_tilde = torch.log(p_tilde)
 
         # --- 4. Direct KL loss: E_{wo~q}[ log q - log p̃ ] ---
-        loss_terms = log_q - log_p_tilde  # [B], grad through log_q only
+        if loss_order == "q_minus_p":
+            loss_terms = log_q - log_p_tilde  # [B]
+        elif loss_order == "p_minus_q":
+            loss_terms = log_p_tilde - log_q  # [B]
+        else:
+            raise ValueError(f"Unknown sampler loss order: {loss_order}")
 
         finite_mask = torch.isfinite(loss_terms)
+        if discard_below_surface:
+            finite_mask = finite_mask & (wo_sampled[..., 2] > horizon_eps)
         if not finite_mask.any():
             return (pdf_q * 0.0).sum()
 

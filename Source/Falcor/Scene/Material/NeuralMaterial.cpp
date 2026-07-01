@@ -3,8 +3,10 @@
 #include "Core/API/Device.h"
 #include "Utils/Logger.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <optional>
 
 namespace Falcor
 {
@@ -13,7 +15,38 @@ namespace Falcor
         constexpr const char kWeightMagic02[8] = { 'N','M','D','L','W','T','0','2' };
         constexpr const char kWeightMagic03[8] = { 'N','M','D','L','W','T','0','3' };
         constexpr const char kWeightMagic04[8] = { 'N','M','D','L','W','T','0','4' };
+        constexpr const char kWeightMagic05[8] = { 'N','M','D','L','W','T','0','5' };
         const std::string kShaderFile = "Scene/Material/NeuralMaterial.slang";
+
+        std::optional<uint32_t> readEnvUInt(const char* name)
+        {
+            const char* value = std::getenv(name);
+            if (!value || value[0] == '\0') return {};
+            try
+            {
+                return static_cast<uint32_t>(std::stoul(value));
+            }
+            catch (...)
+            {
+                logWarning("NeuralMaterial: Ignoring invalid integer environment variable {}='{}'.", name, value);
+                return {};
+            }
+        }
+
+        std::optional<float> readEnvFloat(const char* name)
+        {
+            const char* value = std::getenv(name);
+            if (!value || value[0] == '\0') return {};
+            try
+            {
+                return std::stof(value);
+            }
+            catch (...)
+            {
+                logWarning("NeuralMaterial: Ignoring invalid float environment variable {}='{}'.", name, value);
+                return {};
+            }
+        }
     }
     namespace
     {
@@ -28,6 +61,12 @@ namespace Falcor
         : Material(pDevice, name, getNeuralMaterialType())
         , mBasePath(basePath)
     {
+        if (auto value = readEnvUInt("NEURAL_LATENT_MIP_DEBUG_MODE")) mLatentMipDebugMode = std::min(*value, 3u);
+        if (auto value = readEnvUInt("NEURAL_LATENT_FILTERING_MODE")) mLatentFilteringMode = std::min(*value, 1u);
+        if (auto value = readEnvUInt("NEURAL_FORCE_LATENT_MIP")) mForceLatentMip = *value != 0u;
+        if (auto value = readEnvUInt("NEURAL_FORCED_LATENT_MIP")) mForcedLatentMip = *value;
+        if (auto value = readEnvUInt("NEURAL_SAMPLING_MODE")) mSamplingMode = std::min(*value, 1u);
+        if (auto value = readEnvFloat("NEURAL_LATENT_LOD_BIAS")) mLatentLodBias = *value;
         loadAssets();
         markUpdates(UpdateFlags::DataChanged | UpdateFlags::ResourcesChanged | UpdateFlags::CodeChanged);
     }
@@ -167,7 +206,8 @@ namespace Falcor
             bool isVersion02 = std::memcmp(magic, kWeightMagic02, 8) == 0;
             bool isVersion03 = std::memcmp(magic, kWeightMagic03, 8) == 0;
             bool isVersion04 = std::memcmp(magic, kWeightMagic04, 8) == 0;
-            if (!isVersion02 && !isVersion03 && !isVersion04)
+            bool isVersion05 = std::memcmp(magic, kWeightMagic05, 8) == 0;
+            if (!isVersion02 && !isVersion03 && !isVersion04 && !isVersion05)
                 FALCOR_THROW("Invalid weight file magic in: {}", path.string());
 
             int32_t latentCh = 8;
@@ -177,15 +217,18 @@ namespace Falcor
             int32_t mlpDepth = 2;
             int32_t outputDim = static_cast<int32_t>(expectedOutputDim);
             int32_t inputDim = static_cast<int32_t>(expectedInputDim);
+            float expOffset = 3.f;
 
             f.read(reinterpret_cast<char*>(&latentCh), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&numFrames), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&mlpWidth), sizeof(int32_t));
             f.read(reinterpret_cast<char*>(&mlpDepth), sizeof(int32_t));
-            if (isVersion03 || isVersion04)
+            if (isVersion03 || isVersion04 || isVersion05)
                 f.read(reinterpret_cast<char*>(&outputDim), sizeof(int32_t));
-            if (isVersion04)
+            if (isVersion04 || isVersion05)
                 f.read(reinterpret_cast<char*>(&inputDim), sizeof(int32_t));
+            if (isVersion05)
+                f.read(reinterpret_cast<char*>(&expOffset), sizeof(float));
             if (!f) FALCOR_THROW("Failed reading weight file header: {}", path.string());
 
             if (latentCh != 8) FALCOR_THROW("Expected latentCh == 8, got {} in {}", latentCh, path.string());
@@ -239,6 +282,11 @@ namespace Falcor
             // Pack all weights into a single buffer
             std::vector<float> packedData;
             Data::DecoderWeightOffsets offsets{};
+
+            // NMDLWT05 BRDF decoders store exp_offset in buffer slot 0.
+            // Older assets start frame_linear at slot 0 and use the legacy shader default.
+            if (hasFrameLinear && isVersion05)
+                packedData.push_back(expOffset);
 
             // Frame linear weights (BRDF only).
             offsets.frameLinearOffset = static_cast<uint32_t>(packedData.size());

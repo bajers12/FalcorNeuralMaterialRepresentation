@@ -1,4 +1,5 @@
 # Minimal sphere scene for neural material preview.
+import os
 from pathlib import Path
 
 def get_base_dir():
@@ -11,7 +12,7 @@ def get_base_dir():
 
 base_dir = get_base_dir()
 scene_path = base_dir / "SmoothUVSphere.glb"
-mat_path = base_dir / "NeuralMaterial"
+neural_asset_path = Path(os.environ.get("NEURAL_ASSET_PATH", str(base_dir))).resolve()
 env_path = base_dir / '20050806-03_hd.hdr'
 # Import the sphere mesh exported from Blender.
 sceneBuilder.importScene(scene_path)
@@ -21,8 +22,9 @@ sceneBuilder.importScene(scene_path)
 # If your GLB uses a different material name, change that one string.
 sceneBuilder.replaceMaterialWithNeural(
     'NeuralMat',
-    base_dir
+    neural_asset_path
 )
+print(f"[NeuralSphere_Mosaic] Neural assets: {neural_asset_path}")
 
 # Add environment map.
 envMap = EnvMap(env_path)

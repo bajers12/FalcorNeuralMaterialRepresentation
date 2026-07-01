@@ -11,12 +11,16 @@ struct BootstrapFeatureData
     float4 feature5;
     float4 feature6;
     float4 feature7;
+    float4 feature8;
+    float4 feature9;
+    float4 feature10;
+    float4 feature11;
 };
 
-[anyValueSize(128)]
+[anyValueSize(256)]
 interface IBootstrapFeatureMaterial
 {
-    BootstrapFeatureData getBootstrapFeatures(const MaterialSystem ms, const ShadingData sd);
+    BootstrapFeatureData getBootstrapFeatures(const MaterialSystem ms, const ShadingData sd, const float3 wo);
 }
 
 extension MaterialSystem

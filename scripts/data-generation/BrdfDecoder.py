@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Callable, Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -21,14 +21,37 @@ class Decoder(nn.Module):
         use_bias_in_mlp: bool = True,
         frame_linear_bias: bool = False,
         exp_offset: float = 3.0,
+        loss_mode: str = "log_l1",
+        fixed_canonical_frames: bool = False,
+        detach_frame_latent_grad: bool = False,
     ):
         super().__init__()
         assert num_frames >= 1
         self.latent_ch = latent_ch
         self.num_frames = num_frames
         self.exp_offset = exp_offset
+        self.loss_mode = loss_mode
+        self.fixed_canonical_frames = fixed_canonical_frames
+        self.detach_frame_latent_grad = detach_frame_latent_grad
+
+        loss_functions: Dict[str, Callable[..., torch.Tensor]] = {
+            "log_l1": Decoder.log_l1_loss,
+            "log_l2": Decoder.log_l2_loss,
+        }
+        if loss_mode not in loss_functions:
+            raise ValueError(
+                f"Unknown BRDF loss mode '{loss_mode}'. "
+                f"Expected one of: {', '.join(loss_functions)}."
+            )
+        self.loss_function = loss_functions[loss_mode]
 
         self.frame_linear = nn.Linear(latent_ch, 6 * num_frames, bias=frame_linear_bias)
+        if fixed_canonical_frames:
+            with torch.no_grad():
+                self.frame_linear.weight.zero_()
+                if self.frame_linear.bias is not None:
+                    self.frame_linear.bias.zero_()
+            self.frame_linear.requires_grad_(False)
 
         mlp_in = latent_ch + 6 * num_frames
         layers = []
@@ -53,7 +76,7 @@ class Decoder(nn.Module):
         eps: float,
         mask_threshold: float = 1e-4,
     ) -> torch.Tensor:
-        return Decoder.log_l1_loss(raw, y, exp_offset, eps, mask_threshold)
+        return self.loss_function(raw, y, exp_offset, eps, mask_threshold)
 
     def _predict_frames(
         self, z: torch.Tensor
@@ -62,7 +85,8 @@ class Decoder(nn.Module):
         z [B,C] -> T, Bv, N  each [B, num_frames, 3]
         """
         Bsz = z.shape[0]
-        ft = self.frame_linear(z).view(Bsz, self.num_frames, 6)
+        frame_z = z.detach() if self.detach_frame_latent_grad else z
+        ft = self.frame_linear(frame_z).view(Bsz, self.num_frames, 6)
 
         # T is intentionally not orthogonalized before forming B = cross(N, T).
         n_raw = ft[..., 0:3].clone()

@@ -7,7 +7,7 @@ import Utils.Math.ShadingFrame;
 
 static const float kPi = 3.14159265358979323846f;
 static const float kInvPi = 0.31830988618379067154f;
-static const float expOffset = 3.0f;
+static const float kDefaultExpOffset = 3.0f;
 
 struct DecoderWeightOffsets
 {
@@ -102,8 +102,8 @@ NeuralMipPair neuralMipPair(const NeuralMaterialData md, float lod)
 float3 neuralMipDebugColor(const NeuralMaterialData md, float lod, const float4 latent0, const float4 latent1)
 {
     uint count = neuralMipCount(md);
-    uint mip = min(uint(round(lod)), count - 1u);
-    float normalizedLod = count > 1u ? float(mip) / float(count - 1u) : 0.f;
+    float clampedLod = clamp(lod, 0.f, float(count - 1u));
+    float normalizedLod = count > 1u ? clampedLod / float(count - 1u) : 0.f;
     uint mode = neuralDebugMode(md);
     if (mode == 1u) return normalizedLod.xxx;
     if (mode == 2u) return float3(normalizedLod, 1.f - normalizedLod, 0.f);
@@ -129,6 +129,13 @@ float neuralBufferLoadWithOffset(ByteAddressBuffer buf, uint offset, uint index)
 float4 neuralBufferLoad4WithOffset(ByteAddressBuffer buf, uint offset, uint index)
 {
     return neuralBufferLoad4(buf, offset + index);
+}
+
+float neuralBrdfExpOffset(ByteAddressBuffer decoderBuf, const NeuralMaterialData md)
+{
+    // NMDLWT05 stores exp_offset in decoder buffer slot 0 and shifts frame_linear to slot 1.
+    // Older assets have frame_linear at slot 0 and keep the legacy default.
+    return md.brdfWeightOffsets.frameLinearOffset == 1u ? neuralBufferLoad(decoderBuf, 0u) : kDefaultExpOffset;
 }
 
 float3 neuralSafeNormalize(float3 v)
@@ -681,7 +688,7 @@ float3 evalNeuralBRDFFromLatents(
     else
         y = evalBrdfMLPWithDepth(decoderBuf, md.brdfWeightOffsets, md.brdfMlpWidth, md.brdfMlpDepth, md.brdfInputDim, x);
 
-    float3 outValue = exp(y - expOffset);
+    float3 outValue = exp(y - neuralBrdfExpOffset(decoderBuf, md));
     if (any(isnan(outValue)) || any(isinf(outValue)))
         return 0.f.xxx;
     return max(outValue, 0.f.xxx);
@@ -1149,7 +1156,8 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 
         if (neuralDebugMode(data) != 0u)
         {
-            return neuralMipDebugColor(data, selectedMip, z0, z1) * kInvPi;
+            float debugMip = usePaperStochasticFiltering() ? neuralLod : selectedMip;
+            return neuralMipDebugColor(data, debugMip, z0, z1) * kInvPi;
         }
 
         float z[8];
@@ -1182,7 +1190,8 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
             if (debugPdf <= 0.f) return false;
             result.wo = sf.fromLocal(woLocalDebug);
             result.pdf = debugPdf;
-            result.weight = neuralMipDebugColor(data, selectedMip, z0, z1);
+            float debugMip = usePaperStochasticFiltering() ? neuralLod : selectedMip;
+            result.weight = neuralMipDebugColor(data, debugMip, z0, z1);
             result.lobeType = uint(LobeType::DiffuseReflection);
             return true;
         }
@@ -1317,7 +1326,7 @@ struct NeuralMaterial : MaterialBase, IMaterial
             m.latent1 = ms.sampleTexture(data.texLatent1, s, sd.uv, 0.f.xxxx, lod);
             uint mode = neuralDebugMode(data);
             m.debugLod = (mode == 1u || mode == 2u)
-                ? estimateNearestNeuralMip(ms, data, s, sd.uv, m.latent0, m.latent1)
+                ? m.neuralLod
                 : 0.f;
         }
         return m;

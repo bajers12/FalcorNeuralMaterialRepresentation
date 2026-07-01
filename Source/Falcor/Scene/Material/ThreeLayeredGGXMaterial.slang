@@ -639,7 +639,7 @@ struct ThreeLayeredGGXMaterial : MaterialBase, IMaterial, IBootstrapFeatureMater
         return setupMaterialInstance(ms, sd, lod, hints);
     }
 
-    BootstrapFeatureData getBootstrapFeatures(const MaterialSystem ms, const ShadingData sd)
+    BootstrapFeatureData getBootstrapFeatures(const MaterialSystem ms, const ShadingData sd, const float3 wo)
     {
         BootstrapFeatureData features = {};
 

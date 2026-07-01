@@ -43,6 +43,7 @@ struct ThreeLayeredGGXNoHeightMaterialData
     uint enableMidLayer = 1;
     uint enableCoatLayer = 1;
     uint flipNormalY = 1;
+    int isolatedLayer = -1;
 };
 
 struct LayeredTextureInputs
@@ -115,6 +116,14 @@ float4 layeredTextureLayerControls(const ThreeLayeredGGXNoHeightMaterialData dat
     if (data.enableBaseLayer == 0) controls.x = 0.f;
     if (data.enableMidLayer == 0) controls.y = 0.f;
     if (data.enableCoatLayer == 0) controls.z = 0.f;
+    if (data.isolatedLayer >= 0)
+    {
+        controls = 0.f.xxxx;
+        if (data.isolatedLayer == 0) controls.x = 1.f;
+        else if (data.isolatedLayer == 1) controls.y = 1.f;
+        else if (data.isolatedLayer == 2) controls.z = 1.f;
+        else if (data.isolatedLayer == 3) controls.w = saturate(inputs.dustCoverage);
+    }
     return controls;
 }
 
@@ -720,7 +729,7 @@ struct ThreeLayeredGGXNoHeightMaterial : MaterialBase, IMaterial, IBootstrapFeat
         return setupMaterialInstance(ms, sd, lod, hints);
     }
 
-    BootstrapFeatureData getBootstrapFeatures(const MaterialSystem ms, const ShadingData sd)
+    BootstrapFeatureData getBootstrapFeatures(const MaterialSystem ms, const ShadingData sd, const float3 wo)
     {
         BootstrapFeatureData features = {};
 

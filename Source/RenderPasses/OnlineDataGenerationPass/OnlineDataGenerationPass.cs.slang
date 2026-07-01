@@ -37,6 +37,10 @@ struct BsdfSampleData
     float4 bootstrapFeature5;
     float4 bootstrapFeature6;
     float4 bootstrapFeature7;
+    float4 bootstrapFeature8;
+    float4 bootstrapFeature9;
+    float4 bootstrapFeature10;
+    float4 bootstrapFeature11;
 #endif
 };
 
@@ -62,11 +66,14 @@ uniform uint gMaxFilterSampleCount;
 uniform float gGaussianFilterStdScale;
 uniform bool gGenerateAlbedoTarget;
 uniform uint gDirectionSamplingMode;
+uniform uint gHalfDiffThetaMeasure;
 uniform float gLayerHorizonGuardThreshold;
 
 static const uint kDirectionSamplingHalfDifference = 0u;
 static const uint kDirectionSamplingWiWo = 1u;
 static const uint kDirectionSamplingHalfDifferenceLimited = 2u;
+static const uint kHalfDiffThetaMeasureTheta = 0u;
+static const uint kHalfDiffThetaMeasureCosTheta = 1u;
 static const float kHorizonEps = 1e-4f;
 static const uint kMaxDirectionAttempts = 64u;
 
@@ -195,8 +202,19 @@ void sampleTrainingDirections(inout uint wiSeed, inout uint woSeed, out float3 w
     [loop]
     for (uint attempt = 0u; attempt < kMaxDirectionAttempts; ++attempt)
     {
-        float theta_h = acos(kHorizonEps) * rand(wiSeed);
-        float cosTheta_h = cos(theta_h);
+        float maxTheta_h = acos(kHorizonEps);
+        float theta_h = 0.f;
+        float cosTheta_h = 1.f;
+        if (gHalfDiffThetaMeasure == kHalfDiffThetaMeasureCosTheta)
+        {
+            cosTheta_h = lerp(kHorizonEps, 1.f, rand(wiSeed));
+            theta_h = acos(clamp(cosTheta_h, -1.f, 1.f));
+        }
+        else
+        {
+            theta_h = maxTheta_h * rand(wiSeed);
+            cosTheta_h = cos(theta_h);
+        }
         float sinTheta_h = sqrt(max(0.f, 1.f - cosTheta_h * cosTheta_h));
         float phi_h = M_2PI * rand(woSeed);
 
@@ -208,12 +226,22 @@ void sampleTrainingDirections(inout uint wiSeed, inout uint woSeed, out float3 w
         makeBasis(h, h_tangent, h_bitangent);
 
         float maxTheta_d = gDirectionSamplingMode == kDirectionSamplingHalfDifferenceLimited
-            ? max(0.f, acos(kHorizonEps) - theta_h)
-            : acos(kHorizonEps);
-        float theta_d = maxTheta_d * rand(wiSeed);
-        float cosTheta_d = cos(theta_d);
+            ? max(0.f, maxTheta_h - theta_h)
+            : maxTheta_h;
+        float theta_d = 0.f;
+        float cosTheta_d = 1.f;
+        if (gHalfDiffThetaMeasure == kHalfDiffThetaMeasureCosTheta)
+        {
+            cosTheta_d = lerp(cos(maxTheta_d), 1.f, rand(wiSeed));
+            theta_d = acos(clamp(cosTheta_d, -1.f, 1.f));
+        }
+        else
+        {
+            theta_d = maxTheta_d * rand(wiSeed);
+            cosTheta_d = cos(theta_d);
+        }
         float sinTheta_d = sqrt(max(0.f, 1.f - cosTheta_d * cosTheta_d));
-        float phi_d = M_PI * rand(woSeed);
+        float phi_d = M_2PI * rand(woSeed);
 
         float3 candidateWi = sinTheta_d * cos(phi_d) * h_tangent
                            + sinTheta_d * sin(phi_d) * h_bitangent
@@ -249,6 +277,10 @@ void clearBootstrapFeatures(inout BsdfSampleData data)
     data.bootstrapFeature5 = 0.f.xxxx;
     data.bootstrapFeature6 = 0.f.xxxx;
     data.bootstrapFeature7 = 0.f.xxxx;
+    data.bootstrapFeature8 = 0.f.xxxx;
+    data.bootstrapFeature9 = 0.f.xxxx;
+    data.bootstrapFeature10 = 0.f.xxxx;
+    data.bootstrapFeature11 = 0.f.xxxx;
 }
 
 #if LEGACY_FEATURES_ENABLED
@@ -261,10 +293,10 @@ void writeLegacyBootstrapFeatures(const BSDFProperties props, const float pdf, i
 #endif
 
 #if MATERIAL_FEATURES_ENABLED
-void writeMaterialBootstrapFeatures(const ShadingData sd, inout BsdfSampleData data)
+void writeMaterialBootstrapFeatures(const ShadingData sd, const float3 wo, inout BsdfSampleData data)
 {
     let material = gScene.materials.getBootstrapFeatureMaterial(gMaterialId);
-    BootstrapFeatureData features = material.getBootstrapFeatures(gScene.materials, sd);
+    BootstrapFeatureData features = material.getBootstrapFeatures(gScene.materials, sd, wo);
     data.bootstrapFeature0 = features.feature0;
     data.bootstrapFeature1 = features.feature1;
     data.bootstrapFeature2 = features.feature2;
@@ -273,6 +305,10 @@ void writeMaterialBootstrapFeatures(const ShadingData sd, inout BsdfSampleData d
     data.bootstrapFeature5 = features.feature5;
     data.bootstrapFeature6 = features.feature6;
     data.bootstrapFeature7 = features.feature7;
+    data.bootstrapFeature8 = features.feature8;
+    data.bootstrapFeature9 = features.feature9;
+    data.bootstrapFeature10 = features.feature10;
+    data.bootstrapFeature11 = features.feature11;
 }
 #endif
 #endif
@@ -435,7 +471,7 @@ void main(uint3 threadId : SV_DispatchThreadID)
         #endif
 
         #if MATERIAL_FEATURES_ENABLED
-            writeMaterialBootstrapFeatures(featureSd, data);
+            writeMaterialBootstrapFeatures(featureSd, wo, data);
         #endif
     #endif
 

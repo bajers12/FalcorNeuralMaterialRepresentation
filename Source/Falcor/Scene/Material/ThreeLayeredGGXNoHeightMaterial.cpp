@@ -12,6 +12,7 @@
 #include <ImfHeader.h>
 #include <ImfInputFile.h>
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 
@@ -221,6 +222,9 @@ namespace Falcor
             markUpdates(UpdateFlags::DataChanged);
         }
 
+        if (widget.var("Isolated layer (-1 full, 0 base, 1 mid, 2 coat, 3 dust)", mData.isolatedLayer, -1, 3, 1))
+            markUpdates(UpdateFlags::DataChanged);
+
         if (widget.var("Base F0", mData.baseF0, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Mid F0", mData.midF0, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
         if (widget.var("Coat F0", mData.coatF0, 0.f, 1.f, 0.01f)) markUpdates(UpdateFlags::DataChanged);
@@ -277,6 +281,7 @@ namespace Falcor
                mData.enableMidLayer == p->mData.enableMidLayer &&
                mData.enableCoatLayer == p->mData.enableCoatLayer &&
                mData.flipNormalY == p->mData.flipNormalY &&
+               mData.isolatedLayer == p->mData.isolatedLayer &&
                getBaseColorTexture() == p->getBaseColorTexture() &&
                getNormalTexture() == p->getNormalTexture() &&
                getLayerRoughnessTexture() == p->getLayerRoughnessTexture() &&
@@ -365,6 +370,22 @@ namespace Falcor
         return loaded;
     }
 
+    void ThreeLayeredGGXNoHeightMaterial::setIsolatedLayer(int32_t layer)
+    {
+        int32_t clamped = std::clamp(layer, -1, 3);
+        if (mData.isolatedLayer == clamped) return;
+        mData.isolatedLayer = clamped;
+        markUpdates(UpdateFlags::DataChanged);
+    }
+
+    void ThreeLayeredGGXNoHeightMaterial::setBaseF0(float f0)
+    {
+        float clamped = std::clamp(f0, 0.f, 1.f);
+        if (mData.baseF0 == clamped) return;
+        mData.baseF0 = clamped;
+        markUpdates(UpdateFlags::DataChanged);
+    }
+
     MaterialDataBlob ThreeLayeredGGXNoHeightMaterial::getDataBlob() const
     {
         return prepareDataBlob(mData);
@@ -411,5 +432,7 @@ namespace Falcor
             "name"_a,
             "textureDirectory"_a
         );
+        material.def_property("isolatedLayer", &ThreeLayeredGGXNoHeightMaterial::getIsolatedLayer, &ThreeLayeredGGXNoHeightMaterial::setIsolatedLayer);
+        material.def_property("baseF0", &ThreeLayeredGGXNoHeightMaterial::getBaseF0, &ThreeLayeredGGXNoHeightMaterial::setBaseF0);
     }
 }

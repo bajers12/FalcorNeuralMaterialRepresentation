@@ -52,6 +52,10 @@ namespace Falcor
         ref<Texture> getDustCoverageTexture() const { return getTexture(TextureSlot::Index); }
 
         bool loadTextureSet(const std::filesystem::path& textureDirectory);
+        void setIsolatedLayer(int32_t layer);
+        int32_t getIsolatedLayer() const { return mData.isolatedLayer; }
+        void setBaseF0(float f0);
+        float getBaseF0() const { return mData.baseF0; }
 
     private:
         struct Data
@@ -78,6 +82,7 @@ namespace Falcor
             uint32_t enableMidLayer = 1;
             uint32_t enableCoatLayer = 1;
             uint32_t flipNormalY = 1;
+            int32_t isolatedLayer = -1;
         };
         static_assert(sizeof(Data) <= sizeof(MaterialPayload), "ThreeLayeredGGXNoHeightMaterial payload must fit in MaterialPayload");
 

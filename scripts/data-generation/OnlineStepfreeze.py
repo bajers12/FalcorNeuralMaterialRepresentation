@@ -33,7 +33,8 @@ import math
 import json
 import time
 import argparse
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, fields, replace
+from pathlib import Path
 from typing import Dict, Tuple, Optional
 from DataGenerator import (
     DataGenerator,
@@ -68,7 +69,7 @@ class TrainConfig:
     hierarchical_mip_count: int = 5
     mip_exponential_rate: float = 0.7
     min_filter_sample_count: int = 1
-    max_filter_sample_count: int = 8
+    max_filter_sample_count: int = 256
     gaussian_filter_std_scale: float = 0.5
 
     scene_path: str = 'MatXScenes/Preview/MatXScene.pyscene'
@@ -79,13 +80,24 @@ class TrainConfig:
     brdf_mlp_depth: int = 2  # number of hidden layers
     use_bias_in_mlp: bool = True
     frame_linear_bias: bool = False
+    fixed_canonical_frames: bool = False
+    detach_frame_latent_grad: bool = False
 
     # Importance sampling decoder architecture
     sampler_mlp_width: int = 32
     sampler_mlp_depth: int = 2
+    sampler_training_mode: str = "joint"
+    sampler_target_grad: bool = True
+    sampler_loss_order: str = "q_minus_p"
+    sampler_discard_below_surface: bool = False
+    sampler_horizon_eps: float = 0.0
+    sampler_source_checkpoint: str = ""
+    sampler_reset_from_source: bool = True
+    skip_sampler_checkpoints: bool = False
 
     # Output parameterization
     exp_offset: float = 3.0
+    brdf_loss_mode: str = "log_l1"
     clamp_min_target: float = 0.0  # safety clamp on y before log
     log_eps: float = 1e-6  # y' = clamp(y, eps) for log
 
@@ -96,11 +108,15 @@ class TrainConfig:
     validation_n: int = 65536
     max_epochs: int = 300000  # finetune iterations after encoder bootstrap
     sampler_epochs: int = 20000
+    direction_sampling: str = "half_diff"
+    half_diff_theta_measure: str = "theta"
 
     lr: float = 1e-3
     lr_min: float = 1e-4
     lr_latent: Optional[float] = None
     lr_decoder: Optional[float] = None
+    lr_sampler: Optional[float] = None
+    lr_sampler_min: Optional[float] = None
     weight_decay: float = 0.0
     grad_clip_norm: Optional[float] = None
 
@@ -108,6 +124,10 @@ class TrainConfig:
     out_dir: str = "./output_weights"
     preview_out_dir: str = ""
     print_every_epochs: int = 10000
+    export_finetune_iterations: Tuple[int, ...] = field(default_factory=tuple)
+    milestone_export_root: str = ""
+    export_sampler_iterations: Tuple[int, ...] = field(default_factory=tuple)
+    sampler_milestone_export_root: str = ""
 
     # Training behavior
     train_latent_texture: bool = True
@@ -200,6 +220,9 @@ class NeuralMaterialModel(nn.Module):
             use_bias_in_mlp=cfg.use_bias_in_mlp,
             frame_linear_bias=cfg.frame_linear_bias,
             exp_offset=cfg.exp_offset,
+            loss_mode=cfg.brdf_loss_mode,
+            fixed_canonical_frames=cfg.fixed_canonical_frames,
+            detach_frame_latent_grad=cfg.detach_frame_latent_grad,
         )
         self.importance_sampler = ImportanceSamplingDecoder(
             latent_ch=cfg.latent_ch,
@@ -431,6 +454,8 @@ def initialize_latent_texture_from_encoder(
         grid_generator = DataGenerator(
             sampleCount=uv_sample_capacity,
             bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+            direction_sampling=cfg.direction_sampling,
+            half_diff_theta_measure=cfg.half_diff_theta_measure,
             scene_path=cfg.scene_path,
             hierarchical_filtering_enabled=False,
         )
@@ -522,6 +547,18 @@ def _decoder_lr_min(cfg: TrainConfig) -> float:
     return cfg.lr_min if cfg.lr_decoder is None else min(cfg.lr_min, _decoder_lr(cfg))
 
 
+def _sampler_lr(cfg: TrainConfig) -> float:
+    return _decoder_lr(cfg) if cfg.lr_sampler is None else cfg.lr_sampler
+
+
+def _sampler_lr_min(cfg: TrainConfig) -> float:
+    if cfg.lr_sampler_min is not None:
+        return cfg.lr_sampler_min
+    if cfg.lr_sampler is None:
+        return _decoder_lr_min(cfg)
+    return min(cfg.lr_min, _sampler_lr(cfg))
+
+
 def make_optimizer(
     model: NeuralMaterialModel, cfg: TrainConfig, phase: str
 ) -> torch.optim.Optimizer:
@@ -562,7 +599,7 @@ def make_sampler_optimizer(
     if not sampler_params:
         raise ValueError("Importance sampler has no trainable parameters.")
     return torch.optim.Adam(
-        [{"params": sampler_params, "lr": _decoder_lr(cfg), "name": "sampler"}],
+        [{"params": sampler_params, "lr": _sampler_lr(cfg), "name": "sampler"}],
         weight_decay=cfg.weight_decay,
     )
 
@@ -609,8 +646,8 @@ def make_sampler_scheduler(sampler_opt: torch.optim.Optimizer, cfg: TrainConfig)
     Cosine LR decay for the dedicated sampler optimizer, decaying over sampler_epochs
     (not max_epochs) so the sampler gets a full cosine cycle within its training window.
     """
-    base = _decoder_lr(cfg)
-    min_lr = _decoder_lr_min(cfg)
+    base = _sampler_lr(cfg)
+    min_lr = _sampler_lr_min(cfg)
     total = max(cfg.sampler_epochs - 1, 1)
 
     def lr_lambda(epoch: int):
@@ -775,6 +812,7 @@ def train_one_epoch(
 
     should_train_sampler = (
         cfg.train_importance_sampler
+        and cfg.sampler_training_mode == "joint"
         and sampler_opt is not None
         and (epoch < cfg.sampler_epochs + cfg.encoder_bootstrap_epochs)
         and (epoch >= cfg.encoder_bootstrap_epochs)
@@ -793,7 +831,17 @@ def train_one_epoch(
         # KL-divergence loss (paper Section 4.3).
         # z_sam is detached: latent has no grad w.r.t. sampler (paper stability trick).
         pred = model.importance_sampler(z_sam, wi_sam);
-        sampler_loss = model.importance_sampler.loss(pred, model.decoder, z_sam, wi_sam, cfg.log_eps)
+        sampler_loss = model.importance_sampler.loss(
+            pred,
+            model.decoder,
+            z_sam,
+            wi_sam,
+            cfg.log_eps,
+            target_grad=cfg.sampler_target_grad,
+            loss_order=cfg.sampler_loss_order,
+            discard_below_surface=cfg.sampler_discard_below_surface,
+            horizon_eps=cfg.sampler_horizon_eps,
+        )
         if not torch.isfinite(sampler_loss):
             raise RuntimeError(f"Non-finite sampler loss at epoch {epoch}: {sampler_loss.item()}")
 
@@ -825,6 +873,140 @@ def train_one_epoch(
         out["sampler_loss"] = sampler_loss.item()
 
     return (out, opt, scheduler)
+
+
+def train_sampler_after_brdf(
+    model: NeuralMaterialModel,
+    cfg: TrainConfig,
+    best_epoch: Optional[int],
+    best_metrics: Optional[Dict[str, float]],
+    run_start_time: float,
+) -> Tuple[Optional[Dict[str, torch.Tensor]], float]:
+    if not cfg.train_importance_sampler or cfg.sampler_epochs <= 0:
+        return None, float("inf")
+
+    device = torch.device(cfg.device)
+    model.to(device)
+    model.train()
+    for module in (model.latent, model.decoder, model.encoder):
+        module.requires_grad_(False)
+    model.importance_sampler.requires_grad_(True)
+
+    sampler_opt = make_sampler_optimizer(model, cfg)
+    sampler_scheduler = make_sampler_scheduler(sampler_opt, cfg)
+    sampler_generator = DataGenerator(
+        sampleCount=cfg.training_n,
+        bootstrap_feature_layout="none",
+        direction_sampling=cfg.direction_sampling,
+        half_diff_theta_measure=cfg.half_diff_theta_measure,
+        scene_path=cfg.scene_path,
+        hierarchical_filtering_enabled=cfg.hierarchical_mip_count > 1,
+        hierarchical_mip_count=cfg.hierarchical_mip_count,
+        finest_texture_width=cfg.tex_w,
+        finest_texture_height=cfg.tex_h,
+        mip_exponential_rate=cfg.mip_exponential_rate,
+        min_filter_sample_count=cfg.min_filter_sample_count,
+        max_filter_sample_count=cfg.max_filter_sample_count,
+        gaussian_filter_std_scale=cfg.gaussian_filter_std_scale,
+    )
+
+    best_sampler_loss = float("inf")
+    best_sampler_state: Optional[Dict[str, torch.Tensor]] = None
+    sampler_export_iterations = get_sampler_export_iterations(cfg)
+    if sampler_export_iterations:
+        milestone_root = (
+            cfg.sampler_milestone_export_root
+            or str(Path(cfg.out_dir) / "sampler_exports")
+        )
+        print(
+            "[sampler-after-brdf] best-sampler exports: "
+            f"iterations={list(sampler_export_iterations)}, root={milestone_root}"
+        )
+    print(
+        "[sampler-after-brdf] training sampler for "
+        f"{cfg.sampler_epochs} iterations, lr={_sampler_lr(cfg):.3e}->{_sampler_lr_min(cfg):.3e}, "
+        f"target_grad={cfg.sampler_target_grad}, loss_order={cfg.sampler_loss_order}, "
+        f"discard_below_surface={cfg.sampler_discard_below_surface}, horizon_eps={cfg.sampler_horizon_eps:.3g}"
+    )
+    try:
+        for iteration in range(cfg.sampler_epochs):
+            data_batch = sampler_generator.generate_data(
+                cfg.seed,
+                SEED_DOMAIN_TRAIN,
+                iteration,
+            ).copy()
+            sampler_generator.release_data()
+            batch = tensorize_batch(data_to_dict(data_batch, 0))
+
+            uv = batch["uv"].to(device, non_blocking=True)
+            wi, _ = _maybe_transform_dirs_with_normals(batch, cfg, device)
+            mip = batch.get("mip_level")
+            mip = mip.to(device, non_blocking=True) if mip is not None else None
+
+            sampler_opt.zero_grad(set_to_none=True)
+            with torch.no_grad():
+                z = model.latent.sample(uv, mip)
+
+            pred = model.importance_sampler(z, wi)
+            sampler_loss = model.importance_sampler.loss(
+                pred,
+                model.decoder,
+                z,
+                wi,
+                cfg.log_eps,
+                target_grad=cfg.sampler_target_grad,
+                loss_order=cfg.sampler_loss_order,
+                discard_below_surface=cfg.sampler_discard_below_surface,
+                horizon_eps=cfg.sampler_horizon_eps,
+            )
+            if not torch.isfinite(sampler_loss):
+                raise RuntimeError(
+                    f"Non-finite deferred sampler loss at iteration {iteration}: {sampler_loss.item()}"
+                )
+
+            sampler_loss.backward()
+            if cfg.grad_clip_norm is not None:
+                nn.utils.clip_grad_norm_(
+                    [p for p in model.importance_sampler.parameters() if p.grad is not None],
+                    cfg.grad_clip_norm,
+                )
+            sampler_opt.step()
+            sampler_scheduler.step()
+
+            loss_value = sampler_loss.item()
+            if loss_value < best_sampler_loss:
+                best_sampler_loss = loss_value
+                best_sampler_state = {
+                    k: v.detach().cpu().clone()
+                    for k, v in model.importance_sampler.state_dict().items()
+                }
+
+            if cfg.print_every_epochs > 0 and (
+                iteration == 0 or (iteration + 1) % cfg.print_every_epochs == 0
+            ):
+                print(
+                    f"[sampler-after-brdf] iteration {iteration + 1:03d} "
+                    f"sampler_loss={loss_value:.6f} best={best_sampler_loss:.6f}"
+                )
+
+            sampler_iteration = iteration + 1
+            if sampler_iteration in sampler_export_iterations:
+                export_sampler_milestone(
+                    model=model,
+                    cfg=cfg,
+                    sampler_iteration=sampler_iteration,
+                    sampler_state=best_sampler_state,
+                    sampler_loss=best_sampler_loss,
+                    best_epoch=best_epoch,
+                    best_metrics=best_metrics,
+                    elapsed_seconds=time.time() - run_start_time,
+                )
+    finally:
+        sampler_generator.release_data()
+
+    if best_sampler_state is not None:
+        model.importance_sampler.load_state_dict(best_sampler_state)
+    return best_sampler_state, best_sampler_loss
 
 
 @torch.no_grad()
@@ -913,6 +1095,326 @@ def save_config(cfg: TrainConfig) -> None:
         json.dump(asdict(cfg), f, indent=2)
 
 
+def load_checkpoint_payload(path: str) -> Dict:
+    checkpoint_path = Path(path).expanduser().resolve()
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Sampler source checkpoint does not exist: {checkpoint_path}")
+    payload = torch.load(checkpoint_path, map_location="cpu")
+    if not isinstance(payload, dict) or "model" not in payload:
+        raise ValueError(f"Checkpoint does not contain a model state: {checkpoint_path}")
+    return payload
+
+
+def merge_sampler_source_config(cfg: TrainConfig, payload: Dict) -> TrainConfig:
+    source_dict = payload.get("config", {})
+    if not isinstance(source_dict, dict):
+        raise ValueError("--sampler_source_checkpoint payload has no config dictionary.")
+
+    preserved = {
+        "out_dir": cfg.out_dir,
+        "preview_out_dir": cfg.preview_out_dir,
+        "device": cfg.device,
+        "seed": cfg.seed,
+        "training_n": cfg.training_n,
+        "validation_n": cfg.validation_n,
+        "sampler_epochs": cfg.sampler_epochs,
+        "sampler_training_mode": "after_brdf",
+        "sampler_target_grad": cfg.sampler_target_grad,
+        "sampler_loss_order": cfg.sampler_loss_order,
+        "sampler_discard_below_surface": cfg.sampler_discard_below_surface,
+        "sampler_horizon_eps": cfg.sampler_horizon_eps,
+        "sampler_source_checkpoint": cfg.sampler_source_checkpoint,
+        "sampler_reset_from_source": cfg.sampler_reset_from_source,
+        "skip_sampler_checkpoints": cfg.skip_sampler_checkpoints,
+        "lr": cfg.lr,
+        "lr_min": cfg.lr_min,
+        "lr_sampler": cfg.lr_sampler,
+        "lr_sampler_min": cfg.lr_sampler_min,
+        "weight_decay": cfg.weight_decay,
+        "grad_clip_norm": cfg.grad_clip_norm,
+        "print_every_epochs": cfg.print_every_epochs,
+        "export_sampler_iterations": cfg.export_sampler_iterations,
+        "sampler_milestone_export_root": cfg.sampler_milestone_export_root,
+        "train_importance_sampler": True,
+    }
+
+    field_names = {f.name for f in fields(TrainConfig)}
+    merged = TrainConfig()
+    for key, value in source_dict.items():
+        if key in field_names:
+            setattr(merged, key, value)
+    for key, value in preserved.items():
+        setattr(merged, key, value)
+
+    merged.material_feature_names = tuple(merged.material_feature_names)
+    merged.export_finetune_iterations = tuple()
+    merged.export_sampler_iterations = tuple(merged.export_sampler_iterations)
+    return merged
+
+
+def load_model_for_sampler_source(
+    model: NeuralMaterialModel,
+    payload: Dict,
+    *,
+    reset_sampler: bool,
+) -> None:
+    state = payload["model"]
+    if not isinstance(state, dict):
+        raise ValueError("Checkpoint 'model' entry is not a state_dict.")
+
+    if reset_sampler:
+        state = {
+            key: value
+            for key, value in state.items()
+            if not key.startswith("importance_sampler.")
+        }
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        non_sampler_missing = [
+            key for key in missing if not key.startswith("importance_sampler.")
+        ]
+        if non_sampler_missing or unexpected:
+            raise RuntimeError(
+                "Failed to load sampler source checkpoint cleanly: "
+                f"missing={non_sampler_missing}, unexpected={unexpected}"
+            )
+        print("[sampler-source] loaded BRDF/latent state and reset sampler weights")
+    else:
+        model.load_state_dict(state)
+        print("[sampler-source] loaded BRDF/latent and existing sampler weights")
+
+
+def train_sampler_from_checkpoint(cfg: TrainConfig, payload: Dict, run_start_time: float) -> None:
+    os.makedirs(cfg.out_dir, exist_ok=True)
+    save_config(cfg)
+    run_logger = TrainingRunLogger(cfg)
+    print("Config:", json.dumps(asdict(cfg), indent=2))
+
+    device = torch.device(cfg.device)
+    model = NeuralMaterialModel(cfg).to(device)
+    load_model_for_sampler_source(
+        model,
+        payload,
+        reset_sampler=cfg.sampler_reset_from_source,
+    )
+
+    source_epoch = payload.get("epoch")
+    source_metrics = payload.get("metrics")
+    best_epoch = int(source_epoch) if isinstance(source_epoch, int) else 0
+    best_metrics = dict(source_metrics) if isinstance(source_metrics, dict) else {}
+
+    best_sampler_state, best_sampler_loss = train_sampler_after_brdf(
+        model,
+        cfg,
+        best_epoch=best_epoch,
+        best_metrics=best_metrics,
+        run_start_time=run_start_time,
+    )
+    if best_sampler_state is not None:
+        model.importance_sampler.load_state_dict(best_sampler_state)
+    best_metrics = dict(best_metrics)
+    best_metrics["sampler_loss"] = best_sampler_loss
+    best_metrics["sampler_training_mode"] = cfg.sampler_training_mode
+    best_metrics["sampler_target_grad"] = bool(cfg.sampler_target_grad)
+    best_metrics["sampler_loss_order"] = cfg.sampler_loss_order
+    best_metrics["sampler_discard_below_surface"] = bool(cfg.sampler_discard_below_surface)
+    best_metrics["sampler_horizon_eps"] = cfg.sampler_horizon_eps
+
+    best_ckpt_path = None
+    if not cfg.skip_sampler_checkpoints:
+        best_ckpt_path = save_checkpoint(
+            model,
+            cfg,
+            best_epoch,
+            best_metrics,
+            filename="best_checkpoint.pt",
+        )
+    AssetConverter.export_renderer_assets(model, cfg)
+    run_logger.write_summary(
+        status="completed",
+        best_epoch=best_epoch,
+        best_metrics=best_metrics,
+        last_epoch=cfg.sampler_epochs,
+        last_metrics=best_metrics,
+    )
+    print(
+        "[sampler-source] exported sampler-trained runtime assets"
+        + (f" and checkpoint {best_ckpt_path}" if best_ckpt_path else "")
+        + f" with sampler_loss={best_sampler_loss:.6f}"
+    )
+
+
+def get_finetune_export_iterations(cfg: TrainConfig) -> Tuple[int, ...]:
+    if not cfg.export_finetune_iterations:
+        return ()
+    return tuple(sorted(set(cfg.export_finetune_iterations) | {cfg.max_epochs}))
+
+
+def get_sampler_export_iterations(cfg: TrainConfig) -> Tuple[int, ...]:
+    if not cfg.export_sampler_iterations:
+        return ()
+    return tuple(sorted(set(cfg.export_sampler_iterations) | {cfg.sampler_epochs}))
+
+
+def export_finetune_milestone(
+    model: NeuralMaterialModel,
+    cfg: TrainConfig,
+    finetune_iteration: int,
+    best_state: Optional[Dict[str, torch.Tensor]],
+    best_epoch: Optional[int],
+    best_metrics: Optional[Dict[str, float]],
+    current_epoch: int,
+    current_metrics: Dict[str, float],
+    elapsed_seconds: float,
+) -> None:
+    if best_epoch is None or best_metrics is None:
+        raise RuntimeError(
+            f"Cannot export finetune milestone {finetune_iteration}: no best finetune state is available."
+        )
+
+    milestone_root = Path(cfg.milestone_export_root) if cfg.milestone_export_root else Path(cfg.out_dir) / "finetune_exports"
+    milestone_name = f"finetune_{finetune_iteration}"
+    training_dir = milestone_root / milestone_name
+    runtime_dir = milestone_root / f"{milestone_name}_runtime"
+    milestone_cfg = replace(
+        cfg,
+        out_dir=str(training_dir),
+        preview_out_dir=str(runtime_dir),
+    )
+
+    current_state = snapshot_model_state(model) if best_state is not None else None
+    try:
+        if best_state is not None:
+            model.load_state_dict(best_state)
+        save_config(milestone_cfg)
+        checkpoint_path = save_checkpoint(
+            model,
+            milestone_cfg,
+            best_epoch,
+            best_metrics,
+            filename="best_checkpoint.pt",
+        )
+        AssetConverter.export_renderer_assets(model, milestone_cfg)
+    finally:
+        if current_state is not None:
+            model.load_state_dict(current_state)
+
+    os.makedirs(training_dir, exist_ok=True)
+    summary = {
+        "status": "milestone",
+        "finetune_budget": finetune_iteration,
+        "best_epoch": best_epoch,
+        "best_finetune_iteration": best_epoch - cfg.encoder_bootstrap_epochs + 1,
+        "best_val_loss": best_metrics.get("brdf_val_loss"),
+        "best_train_loss": best_metrics.get("brdf_loss"),
+        "best_metrics": best_metrics,
+        "exported_epoch": best_epoch,
+        "last_epoch": current_epoch,
+        "last_finetune_iteration": finetune_iteration,
+        "last_val_loss": current_metrics.get("brdf_val_loss"),
+        "last_train_loss": current_metrics.get("brdf_loss"),
+        "last_metrics": current_metrics,
+        "duration_seconds": elapsed_seconds,
+        "checkpoint": str(checkpoint_path),
+        "runtime_dir": str(runtime_dir),
+    }
+    with (training_dir / "run_summary.json").open("w", encoding="utf-8") as file:
+        json.dump(summary, file, indent=2)
+    print(
+        f"[milestone-export] finetune={finetune_iteration} "
+        f"best_finetune={summary['best_finetune_iteration']} "
+        f"val_loss={best_metrics.get('brdf_val_loss', float('nan')):.6f} "
+        f"runtime={runtime_dir}"
+    )
+
+
+def export_sampler_milestone(
+    model: NeuralMaterialModel,
+    cfg: TrainConfig,
+    sampler_iteration: int,
+    sampler_state: Optional[Dict[str, torch.Tensor]],
+    sampler_loss: float,
+    best_epoch: Optional[int],
+    best_metrics: Optional[Dict[str, float]],
+    elapsed_seconds: float,
+) -> None:
+    if best_epoch is None or best_metrics is None:
+        raise RuntimeError(
+            f"Cannot export sampler milestone {sampler_iteration}: no best BRDF state is available."
+        )
+    if sampler_state is None:
+        raise RuntimeError(
+            f"Cannot export sampler milestone {sampler_iteration}: no sampler state is available."
+        )
+
+    milestone_root = (
+        Path(cfg.sampler_milestone_export_root)
+        if cfg.sampler_milestone_export_root
+        else Path(cfg.out_dir) / "sampler_exports"
+    )
+    milestone_name = f"sampler_{sampler_iteration}"
+    training_dir = milestone_root / milestone_name
+    runtime_dir = milestone_root / f"{milestone_name}_runtime"
+    milestone_cfg = replace(
+        cfg,
+        out_dir=str(training_dir),
+        preview_out_dir=str(runtime_dir),
+    )
+
+    current_sampler_state = {
+        k: v.detach().cpu().clone()
+        for k, v in model.importance_sampler.state_dict().items()
+    }
+    try:
+        model.importance_sampler.load_state_dict(sampler_state)
+        milestone_metrics = dict(best_metrics)
+        milestone_metrics["sampler_loss"] = sampler_loss
+        milestone_metrics["sampler_training_mode"] = cfg.sampler_training_mode
+        milestone_metrics["sampler_target_grad"] = bool(cfg.sampler_target_grad)
+        milestone_metrics["sampler_loss_order"] = cfg.sampler_loss_order
+        milestone_metrics["sampler_discard_below_surface"] = bool(cfg.sampler_discard_below_surface)
+        milestone_metrics["sampler_horizon_eps"] = cfg.sampler_horizon_eps
+        milestone_metrics["sampler_iteration"] = sampler_iteration
+        save_config(milestone_cfg)
+        checkpoint_path = None
+        if not cfg.skip_sampler_checkpoints:
+            checkpoint_path = save_checkpoint(
+                model,
+                milestone_cfg,
+                best_epoch,
+                milestone_metrics,
+                filename="best_checkpoint.pt",
+            )
+        AssetConverter.export_renderer_assets(model, milestone_cfg)
+    finally:
+        model.importance_sampler.load_state_dict(current_sampler_state)
+
+    os.makedirs(training_dir, exist_ok=True)
+    summary = {
+        "status": "sampler_milestone",
+        "sampler_iteration": sampler_iteration,
+        "best_epoch": best_epoch,
+        "best_finetune_iteration": best_epoch - cfg.encoder_bootstrap_epochs + 1,
+        "best_val_loss": best_metrics.get("brdf_val_loss"),
+        "best_train_loss": best_metrics.get("brdf_loss"),
+        "best_metrics": best_metrics,
+        "sampler_loss": sampler_loss,
+        "sampler_training_mode": cfg.sampler_training_mode,
+        "sampler_target_grad": bool(cfg.sampler_target_grad),
+        "sampler_loss_order": cfg.sampler_loss_order,
+        "sampler_discard_below_surface": bool(cfg.sampler_discard_below_surface),
+        "sampler_horizon_eps": cfg.sampler_horizon_eps,
+        "duration_seconds": elapsed_seconds,
+        "checkpoint": str(checkpoint_path) if checkpoint_path is not None else None,
+        "runtime_dir": str(runtime_dir),
+    }
+    with (training_dir / "run_summary.json").open("w", encoding="utf-8") as file:
+        json.dump(summary, file, indent=2)
+    print(
+        f"[sampler-milestone-export] iteration={sampler_iteration} "
+        f"sampler_loss={sampler_loss:.6f} runtime={runtime_dir}"
+    )
+
+
 # =============================================================================
 # CLI
 # =============================================================================
@@ -948,7 +1450,7 @@ def parse_args() -> TrainConfig:
         help="Truncated exponential rate used to randomize training mip levels.",
     )
     p.add_argument("--min_filter_sample_count", type=int, default=1)
-    p.add_argument("--max_filter_sample_count", type=int, default=8)
+    p.add_argument("--max_filter_sample_count", type=int, default=256)
     p.add_argument(
         "--gaussian_filter_std_scale",
         type=float,
@@ -957,11 +1459,101 @@ def parse_args() -> TrainConfig:
     )
 
     p.add_argument("--num_frames", type=int, default=2)
+    p.add_argument(
+        "--fixed_canonical_frames",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use canonical shading frames by zeroing and freezing the decoder frame predictor.",
+    )
+    p.add_argument(
+        "--detach_frame_latent_grad",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Detach z before the learned shading-frame predictor. The frame predictor still "
+            "learns, but encoder/latent gradients from the frame branch are blocked."
+        ),
+    )
     p.add_argument("--brdf_mlp_width", type=int, default=64)
     p.add_argument("--brdf_mlp_depth", type=int, default=2)
     p.add_argument("--sampler_mlp_width", type=int, default=32)
     p.add_argument("--sampler_mlp_depth", type=int, default=3)
+    p.add_argument(
+        "--sampler_training_mode",
+        type=str,
+        default="joint",
+        choices=("joint", "after_brdf"),
+        help=(
+            "joint trains the sampler during finetuning. after_brdf restores the best "
+            "BRDF/latent model, freezes it, and then trains only the sampler."
+        ),
+    )
+    p.add_argument(
+        "--sampler_target_grad",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Allow sampler loss gradients to flow through the frozen BRDF decoder "
+            "target evaluation into sampled wo. Decoder weights remain unchanged."
+        ),
+    )
+    p.add_argument(
+        "--sampler_loss_order",
+        type=str,
+        default="q_minus_p",
+        choices=("q_minus_p", "p_minus_q"),
+        help="Sampler objective sign: q_minus_p uses log_q - log_p_tilde; p_minus_q swaps the order.",
+    )
+    p.add_argument(
+        "--sampler_discard_below_surface",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Discard sampled outgoing directions with wo.z <= --sampler_horizon_eps "
+            "from the sampler loss average."
+        ),
+    )
+    p.add_argument(
+        "--sampler_horizon_eps",
+        type=float,
+        default=0.0,
+        help="Horizon threshold used by --sampler_discard_below_surface.",
+    )
+    p.add_argument(
+        "--sampler_source_checkpoint",
+        type=str,
+        default="",
+        help=(
+            "Load an existing best_checkpoint.pt and train only the importance sampler "
+            "from that frozen BRDF/latent model."
+        ),
+    )
+    p.add_argument(
+        "--sampler_reset_from_source",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "When --sampler_source_checkpoint is set, reset sampler weights instead of "
+            "continuing the checkpoint sampler weights."
+        ),
+    )
+    p.add_argument(
+        "--skip_sampler_checkpoints",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "For sampler-only checkpoint runs, export renderer assets and summaries "
+            "without writing large best_checkpoint.pt files."
+        ),
+    )
     p.add_argument("--exp_offset", type=float, default=3.0)
+    p.add_argument(
+        "--brdf_loss_mode",
+        type=str,
+        default="log_l1",
+        choices=("log_l1", "log_l2"),
+        help="BRDF reconstruction loss used consistently for training and validation.",
+    )
 
     p.add_argument("--training_n", type=int, default=65536)
     p.add_argument("--validation_size", type=int, default=65536)
@@ -972,10 +1564,29 @@ def parse_args() -> TrainConfig:
         help="Number of finetune iterations after encoder bootstrap.",
     )
     p.add_argument("--sampler_epochs", type=int, default=20000)
+    p.add_argument(
+        "--direction_sampling",
+        type=str,
+        default="half_diff",
+        choices=("half_diff", "half_diff_limited", "wiwo"),
+        help="Training direction sampling mode used by OnlineDataGenerationPass.",
+    )
+    p.add_argument(
+        "--half_diff_theta_measure",
+        type=str,
+        default="theta",
+        choices=("theta", "cos_theta"),
+        help=(
+            "For half-difference sampling, choose whether theta_h/theta_d are "
+            "sampled uniformly as angles or by uniform cos(theta)."
+        ),
+    )
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_min", type=float, default=1e-4)
     p.add_argument("--lr_latent", type=float, default=None)
     p.add_argument("--lr_decoder", type=float, default=None)
+    p.add_argument("--lr_sampler", type=float, default=None)
+    p.add_argument("--lr_sampler_min", type=float, default=None)
     p.add_argument("--weight_decay", type=float, default=0.0)
     p.add_argument("--grad_clip_norm", type=float, default=None)
 
@@ -983,6 +1594,41 @@ def parse_args() -> TrainConfig:
     p.add_argument("--clamp_min_target", type=float, default=0.0)
 
     p.add_argument("--print_every_epochs", type=int, default=10000)
+    p.add_argument(
+        "--export_finetune_iterations",
+        type=int,
+        nargs="*",
+        default=[],
+        metavar="N",
+        help=(
+            "Export the best validation model available after each listed finetune "
+            "iteration. The final finetune iteration is added automatically."
+        ),
+    )
+    p.add_argument(
+        "--milestone_export_root",
+        type=str,
+        default="",
+        help="Output root for finetune_N and finetune_N_runtime milestone pairs.",
+    )
+    p.add_argument(
+        "--export_sampler_iterations",
+        type=int,
+        nargs="*",
+        default=[],
+        metavar="N",
+        help=(
+            "For --sampler_training_mode after_brdf, export the best sampler "
+            "available after each listed sampler iteration. The final sampler "
+            "iteration is added automatically."
+        ),
+    )
+    p.add_argument(
+        "--sampler_milestone_export_root",
+        type=str,
+        default="",
+        help="Output root for sampler_N and sampler_N_runtime milestone pairs.",
+    )
     p.add_argument(
         "--train_latent_texture",
         action=argparse.BooleanOptionalAction,
@@ -1092,20 +1738,35 @@ def parse_args() -> TrainConfig:
     cfg.gaussian_filter_std_scale = max(0.0, args.gaussian_filter_std_scale)
 
     cfg.num_frames = args.num_frames
+    cfg.fixed_canonical_frames = args.fixed_canonical_frames
+    cfg.detach_frame_latent_grad = args.detach_frame_latent_grad
     cfg.brdf_mlp_width = args.brdf_mlp_width
     cfg.brdf_mlp_depth = args.brdf_mlp_depth
     cfg.sampler_mlp_width = args.sampler_mlp_width
     cfg.sampler_mlp_depth = args.sampler_mlp_depth
+    cfg.sampler_training_mode = args.sampler_training_mode
+    cfg.sampler_target_grad = args.sampler_target_grad
+    cfg.sampler_loss_order = args.sampler_loss_order
+    cfg.sampler_discard_below_surface = args.sampler_discard_below_surface
+    cfg.sampler_horizon_eps = max(0.0, args.sampler_horizon_eps)
+    cfg.sampler_source_checkpoint = args.sampler_source_checkpoint
+    cfg.sampler_reset_from_source = args.sampler_reset_from_source
+    cfg.skip_sampler_checkpoints = args.skip_sampler_checkpoints
     cfg.exp_offset = args.exp_offset
+    cfg.brdf_loss_mode = args.brdf_loss_mode
 
     cfg.training_n = args.training_n
     cfg.validation_n = args.validation_size
     cfg.max_epochs = args.max_epochs
     cfg.sampler_epochs = args.sampler_epochs
+    cfg.direction_sampling = args.direction_sampling
+    cfg.half_diff_theta_measure = args.half_diff_theta_measure
     cfg.lr = args.lr
     cfg.lr_min = args.lr_min
     cfg.lr_latent = args.lr_latent
     cfg.lr_decoder = args.lr_decoder
+    cfg.lr_sampler = args.lr_sampler
+    cfg.lr_sampler_min = args.lr_sampler_min
     cfg.weight_decay = args.weight_decay
     cfg.grad_clip_norm = args.grad_clip_norm
 
@@ -1113,6 +1774,26 @@ def parse_args() -> TrainConfig:
     cfg.clamp_min_target = args.clamp_min_target
 
     cfg.print_every_epochs = max(0, args.print_every_epochs)
+    export_iterations = tuple(sorted(set(args.export_finetune_iterations)))
+    if any(iteration <= 0 for iteration in export_iterations):
+        raise ValueError("--export_finetune_iterations values must be positive.")
+    if any(iteration > cfg.max_epochs for iteration in export_iterations):
+        raise ValueError(
+            "--export_finetune_iterations cannot exceed --max_epochs "
+            f"({cfg.max_epochs})."
+        )
+    cfg.export_finetune_iterations = export_iterations
+    cfg.milestone_export_root = args.milestone_export_root
+    sampler_export_iterations = tuple(sorted(set(args.export_sampler_iterations)))
+    if any(iteration <= 0 for iteration in sampler_export_iterations):
+        raise ValueError("--export_sampler_iterations values must be positive.")
+    if any(iteration > cfg.sampler_epochs for iteration in sampler_export_iterations):
+        raise ValueError(
+            "--export_sampler_iterations cannot exceed --sampler_epochs "
+            f"({cfg.sampler_epochs})."
+        )
+    cfg.export_sampler_iterations = sampler_export_iterations
+    cfg.sampler_milestone_export_root = args.sampler_milestone_export_root
     cfg.train_latent_texture = args.train_latent_texture
     cfg.train_decoder = args.train_decoder
 
@@ -1145,18 +1826,21 @@ def data_to_dict(data: np.ndarray, material_feature_dim: int = 0):
     wo = data[:, 2:5]
     wi = data[:, 5:8]
     f = data[:, 8:11]
-    has_mip_column = data.shape[1] >= (12 + material_feature_dim)
-    mip_level = data[:, 11:12] if has_mip_column else np.zeros((data.shape[0], 1), dtype=data.dtype)
+    # The native payload always reserves albedo.rgb, even when albedo target generation is disabled.
+    albedo = data[:, 11:14]
+    has_mip_column = data.shape[1] >= (15 + material_feature_dim)
+    mip_level = data[:, 14:15] if has_mip_column else np.zeros((data.shape[0], 1), dtype=data.dtype)
 
     batch = {
         "uv": uv,
         "wo": wo,
         "wi": wi,
         "y": f,
+        "albedo": albedo,
         "mip_level": mip_level.reshape(-1),
     }
     if material_feature_dim > 0:
-        feature_start = 12 if has_mip_column else 11
+        feature_start = 15 if has_mip_column else 14
         feature_end = feature_start + material_feature_dim
         if data.shape[1] < feature_end:
             raise ValueError(
@@ -1189,11 +1873,23 @@ def main():
 
     device = torch.device(cfg.device)
 
+    if cfg.sampler_source_checkpoint:
+        source_payload = load_checkpoint_payload(cfg.sampler_source_checkpoint)
+        cfg = merge_sampler_source_config(cfg, source_payload)
+        if cfg.device == "cuda" and not torch.cuda.is_available():
+            print("CUDA requested but not available; falling back to CPU.")
+            cfg.device = "cpu"
+        set_seed(cfg.seed)
+        train_sampler_from_checkpoint(cfg, source_payload, run_start_time)
+        return
+
     bootstrap_validation_generator = None
     if cfg.encoder_bootstrap_epochs > 0:
         bootstrap_validation_generator = DataGenerator(
             sampleCount=cfg.validation_n,
             bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+            direction_sampling=cfg.direction_sampling,
+            half_diff_theta_measure=cfg.half_diff_theta_measure,
             scene_path=cfg.scene_path,
             hierarchical_filtering_enabled=False,
         )
@@ -1231,6 +1927,13 @@ def main():
 
     sampler_opt = None
     sampler_scheduler = None
+    if (
+        cfg.train_importance_sampler
+        and cfg.sampler_training_mode == "joint"
+        and current_phase == "finetune"
+    ):
+        sampler_opt = make_sampler_optimizer(model, cfg)
+        sampler_scheduler = make_sampler_scheduler(sampler_opt, cfg)
 
     best_brdf_val_loss = float("inf")
     best_model_state: Optional[Dict[str, torch.Tensor]] = None
@@ -1273,6 +1976,8 @@ def main():
         validation_generator = DataGenerator(
             sampleCount=cfg.validation_n,
             bootstrap_feature_layout="none",
+            direction_sampling=cfg.direction_sampling,
+            half_diff_theta_measure=cfg.half_diff_theta_measure,
             scene_path=cfg.scene_path,
             hierarchical_filtering_enabled=cfg.hierarchical_mip_count > 1,
             hierarchical_mip_count=cfg.hierarchical_mip_count,
@@ -1300,12 +2005,16 @@ def main():
             bootstrap_data_generator = DataGenerator(
                 sampleCount=cfg.training_n,
                 bootstrap_feature_layout=cfg.bootstrap_feature_layout,
+                direction_sampling=cfg.direction_sampling,
+                half_diff_theta_measure=cfg.half_diff_theta_measure,
                 scene_path=cfg.scene_path,
                 hierarchical_filtering_enabled=False,
             )
         finetune_data_generator = DataGenerator(
             sampleCount=cfg.training_n,
             bootstrap_feature_layout="none",
+            direction_sampling=cfg.direction_sampling,
+            half_diff_theta_measure=cfg.half_diff_theta_measure,
             scene_path=cfg.scene_path,
             hierarchical_filtering_enabled=cfg.hierarchical_mip_count > 1,
             hierarchical_mip_count=cfg.hierarchical_mip_count,
@@ -1316,17 +2025,29 @@ def main():
             max_filter_sample_count=cfg.max_filter_sample_count,
             gaussian_filter_std_scale=cfg.gaussian_filter_std_scale,
         )
-        if cfg.train_importance_sampler:
+        if cfg.train_importance_sampler and cfg.sampler_training_mode == "joint":
             print(f"[train] dual-decoder mode: shared batch={cfg.training_n}")
+        elif cfg.train_importance_sampler:
+            print(
+                f"[train] deferred sampler mode: BRDF batch={cfg.training_n}, "
+                f"sampler_iterations={cfg.sampler_epochs}"
+            )
         else:
             print(f"[train] brdf-only mode: batch={cfg.training_n}")
 
         total_training_epochs = get_total_training_epochs(cfg)
+        finetune_export_iterations = get_finetune_export_iterations(cfg)
         print(
             "[train] iteration schedule: "
             f"bootstrap={cfg.encoder_bootstrap_epochs}, "
             f"finetune={cfg.max_epochs}, total={total_training_epochs}"
         )
+        if finetune_export_iterations:
+            milestone_root = cfg.milestone_export_root or str(Path(cfg.out_dir) / "finetune_exports")
+            print(
+                "[train] best-model finetune exports: "
+                f"iterations={list(finetune_export_iterations)}, root={milestone_root}"
+            )
         for epoch in range(total_training_epochs):
             phase = get_training_phase(cfg, epoch)
             phase_iteration = (
@@ -1355,7 +2076,7 @@ def main():
 
 
                     # Recreate sampler optimizer/scheduler so Adam moments don't slow adaptation
-                    if cfg.train_importance_sampler:
+                    if cfg.train_importance_sampler and cfg.sampler_training_mode == "joint":
                         sampler_opt = make_sampler_optimizer(model, cfg)
                         sampler_scheduler = make_sampler_scheduler(sampler_opt, cfg)
                         print("[train] reinitialized sampler optimizer and scheduler after latent bootstrap")
@@ -1383,7 +2104,7 @@ def main():
             training_tensor_decoder = tensorize_batch(data_to_dict(data_batch_decoder, active_feature_dim))
 
             training_tensor_sampler = None
-            if cfg.train_importance_sampler:
+            if cfg.train_importance_sampler and cfg.sampler_training_mode == "joint":
                 training_tensor_sampler = training_tensor_decoder
 
             if epoch == 0:
@@ -1449,7 +2170,11 @@ def main():
                 best_finetune_metrics = dict(metrics)
                 best_finetune_state = snapshot_model_state(model)
                 # Keep the sampler that was trained against this same decoder
-                if cfg.train_importance_sampler and 'sampler_loss' in metrics:
+                if (
+                    cfg.train_importance_sampler
+                    and cfg.sampler_training_mode == "joint"
+                    and 'sampler_loss' in metrics
+                ):
                     best_sampler_state = {
                         k: v.detach().cpu().clone()
                         for k, v in model.importance_sampler.state_dict().items()
@@ -1469,6 +2194,24 @@ def main():
                 best_phase = "bootstrap"
                 best_metrics = best_bootstrap_metrics
                 best_model_state = best_bootstrap_state
+
+            finetune_iteration = phase_iteration + 1
+            if (
+                phase == "finetune"
+                and finetune_iteration in finetune_export_iterations
+                and finetune_iteration < cfg.max_epochs
+            ):
+                export_finetune_milestone(
+                    model=model,
+                    cfg=cfg,
+                    finetune_iteration=finetune_iteration,
+                    best_state=best_finetune_state,
+                    best_epoch=best_finetune_epoch,
+                    best_metrics=best_finetune_metrics,
+                    current_epoch=epoch,
+                    current_metrics=metrics,
+                    elapsed_seconds=time.time() - run_start_time,
+                )
 
             if run_logger.should_log_progress(
                 epoch=epoch,
@@ -1504,7 +2247,19 @@ def main():
                 model, cfg, best_epoch
             )
 
-        if best_sampler_state is not None:
+        if cfg.train_importance_sampler and cfg.sampler_training_mode == "after_brdf":
+            best_sampler_state, best_sampler_loss = train_sampler_after_brdf(
+                model,
+                cfg,
+                best_epoch=best_epoch,
+                best_metrics=best_metrics,
+                run_start_time=run_start_time,
+            )
+            if best_metrics is not None:
+                best_metrics = dict(best_metrics)
+                best_metrics["sampler_loss"] = best_sampler_loss
+                best_metrics["sampler_training_mode"] = cfg.sampler_training_mode
+        elif best_sampler_state is not None:
             model.importance_sampler.load_state_dict(best_sampler_state)
 
         best_ckpt_path = save_checkpoint(
@@ -1519,6 +2274,19 @@ def main():
             f"{best_epoch:03d} with val_loss={best_metrics.get('brdf_val_loss', float('nan')):.6f} and sampler_loss={best_sampler_loss:.6f}"
             f"and saved {best_ckpt_path}"
         )
+
+        if cfg.export_finetune_iterations and last_epoch is not None and last_metrics is not None:
+            export_finetune_milestone(
+                model=model,
+                cfg=cfg,
+                finetune_iteration=cfg.max_epochs,
+                best_state=None,
+                best_epoch=best_epoch,
+                best_metrics=best_metrics,
+                current_epoch=last_epoch,
+                current_metrics=last_metrics,
+                elapsed_seconds=time.time() - run_start_time,
+            )
 
     AssetConverter.export_renderer_assets(model, cfg)
     print("Done. Exports written to:", cfg.out_dir)

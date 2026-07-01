@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from OnlineStepfreeze import NeuralMaterialModel, TrainConfig
 
 def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
-    rgba_hw4 = np.asarray(rgba_hw4, dtype=np.float32)
+    rgba_hw4 = np.asarray(rgba_hw4, dtype=np.float16)
     assert rgba_hw4.ndim == 3 and rgba_hw4.shape[2] == 4, f"Expected HxWx4, got {rgba_hw4.shape}"
 
     h, w, _ = rgba_hw4.shape
@@ -21,7 +21,7 @@ def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
         import Imath
 
         header = OpenEXR.Header(w, h)
-        pt = Imath.PixelType(Imath.PixelType.FLOAT)
+        pt = Imath.PixelType(Imath.PixelType.HALF)
         header["channels"] = {
             "R": Imath.Channel(pt),
             "G": Imath.Channel(pt),
@@ -32,10 +32,10 @@ def write_exr(path: Path, rgba_hw4: np.ndarray) -> None:
         exr = OpenEXR.OutputFile(str(path), header)
         exr.writePixels(
             {
-                "R": rgba_hw4[:, :, 0].astype(np.float32).tobytes(),
-                "G": rgba_hw4[:, :, 1].astype(np.float32).tobytes(),
-                "B": rgba_hw4[:, :, 2].astype(np.float32).tobytes(),
-                "A": rgba_hw4[:, :, 3].astype(np.float32).tobytes(),
+                "R": rgba_hw4[:, :, 0].astype(np.float16).tobytes(),
+                "G": rgba_hw4[:, :, 1].astype(np.float16).tobytes(),
+                "B": rgba_hw4[:, :, 2].astype(np.float16).tobytes(),
+                "A": rgba_hw4[:, :, 3].astype(np.float16).tobytes(),
             }
         )
         exr.close()
@@ -50,13 +50,14 @@ def decoder_input_dim_from_config(cfg) -> int:
     return int(cfg.latent_ch + dir_ch_per_frame * cfg.num_frames)
 
 
-def save_weights_bin(path: Path, weights: dict, output_dim: int = 3, input_dim: int = 20) -> dict:
+def save_weights_bin(path: Path, weights: dict, output_dim: int = 3, input_dim: int = 20, exp_offset: float = 3.0) -> dict:
     return save_network_weights_bin(
         path=path,
         weights=weights,
         input_dim=input_dim,
         output_dim=output_dim,
         has_frame_linear=True,
+        exp_offset=exp_offset,
     )
 
 
@@ -66,6 +67,7 @@ def _infer_network_layout(
     input_dim: int,
     output_dim: int,
     has_frame_linear: bool = True,
+    exp_offset: float | None = None,
 ) -> dict:
     linear_layers = []
     decoder_layout = {}
@@ -125,7 +127,7 @@ def _infer_network_layout(
         "mlp_depth": mlp_depth,
         "output_dim": int(output_dim),
         "input_dim": int(input_dim),
-        "weight_file_format": "NMDLWT04",
+        "weight_file_format": "NMDLWT05" if exp_offset is not None else "NMDLWT04",
         "linear_layers": linear_layers,
         "decoder_layout": decoder_layout,
     }
@@ -138,12 +140,14 @@ def save_network_weights_bin(
     input_dim: int,
     output_dim: int,
     has_frame_linear: bool = True,
+    exp_offset: float | None = None,
 ) -> dict:
     layout = _infer_network_layout(
         weights,
         input_dim=input_dim,
         output_dim=output_dim,
         has_frame_linear=has_frame_linear,
+        exp_offset=exp_offset,
     )
     latent_ch = layout["latent_ch"]
     num_frames = layout["num_frames"]
@@ -151,8 +155,10 @@ def save_network_weights_bin(
     mlp_depth = layout["mlp_depth"]
 
     with open(path, "wb") as f:
-        f.write(b"NMDLWT04")
+        f.write(b"NMDLWT05" if exp_offset is not None else b"NMDLWT04")
         f.write(struct.pack("<iiiiii", latent_ch, num_frames, mlp_width, mlp_depth, output_dim, input_dim))
+        if exp_offset is not None:
+            f.write(struct.pack("<f", float(exp_offset)))
 
         for layer_name in layout["linear_layers"]:
             weight_name = f"{layer_name}.weight"
@@ -173,15 +179,23 @@ def save_metadata(
     output_dim: int = 3,
     input_dim: int = 20,
     decoder_direction_input: str = "wiwo",
+    exp_offset: float = 3.0,
 ) -> None:
     _, h, w = latent.shape
-    layout = _infer_network_layout(weights, input_dim=input_dim, output_dim=output_dim, has_frame_linear=True)
+    layout = _infer_network_layout(
+        weights,
+        input_dim=input_dim,
+        output_dim=output_dim,
+        has_frame_linear=True,
+        exp_offset=exp_offset,
+    )
     metadata = {
         "width": int(w),
         "height": int(h),
         "latent_dim": int(latent.shape[0]),
         "num_frames": layout["num_frames"],
         "apply_exp": True,
+        "exp_offset": float(exp_offset),
         "output_dim": layout["output_dim"],
         "input_dim": layout["input_dim"],
         "decoder_direction_input": decoder_direction_input,
@@ -296,7 +310,13 @@ def export_renderer_assets(
 
     output_dim = 6 if export_albedo else 3
     brdf_input_dim = decoder_input_dim_from_config(cfg)
-    save_weights_bin(preview_dir / "decoder_weights.bin", weights, output_dim=output_dim, input_dim=brdf_input_dim)
+    save_weights_bin(
+        preview_dir / "decoder_weights.bin",
+        weights,
+        output_dim=output_dim,
+        input_dim=brdf_input_dim,
+        exp_offset=float(getattr(cfg, "exp_offset", 3.0)),
+    )
     save_metadata(
         preview_dir / "metadata.json",
         latent_levels[0],
@@ -304,6 +324,7 @@ def export_renderer_assets(
         output_dim=output_dim,
         input_dim=brdf_input_dim,
         decoder_direction_input=getattr(cfg, "decoder_direction_input", "wiwo"),
+        exp_offset=float(getattr(cfg, "exp_offset", 3.0)),
     )
     metadata_path = preview_dir / "metadata.json"
     with open(metadata_path, "r", encoding="utf-8") as f:
