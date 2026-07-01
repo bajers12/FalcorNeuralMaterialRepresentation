@@ -91,8 +91,8 @@ class Decoder(nn.Module):
         # T is intentionally not orthogonalized before forming B = cross(N, T).
         n_raw = ft[..., 0:3].clone()
         t_raw = ft[..., 3:6].clone()
-        n_raw[..., 2] = n_raw[..., 2] + 1.0
-        t_raw[..., 0] = t_raw[..., 0] + 1.0
+        n_raw[..., 2] = n_raw[..., 2] + 0.2
+        t_raw[..., 0] = t_raw[..., 0] + 0.2
         N = self._safe_normalize(n_raw)  # [B, F, 3]
         T = self._safe_normalize(t_raw)  # [B, F, 3]
 

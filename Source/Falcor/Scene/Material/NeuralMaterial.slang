@@ -652,8 +652,8 @@ float3 evalNeuralBRDFFromLatents(
 
         // Match the trainer and paper supplemental. The frame extractor predicts
         // residuals around N=(0,0,1), T=(1,0,0), and T is not orthogonalized.
-        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2] + 1.f));
-        float3 T = neuralSafeNormalize(float3(sf[sfBase + 3] + 1.f, sf[sfBase + 4], sf[sfBase + 5]));
+        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2] + 0.2));
+        float3 T = neuralSafeNormalize(float3(sf[sfBase + 3] + 0.2, sf[sfBase + 4], sf[sfBase + 5]));
         float3 B = neuralSafeNormalize(cross(N, T));
 
         float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
@@ -1146,7 +1146,7 @@ struct NeuralMaterialInstance : MaterialInstanceBase, IMaterialInstance
 
     float3 eval<S : ISampleGenerator>(const ShadingData sd, const float3 wo, inout S sg)
     {
-        ShadingFrame sf = carrierFrame(sd);
+        ShadingFrame sf = sd.frame;
         float3 wiLocal = sf.toLocal(sd.V);
         float3 woLocal = sf.toLocal(wo);
         float4 z0;
