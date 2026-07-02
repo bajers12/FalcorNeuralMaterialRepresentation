@@ -652,8 +652,8 @@ float3 evalNeuralBRDFFromLatents(
 
         // Match the trainer and paper supplemental. The frame extractor predicts
         // residuals around N=(0,0,1), T=(1,0,0), and T is not orthogonalized.
-        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2] + 0.2));
-        float3 T = neuralSafeNormalize(float3(sf[sfBase + 3] + 0.2, sf[sfBase + 4], sf[sfBase + 5]));
+        float3 N = neuralSafeNormalize(float3(sf[sfBase + 0], sf[sfBase + 1], sf[sfBase + 2]));
+        float3 T = neuralSafeNormalize(float3(sf[sfBase + 3], sf[sfBase + 4], sf[sfBase + 5]));
         float3 B = neuralSafeNormalize(cross(N, T));
 
         float3 wiPred = float3(dot(wiLocal, T), dot(wiLocal, B), dot(wiLocal, N));
