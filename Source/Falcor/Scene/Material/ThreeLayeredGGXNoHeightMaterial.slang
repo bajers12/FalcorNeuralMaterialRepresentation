@@ -130,7 +130,7 @@ float4 layeredTextureLayerControls(const ThreeLayeredGGXNoHeightMaterialData dat
 LayeredTextureLayerParams layeredTextureGetBaseLayer(const ThreeLayeredGGXNoHeightMaterialData data, const LayeredTextureInputs inputs)
 {
     LayeredTextureLayerParams p;
-    p.roughness = clamp(0.95, 0.02f, 1.f);
+    p.roughness = clamp(inputs.baseRoughness, 0.02f, 1.f);
     p.F0 = saturate(data.baseF0).xxx;
     p.coverage = layeredTextureLayerControls(data, inputs).x;
     p.normalFlatten = saturate(data.baseNormalFlatten);
@@ -140,7 +140,7 @@ LayeredTextureLayerParams layeredTextureGetBaseLayer(const ThreeLayeredGGXNoHeig
 LayeredTextureLayerParams layeredTextureGetMidLayer(const ThreeLayeredGGXNoHeightMaterialData data, const LayeredTextureInputs inputs)
 {
     LayeredTextureLayerParams p;
-    p.roughness = clamp(0.7, 0.02f, 1.f);
+    p.roughness = clamp(inputs.midRoughness, 0.02f, 1.f);
     p.F0 = saturate(data.midF0).xxx;
     p.coverage = layeredTextureLayerControls(data, inputs).y;
     p.normalFlatten = saturate(data.midNormalFlatten);
@@ -150,7 +150,7 @@ LayeredTextureLayerParams layeredTextureGetMidLayer(const ThreeLayeredGGXNoHeigh
 LayeredTextureLayerParams layeredTextureGetCoatLayer(const ThreeLayeredGGXNoHeightMaterialData data, const LayeredTextureInputs inputs)
 {
     LayeredTextureLayerParams p;
-    p.roughness = clamp(0.4, 0.02f, 1.f);
+    p.roughness = clamp(inputs.coatRoughness, 0.02f, 1.f);
     p.F0 = saturate(data.coatF0).xxx;
     p.coverage = layeredTextureLayerControls(data, inputs).z;
     p.normalFlatten = saturate(data.coatNormalFlatten);
