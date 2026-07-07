@@ -16,6 +16,64 @@ namespace
 {
 using json = nlohmann::json;
 
+const std::vector<std::string> kMaterialXBootstrapFeatureNames = {
+    "base_color.r",
+    "base_color.g",
+    "base_color.b",
+    "metallic",
+    "roughness",
+    "normal.x",
+    "normal.y",
+    "normal.z",
+    "tangent.x",
+    "tangent.y",
+    "tangent.z",
+};
+
+const std::vector<std::string> kTextureBackedMaterialXBootstrapFeatureNames = {
+    "base_color.r",
+    "base_color.g",
+    "base_color.b",
+    "roughness",
+    "normal.x",
+    "normal.y",
+    "normal.z",
+};
+
+const std::vector<std::string> kEmptyBootstrapFeatureNames = {};
+
+const std::vector<std::string>& getMaterialXBootstrapFeatureNames(const std::string& typeName)
+{
+    if (
+        typeName == "NG_Blue_Mosaic_Tiles_with_Gold_GeneratedMtlxMaterial" ||
+        typeName == "NG_Bardiglio_Gray_Marble_Tiles_GeneratedMtlxMaterial"
+    )
+        return kMaterialXBootstrapFeatureNames;
+
+    if (
+        typeName == "NG_Motley_Patchwork_Rug_GeneratedMtlxMaterial" ||
+        typeName == "NG_Sky_Velvet_Linen_Fabric_GeneratedMtlxMaterial"
+    )
+        return kTextureBackedMaterialXBootstrapFeatureNames;
+
+    return kEmptyBootstrapFeatureNames;
+}
+
+bool supportsMaterialXBootstrapFeatures(const std::string& typeName)
+{
+    return !getMaterialXBootstrapFeatureNames(typeName).empty();
+}
+
+bool supportsMaterialXTrainingDirectionGuard(const std::string& typeName)
+{
+    return typeName == "NG_Blue_Mosaic_Tiles_with_Gold_GeneratedMtlxMaterial" ||
+           typeName == "NG_Bardiglio_Gray_Marble_Tiles_GeneratedMtlxMaterial" ||
+           typeName == "NG_Diamond_GeneratedMtlxMaterial" ||
+           typeName == "NG_Motley_Patchwork_Rug_GeneratedMtlxMaterial" ||
+           typeName == "NG_Sky_Velvet_Linen_Fabric_GeneratedMtlxMaterial";
+}
+
+
 std::string toLower(std::string s)
 {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
@@ -93,6 +151,10 @@ MaterialXGraphMaterial::MaterialXGraphMaterial(
     , mTypeName(typeName)
     , mManifestPath(manifestPath)
 {
+    const uint32_t whitePixel = 0xffffffffu;
+    mpFallbackTexture = mpDevice->createTexture2D(1, 1, ResourceFormat::RGBA8Unorm, 1, 1, &whitePixel);
+    mpFallbackSampler = createSampler(mpDevice);
+
     loadManifest();
     loadTextureBindings();
     applyKnownMaterialMetadata();
@@ -164,9 +226,23 @@ ProgramDesc::ShaderModuleList MaterialXGraphMaterial::getShaderModules() const
 
 TypeConformanceList MaterialXGraphMaterial::getTypeConformances() const
 {
-    return {{{mTypeName, "IMaterial"}, (uint32_t)getType()}};
+    TypeConformanceList conformances;
+    conformances.add(mTypeName, "IMaterial", (uint32_t)getType());
+    if (supportsMaterialXBootstrapFeatures(mTypeName))
+    {
+        conformances.add(mTypeName, "IBootstrapFeatureMaterial", (uint32_t)getType());
+    }
+    if (supportsMaterialXTrainingDirectionGuard(mTypeName))
+    {
+        conformances.add(mTypeName, "ITrainingDirectionGuardMaterial", (uint32_t)getType());
+    }
+    return conformances;
 }
 
+std::vector<std::string> MaterialXGraphMaterial::getBootstrapFeatureNames() const
+{
+    return getMaterialXBootstrapFeatureNames(mTypeName);
+}
 
 void MaterialXGraphMaterial::loadManifest()
 {

@@ -4,6 +4,7 @@
 #include "Core/Program/ShaderVar.h"
 
 #include <filesystem>
+#include <array>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,7 @@ public:
     MaterialDataBlob getDataBlob() const override { return prepareDataBlob(mData); }
     ProgramDesc::ShaderModuleList getShaderModules() const override;
     TypeConformanceList getTypeConformances() const override;
+    std::vector<std::string> getBootstrapFeatureNames() const override;
 
     const std::filesystem::path& getModulePath() const { return mModulePath; }
     const std::string& getGeneratedTypeName() const { return mTypeName; }
@@ -49,6 +51,15 @@ public:
     /// Call this after creating ProgramVars/ParameterBlocks for a program that includes this material.
     void bindGeneratedResources(const ShaderVar& var) const
     {
+        auto isManifestTextureBinding = [this](const std::string& name)
+        {
+            for (const auto& binding : mTextureBindings)
+            {
+                if (binding.shaderTextureName == name) return true;
+            }
+            return false;
+        };
+
         for (const auto& binding : mTextureBindings)
         {
             if (!binding.shaderTextureName.empty())
@@ -62,6 +73,35 @@ public:
                 const ShaderVar samplerVar = var.findMember(binding.shaderSamplerName);
                 if (samplerVar.isValid() && binding.pSampler) samplerVar.setSampler(binding.pSampler);
             }
+        }
+
+        constexpr std::array<const char*, 11> kFallbackTextureNames = {
+            "g_mtlx_baseColor_tex_0",
+            "g_mtlx_coatNormal_tex_0",
+            "g_mtlx_ior_tex_0",
+            "g_mtlx_metallic_tex_0",
+            "g_mtlx_normal_tex_0",
+            "g_mtlx_opacity_tex_0",
+            "g_mtlx_roughness_tex_0",
+            "g_mtlx_specularTransmission_tex_0",
+            "g_mtlx_tangent_tex_0",
+            "g_mtlx_transmissionColor_tex_0",
+            "g_mtlx_transmission_tex_0",
+        };
+
+        for (const char* textureName : kFallbackTextureNames)
+        {
+            if (isManifestTextureBinding(textureName)) continue;
+
+            const ShaderVar texVar = var.findMember(textureName);
+            if (texVar.isValid() && mpFallbackTexture) texVar.setTexture(mpFallbackTexture);
+
+            std::string samplerName(textureName);
+            const size_t suffix = samplerName.find("_tex_");
+            if (suffix != std::string::npos) samplerName.replace(suffix, 5, "_sampler_");
+
+            const ShaderVar samplerVar = var.findMember(samplerName);
+            if (samplerVar.isValid() && mpFallbackSampler) samplerVar.setSampler(mpFallbackSampler);
         }
 
         for (const auto& binding : mConstantBindings)
@@ -155,5 +195,7 @@ private:
 
     std::vector<TextureBinding> mTextureBindings;
     std::vector<ConstantBinding> mConstantBindings;
+    ref<Texture> mpFallbackTexture;
+    ref<Sampler> mpFallbackSampler;
 };
 } // namespace Falcor

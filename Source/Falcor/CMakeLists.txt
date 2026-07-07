@@ -440,6 +440,14 @@ target_sources(Falcor PRIVATE
     Scene/Material/ThreeLayeredGGXMaterial.cpp
     Scene/Material/ThreeLayeredGGXMaterial.h
     Scene/Material/ThreeLayeredGGXMaterial.slang
+    Scene/Material/ThreeLayeredGGXBaseOnlyMaterial.cpp
+    Scene/Material/ThreeLayeredGGXBaseOnlyMaterial.h
+    Scene/Material/ThreeLayeredGGXBaseOnlyMaterial.slang
+    Scene/Material/ThreeLayeredGGXSingleLayerMaterials.cpp
+    Scene/Material/ThreeLayeredGGXSingleLayerMaterials.h
+    Scene/Material/ThreeLayeredGGXMidOnlyMaterial.slang
+    Scene/Material/ThreeLayeredGGXCoatOnlyMaterial.slang
+    Scene/Material/ThreeLayeredGGXDustOnlyMaterial.slang
     Scene/Material/ThreeLayeredGGXNoHeightMaterial.cpp
     Scene/Material/ThreeLayeredGGXNoHeightMaterial.h
     Scene/Material/ThreeLayeredGGXNoHeightMaterial.slang

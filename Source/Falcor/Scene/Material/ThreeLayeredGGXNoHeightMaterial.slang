@@ -36,8 +36,8 @@ struct ThreeLayeredGGXNoHeightMaterialData
     float dustCoverageScale = 0.65f;
 
     float baseNormalFlatten = 0.f;
-    float midNormalFlatten = 0.2f;
-    float coatNormalFlatten = 0.8f;
+    float midNormalFlatten = 0.f;
+    float coatNormalFlatten = 1.f;
 
     uint enableBaseLayer = 1;
     uint enableMidLayer = 1;
@@ -482,6 +482,7 @@ float3 layeredTextureEvalCombined(
             layeredTextureTwoWayTransmission(coatLayer, wiCoatLocal, woCoatLocal),
             coatLayer.coverage
         );
+
         float3 baseContribution = baseLayer.coverage * layeredTextureEvalBase(inputs, baseLayer, wiBaseLocal, woBaseLocal);
         float3 midStack =
             midLayer.coverage * layeredTextureEvalSpecular(midLayer, wiMidLocal, woMidLocal) +

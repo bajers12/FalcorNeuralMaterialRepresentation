@@ -62,6 +62,12 @@ def parse_args() -> argparse.Namespace:
         help="Reference .pyscene to render using the same PathTracer settings.",
     )
     parser.add_argument(
+        "--neural-scene",
+        type=Path,
+        default=None,
+        help="Optional neural .pyscene for runtime renders. Defaults to MatXScenes/Preview/NeuralSphere_Mosaic.pyscene.",
+    )
+    parser.add_argument(
         "--runtime-glob",
         default="*_runtime",
         help="Glob used to discover runtime asset directories under --run-root.",
@@ -120,6 +126,12 @@ def parse_args() -> argparse.Namespace:
             "PathTracer primary-hit texture LOD mode for batch renders. RayDiffs is "
             "required for neural latent mip selection to receive a nonzero footprint."
         ),
+    )
+    parser.add_argument(
+        "--max-surface-bounces",
+        type=int,
+        default=None,
+        help="Optional PathTracer maxSurfaceBounces override for batch renders.",
     )
     parser.add_argument(
         "--latent-mip-debug-mode",
@@ -411,11 +423,13 @@ def run_mogwai(
         "NEURAL_ASSET_ROOT",
         "NEURAL_ASSET_PATH",
         "NEURAL_ASSET_PATHS",
+        "NEURAL_SCENE_PATH",
         "NEURAL_CAPTURE_USE_BSDF_SAMPLING",
         "NEURAL_CAPTURE_FRAME_CHECKPOINTS",
         "NEURAL_CAPTURE_NAME",
         "NEURAL_CAPTURE_MODE_SUFFIX",
         "NEURAL_PRIMARY_LOD_MODE",
+        "NEURAL_MAX_SURFACE_BOUNCES",
         "NEURAL_LATENT_MIP_DEBUG_MODE",
         "NEURAL_LATENT_FILTERING_MODE",
         "NEURAL_FORCE_LATENT_MIP",
@@ -462,6 +476,8 @@ def run_mogwai(
         "NEURAL_CAMERA_TARGET_X": args.camera_target_x,
         "NEURAL_CAMERA_TARGET_Y": args.camera_target_y,
         "NEURAL_CAMERA_TARGET_Z": args.camera_target_z,
+        "NEURAL_MAX_SURFACE_BOUNCES": args.max_surface_bounces,
+        "NEURAL_SCENE_PATH": require_path(args.neural_scene, "Neural scene") if args.neural_scene else None,
     }
     env.update({key: str(value) for key, value in optional_env.items() if value is not None})
     env.update(env_updates)

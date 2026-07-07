@@ -89,8 +89,10 @@ class Decoder(nn.Module):
         ft = self.frame_linear(frame_z).view(Bsz, self.num_frames, 6)
 
         # T is intentionally not orthogonalized before forming B = cross(N, T).
-        n_raw = ft[..., 0:3]
-        t_raw = ft[..., 3:6]
+        n_raw = ft[..., 0:3].clone()
+        t_raw = ft[..., 3:6].clone()
+        n_raw[..., 2] = n_raw[..., 2] + 1.0
+        t_raw[..., 0] = t_raw[..., 0] + 1.0
         N = self._safe_normalize(n_raw)  # [B, F, 3]
         T = self._safe_normalize(t_raw)  # [B, F, 3]
 
@@ -149,17 +151,7 @@ class Decoder(nn.Module):
     ) -> torch.Tensor:
         y = torch.nan_to_num(y, nan=0.0, posinf=1e30, neginf=0.0).clamp_min(0.0)
 
-        # Build per-sample mask: keep samples that have at least one significant channel
-        valid = y.amax(dim=-1) >= mask_threshold  # [B]
-        if valid.any():
-            raw_c = raw[valid]
-            y_c = y[valid].clamp_min(eps)
-        else:
-            # Fallback: use everything (avoids zero-element mean on pathological batches)
-            raw_c = raw
-            y_c = y.clamp_min(eps)
-
-        return ((raw_c - exp_offset) - torch.log(y_c))
+        return ((raw - exp_offset) - torch.log(y.clamp_min(eps)))
 
     @staticmethod
     def log_l1_loss(

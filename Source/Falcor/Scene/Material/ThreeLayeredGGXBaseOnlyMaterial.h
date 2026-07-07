@@ -9,23 +9,23 @@
 
 namespace Falcor
 {
-    class ThreeLayeredGGXNoHeightMaterial : public Material
+    class ThreeLayeredGGXBaseOnlyMaterial : public Material
     {
-        FALCOR_OBJECT(ThreeLayeredGGXNoHeightMaterial)
+        FALCOR_OBJECT(ThreeLayeredGGXBaseOnlyMaterial)
 
     public:
-        static ref<ThreeLayeredGGXNoHeightMaterial> create(ref<Device> pDevice, const std::string& name = "")
+        static ref<ThreeLayeredGGXBaseOnlyMaterial> create(ref<Device> pDevice, const std::string& name = "")
         {
-            return make_ref<ThreeLayeredGGXNoHeightMaterial>(std::move(pDevice), name);
+            return make_ref<ThreeLayeredGGXBaseOnlyMaterial>(std::move(pDevice), name);
         }
 
-        static ref<ThreeLayeredGGXNoHeightMaterial> create(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
+        static ref<ThreeLayeredGGXBaseOnlyMaterial> create(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory)
         {
-            return make_ref<ThreeLayeredGGXNoHeightMaterial>(std::move(pDevice), name, textureDirectory);
+            return make_ref<ThreeLayeredGGXBaseOnlyMaterial>(std::move(pDevice), name, textureDirectory);
         }
 
-        ThreeLayeredGGXNoHeightMaterial(ref<Device> pDevice, const std::string& name);
-        ThreeLayeredGGXNoHeightMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory);
+        ThreeLayeredGGXBaseOnlyMaterial(ref<Device> pDevice, const std::string& name);
+        ThreeLayeredGGXBaseOnlyMaterial(ref<Device> pDevice, const std::string& name, const std::filesystem::path& textureDirectory);
 
         bool renderUI(Gui::Widgets& widget) override;
         UpdateFlags update(MaterialSystem* pOwner) override;
@@ -44,16 +44,10 @@ namespace Falcor
         void setNormalTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Normal, pTexture); }
         ref<Texture> getNormalTexture() const { return getTexture(TextureSlot::Normal); }
 
-        // layerRoughnessMap.rgb = base/mid/coat roughness.
         void setLayerRoughnessTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Emissive, pTexture); }
         ref<Texture> getLayerRoughnessTexture() const { return getTexture(TextureSlot::Emissive); }
 
-        void setDustCoverageTexture(const ref<Texture>& pTexture) { setTexture(TextureSlot::Index, pTexture); }
-        ref<Texture> getDustCoverageTexture() const { return getTexture(TextureSlot::Index); }
-
         bool loadTextureSet(const std::filesystem::path& textureDirectory);
-        void setIsolatedLayer(int32_t layer);
-        int32_t getIsolatedLayer() const { return mData.isolatedLayer; }
         void setBaseF0(float f0);
         float getBaseF0() const { return mData.baseF0; }
 
@@ -63,28 +57,15 @@ namespace Falcor
             TextureHandle texBaseColor;
             TextureHandle texNormal;
             TextureHandle texLayerRoughness;
-            TextureHandle texDustCoverage;
 
             float baseF0 = 0.02f;
-            float midF0 = 0.2f;
-            float coatF0 = 0.3f;
-
             float roughnessScale = 1.f;
             float roughnessBias = 0.02f;
+            float normalFlatten = 0.f;
 
-            float dustCoverageScale = 0.65f;
-
-            float baseNormalFlatten = 0.f;
-            float midNormalFlatten = 0.f;
-            float coatNormalFlatten = 1.f;
-
-            uint32_t enableBaseLayer = 1;
-            uint32_t enableMidLayer = 1;
-            uint32_t enableCoatLayer = 1;
             uint32_t flipNormalY = 1;
-            int32_t isolatedLayer = -1;
         };
-        static_assert(sizeof(Data) <= sizeof(MaterialPayload), "ThreeLayeredGGXNoHeightMaterial payload must fit in MaterialPayload");
+        static_assert(sizeof(Data) <= sizeof(MaterialPayload), "ThreeLayeredGGXBaseOnlyMaterial payload must fit in MaterialPayload");
 
         void setupTextureSlots();
         ref<Texture> loadExrTexture(const std::filesystem::path& path, bool singleChannel) const;

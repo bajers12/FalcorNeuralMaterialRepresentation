@@ -31,6 +31,7 @@ width = int(os.environ.get("NEURAL_CAPTURE_WIDTH", "1920"))
 height = int(os.environ.get("NEURAL_CAPTURE_HEIGHT", "1080"))
 use_bsdf_sampling = os.environ.get("NEURAL_CAPTURE_USE_BSDF_SAMPLING", "0").lower() in ("1", "true", "yes", "on")
 primary_lod_mode = os.environ.get("NEURAL_PRIMARY_LOD_MODE", "RayDiffs")
+max_surface_bounces = os.environ.get("NEURAL_MAX_SURFACE_BOUNCES")
 capture_name_override = os.environ.get("NEURAL_CAPTURE_NAME", "")
 capture_mode_suffix = os.environ.get("NEURAL_CAPTURE_MODE_SUFFIX", "")
 camera_pos_x = os.environ.get("NEURAL_CAMERA_POS_X")
@@ -41,6 +42,7 @@ camera_target_y = os.environ.get("NEURAL_CAMERA_TARGET_Y")
 camera_target_z = os.environ.get("NEURAL_CAMERA_TARGET_Z")
 
 reference_scene = os.environ.get("REFERENCE_SCENE_PATH")
+neural_scene = os.environ.get("NEURAL_SCENE_PATH")
 
 if reference_scene:
     asset_dirs = [None]
@@ -69,14 +71,15 @@ vbuffer = createPass(
         "useAlphaTest": True,
     },
 )
-path_tracer = createPass(
-    "PathTracer",
-    {
-        "samplesPerPixel": 1,
-        "useBSDFSampling": use_bsdf_sampling,
-        "primaryLodMode": primary_lod_mode,
-    },
-)
+path_tracer_props = {
+    "samplesPerPixel": 1,
+    "useBSDFSampling": use_bsdf_sampling,
+    "primaryLodMode": primary_lod_mode,
+}
+if max_surface_bounces is not None:
+    path_tracer_props["maxSurfaceBounces"] = int(max_surface_bounces)
+
+path_tracer = createPass("PathTracer", path_tracer_props)
 accumulate = createPass("AccumulatePass", {"enabled": True, "precisionMode": "Single"})
 tone_mapper = createPass("ToneMapper", {"autoExposure": False, "exposureCompensation": 0.0})
 
@@ -100,10 +103,9 @@ m.frameCapture.outputDir = str(output_dir)
 scene_path = (
     Path(reference_scene).resolve()
     if reference_scene
-    else Path(__file__).resolve().parents[1]
-    / "MatXScenes"
-    / "Preview"
-    / "NeuralSphere_Mosaic.pyscene"
+    else Path(neural_scene).resolve()
+    if neural_scene
+    else Path(__file__).resolve().parents[1] / "MatXScenes" / "Preview" / "NeuralSphere_Mosaic.pyscene"
 )
 
 try:
